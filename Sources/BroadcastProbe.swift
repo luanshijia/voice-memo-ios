@@ -205,12 +205,12 @@ struct AppGroupRow: View {
     var body: some View {
         HStack(spacing: 6) {
             Text("容器")
-                .font(.system(size: 11))
+                .font(.system(size: 12))
                 .foregroundStyle(.secondary)
                 .layoutPriority(1)
             Spacer(minLength: 4)
             Text(BroadcastProbe.groupName())
-                .font(.system(size: 10, design: .monospaced))
+                .font(.system(size: 11, design: .monospaced))
                 .foregroundStyle(BroadcastProbe.containerURL() == nil ? Color.red : Color.green)
                 .lineLimit(1)
                 .minimumScaleFactor(0.6)
@@ -224,12 +224,12 @@ struct ExtensionRow: View {
     var body: some View {
         HStack(spacing: 6) {
             Text("扩展")
-                .font(.system(size: 11))
+                .font(.system(size: 12))
                 .foregroundStyle(.secondary)
                 .layoutPriority(1)
             Spacer(minLength: 4)
             Text(BroadcastProbe.extensionBundleID)
-                .font(.system(size: 10, design: .monospaced))
+                .font(.system(size: 11, design: .monospaced))
                 .foregroundStyle(BroadcastProbe.containerURL() == nil ? Color.red : Color.green)
                 .lineLimit(1)
                 .minimumScaleFactor(0.6)
