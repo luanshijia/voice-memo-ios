@@ -26,6 +26,10 @@ final class VoiceRoom: NSObject {
     /// 这一代被动结束的原因码。主动性由上层"期望"决定,这里只报原因。
     var onEndReason: ((LinkReason) -> Void)?
 
+    /// 收包层的结构性问题:JSON 坏(`parse`)、缺 type(`missing_type`)、topic 不符(`topic:x`)、
+    /// 协议版本不认(`version:x`)。这些**不能静默丢掉** —— 它们与"家里多发了可选字段"是两回事。
+    var onProtocolIssue: ((String) -> Void)?
+
     /// 往房间里发一条自己的数据消息(topic=stt,与 agent 回传同一条通道,可靠送达)。
     /// 用途:「实时总结」按钮点一次 → 请家里立刻出一段总结。
     func send(_ payload: [String: Any]) async {
@@ -87,11 +91,27 @@ extension VoiceRoom: RoomDelegate {
     }
 
     nonisolated func room(_ room: Room, participant _: RemoteParticipant?, didReceiveData data: Data,
-                          forTopic _: String, encryptionType _: EncryptionType) {
+                          forTopic topic: String, encryptionType _: EncryptionType) {
         Task { @MainActor [weak self] in
             guard let self, self.room === room else { return }
-            guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let type = obj["type"] as? String else { return }
+            // topic 是契约的一部分:只处理 stt,别的 topic 记一笔结构性问题,不当字幕。
+            guard topic == "stt" else {
+                self.onProtocolIssue?("topic:\(topic.isEmpty ? "(空)" : topic)")
+                return
+            }
+            guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                self.onProtocolIssue?("parse")
+                return
+            }
+            // 版本只在服务端显式给了的时候校验;没给 = 视为 v1(老服务端)。
+            if let v = obj["schema_version"] as? String, v != "1" {
+                self.onProtocolIssue?("version:\(v)")
+                return
+            }
+            guard let type = obj["type"] as? String, !type.isEmpty else {
+                self.onProtocolIssue?("missing_type")
+                return
+            }
             // text 缺省视为空串:控制类消息(新协议字段)不带 text 时,整条丢掉等于状态永远不更新
             let text = (obj["text"] as? String) ?? ""
             let who = (obj["who"] as? String) ?? "?"

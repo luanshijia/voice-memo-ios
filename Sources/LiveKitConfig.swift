@@ -64,9 +64,26 @@ struct LiveKitConfig {
             throw Self.error(http.statusCode, "家里拒绝签发(\(http.statusCode))\(body.isEmpty ? "" : ":" + body)")
         }
         do {
-            return try JSONDecoder().decode(Token.self, from: data)
-        } catch {
-            throw Self.error(4, "取卡回包解析失败:\(error.localizedDescription)")
+            let card = try JSONDecoder().decode(Token.self, from: data)
+            // 回包必须能对上我们发出的那次请求(Codex 2026-10-18 评审第 4 条):
+            // 身份不符/地址不合法/空 token/TTL 越界,都按"取卡失败"抛出,不许当成功继续用。
+            if let back = card.identity, back != identity {
+                throw Self.error(5, "取卡回包身份不符:要 \(identity),回 \(back)")
+            }
+            guard let u = URL(string: card.url),
+                  let scheme = u.scheme, scheme == "wss" || scheme == "ws", u.host?.isEmpty == false else {
+                throw Self.error(5, "取卡回包地址不合法:\(card.url)")
+            }
+            guard !card.token.isEmpty else {
+                throw Self.error(5, "取卡回包 token 为空")
+            }
+            if let t = card.ttl, t <= 0 || t > 24 * 3600 {
+                throw Self.error(5, "取卡回包 ttl 越界:\(t)")
+            }
+            return card
+        } catch let err as NSError {
+            if err.domain == "VoiceMemo.Token" { throw err }   // 上面几条校验自己抛的,原样上抛
+            throw Self.error(4, "取卡回包解析失败:\(err.localizedDescription)")
         }
     }
 
@@ -93,25 +110,38 @@ struct LiveKitConfig {
         let payload: [String: Any] = ["url": card.url,
                                       "identity": broadcastIdentity,
                                       "token": card.token,
-                                      "fetchedAt": Date().timeIntervalSince1970]
+                                      "fetchedAt": Date().timeIntervalSince1970,
+                                      // 服务端回什么 TTL 就记什么 —— 客户端不许再用写死的 15 分钟算剩余
+                                      "ttl": card.ttl ?? 15 * 60]
         let out = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
         try out.write(to: target, options: .atomic)
         return true
     }
 
-    /// 广播卡剩余可用秒数(卡 TTL 15 分钟,`fetchedAt` 就是写入时刻)。
-    /// `nil` = 还没有卡 / App Group 读不到 —— 与"卡已过期"不是同一件事。
+    enum BroadcastCardState {
+        /// 没有卡文件(App Group 可用但还没取过卡)。
+        case missing
+        /// 有文件但读不出来(坏 JSON / 缺 fetchedAt / 空 token)。
+        case unreadable
+        /// 有卡,剩余可用秒数(按卡里记的 ttl 算,老卡缺 ttl 才退回 900)。
+        case valid(remaining: TimeInterval)
+    }
+
+    /// 广播卡的四态观测:`missing / unreadable / valid(remaining)`。
+    /// 以前只有一个 `remaining`,"没卡/读不到"和"已过期"都落在 0 上,结论因此把"看不见"说成"坏了"。
     /// 只读那张既有文件,不新增状态源。
-    func broadcastCardRemaining() -> TimeInterval? {
-        guard let container = BroadcastProbe.containerURL() else { return nil }
+    func broadcastCardState() -> BroadcastCardState {
+        guard let container = BroadcastProbe.containerURL() else { return .missing }
         let target = container.appendingPathComponent("broadcast-livekit.json")
+        guard FileManager.default.fileExists(atPath: target.path) else { return .missing }
         guard let data = try? Data(contentsOf: target),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let stamp = (obj["fetchedAt"] as? NSNumber)?.doubleValue,
               (obj["token"] as? String)?.isEmpty == false
-        else { return nil }
+        else { return .unreadable }
+        let ttl = (obj["ttl"] as? NSNumber)?.doubleValue ?? 15 * 60
         let elapsed = Date().timeIntervalSince1970 - stamp
-        return max(0, 15 * 60 - elapsed)
+        return .valid(remaining: max(0, ttl - elapsed))
     }
 
     private static func error(_ code: Int, _ msg: String) -> NSError {

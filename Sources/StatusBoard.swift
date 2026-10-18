@@ -12,7 +12,8 @@ import Foundation
 enum LinkDesired: Equatable { case wanted, notWanted }
 
 /// 链路实况:谁真正知道谁写。
-enum LinkObserved: Equatable { case notStarted, connecting, connected, reconnecting, disconnected }
+/// `unknown` = SDK 报了一个我们不认识的新态 —— 宁可说"不知道",也不能按"断开=失败"处理。
+enum LinkObserved: Equatable { case notStarted, connecting, connected, reconnecting, disconnected, unknown }
 
 /// 能力实况:具备 / 不具备 / 不知道。
 enum CapObserved: Equatable { case yes, no, unknownState }
@@ -26,9 +27,11 @@ struct MetricValue: Equatable {
     var unit: String
 }
 
-/// 时效实况:还能用多久(秒)。
+/// 时效实况:还能用多久(秒)+ 到底有没有观测到卡。
+/// `present = false` = 没有卡或读不到 —— 这是"观测不到",不是"已过期"。
 struct TtlValue: Equatable {
     var remaining: TimeInterval
+    var present: Bool
 }
 
 // MARK: - 原因码(只发码,句子在显示层)
@@ -69,6 +72,7 @@ enum MetricReason: String, StatusReason {
 
 enum TtlReason: String, StatusReason {
     case expiring = "Ttl.Expiring"
+    case expired = "Ttl.Expired"
     case fetchFailed = "Ttl.FetchFailed"
 
     var code: String { rawValue }
@@ -102,7 +106,7 @@ struct StatusBoard {
     var summary = Status<LinkDesired, MetricValue, MetricReason>(
         desired: .wanted, observed: MetricValue(value: 0, unit: "轮"))
     var broadcastToken = Status<LinkDesired, TtlValue, TtlReason>(
-        desired: .wanted, observed: TtlValue(remaining: 0))
+        desired: .wanted, observed: TtlValue(remaining: 0, present: false))
 
     // ---- 站 4:两个"输入侧"能力 —— 配置是否可用、协议是否落后 ----
     var config = Status<LinkDesired, CapObserved, CapReason>(
@@ -140,7 +144,7 @@ extension StatusBoard {
                 return .ok
             case .disconnected:
                 return reason == nil ? .unknown : .failed
-            case .notStarted, .connecting, .reconnecting:
+            case .notStarted, .connecting, .reconnecting, .unknown:
                 return .unknown
             }
         }
@@ -226,12 +230,27 @@ extension StatusBoard {
         return metricCondition(received, staleAfter: Self.receivedStaleAfter, now: now)
     }
 
-    func summaryCondition(now: Date = Date()) -> Condition {
+    /// 提要有两个不同的问题,必须分开回答(Codex 2026-10-18 评审):
+    ///   ① `summaryFreshCondition` —— 家里还在按时推 sumstatus 吗?(新鲜度)
+    ///   ② `summaryRoundCondition` —— 这一轮到底出没出、为什么没出?(业务结果)
+    /// 合成一个 Condition 会把"机器忙"说成健康、或把"信息量不足"说成故障。
+    func summaryFreshCondition(now: Date = Date()) -> Condition {
         metricCondition(summary, staleAfter: Self.summaryStaleAfter, now: now)
     }
 
-    /// 时效类派生:剩余 0 = 没有可用卡(failed);进入刷新窗 = unknown;否则 ok。
+    func summaryRoundCondition() -> Condition {
+        guard let reason = summary.reason else { return .ok }
+        switch reason {
+        case .busy:         return .unknown    // 机器忙:这轮暂时出不了,不是故障
+        case .noProgress:   return .unknown
+        case .noSession, .insufficient, .quality: return .ok   // 正常业务结论
+        }
+    }
+
+    /// 时效类派生(四态):没有卡/读不到 = 观测不到(unknown);有卡但剩余 0 = 已过期(failed);
+    /// 进入刷新窗 = 临期(unknown);否则 ok。
     func ttlCondition(now: Date = Date()) -> Condition {
+        guard broadcastToken.observed.present else { return .unknown }
         let remaining = broadcastToken.observed.remaining
         if remaining <= 0 { return .failed }
         if remaining <= Self.broadcastTokenRefreshAt { return .unknown }

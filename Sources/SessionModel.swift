@@ -31,6 +31,10 @@ final class SessionModel: ObservableObject {
     /// 每个音源各自保留第一遍流式字幕，避免一路定稿清空另一路内容。
     @Published var partials: [TranscriptPartial] = []
     @Published var isRecording = false
+    /// 用户意图:**只有 `start()` / `stop()` 能改**。
+    /// SDK 被动断开时不许清它 —— 否则"掉线"会被当成"用户不想录",状态层就把故障判成正常
+    /// (Codex 2026-10-18 评审第 1 条)。
+    @Published private(set) var intent: LinkDesired = .notWanted
     /// 当前麦克风模式(只读 —— iOS 不给 App 设置接口;界面只用来看「是不是宽谱」)
     @Published var micModeText = "读取中"
     @Published var micIsWide = false
@@ -57,6 +61,8 @@ final class SessionModel: ObservableObject {
     private var progressSeenAt: [String: Date] = [:]
     /// 见过的未知消息类型:每种只提示一次,不刷屏
     private var unknownTypes = Set<String>()
+    /// 收包层结构性问题计数(`parse` / `missing_type` / `topic:x` / `version:x`)
+    private var protocolIssues: [String: Int] = [:]
 
     // ---- 会中滚动提要(方案 v3,2026-10-15)----
     /// 一轮提要 = 一行时间 + 1~3 条短要点(家里只对"新增"出要点,不重写整段)
@@ -194,6 +200,7 @@ final class SessionModel: ObservableObject {
         }
         room.onNote = { [weak self] s in self?.note(s) }
         room.onEndReason = { [weak self] r in self?.livekEndReason = r }
+        room.onProtocolIssue = { [weak self] kind in self?.noteProtocolIssue(kind) }
         room.onEnded = { [weak self] s in
             guard let self else { return }
             self.status = s
@@ -207,7 +214,17 @@ final class SessionModel: ObservableObject {
             switch type {
             case "summary":
                 // 会中提要:只追加,不顶走上面的定稿;每条都带手机本地时间(家里的 clock 不一定对得上)
-                self.summaries.append(SummaryItem(clock: Self.stamp().prefix(5).description, text: text))
+                // 时间口径(Codex 2026-10-18 评审第 6 条):优先服务端 clock(HH:MM:SS),
+                // 其次家里的 ts(epoch 秒),最后才退回手机本地钟 —— 手机钟与家里钟不是一回事。
+                let clockText: String
+                if let c = raw["clock"] as? String, !c.isEmpty {
+                    clockText = String(c.prefix(5))
+                } else if let t = raw["ts"] as? Double, t > 0 {
+                    clockText = Self.clockFromEpoch(t)
+                } else {
+                    clockText = String(Self.stamp().prefix(5))
+                }
+                self.summaries.append(SummaryItem(clock: clockText, text: text))
                 if self.summaries.count > 60 { self.summaries.removeFirst(self.summaries.count - 60) }
             case "sumstatus":
                 // 状态区:家里每 60 秒推一次(哪怕这轮不出提要)—— 显示的是"为什么没出"
@@ -218,8 +235,10 @@ final class SessionModel: ObservableObject {
                                             observed: MetricValue(value: Double(self.summaries.count), unit: "轮"),
                                             reason: Self.summaryReason(code: self.sumCode),
                                             lastSeen: Date(), generation: self.connectionGeneration)
-                self.conditionNote("Metric.Summary", self.board.summaryCondition(),
+                self.conditionNote("Metric.SummaryFresh", self.board.summaryFreshCondition(),
                                    detail: "码=\(self.sumCode) 轮=\(self.summaries.count)")
+                self.conditionNote("Metric.SummaryRound", self.board.summaryRoundCondition(),
+                                   detail: "码=\(self.sumCode)")
             case "final":
                 self.noteProgress(source: raw["source"] as? String ?? "", seconds: audioS)
                 if !text.isEmpty {
@@ -272,12 +291,14 @@ final class SessionModel: ObservableObject {
         serverBySource = [:]
         progressSeenAt = [:]                // 新一场:进度墙钟与未知 type 提示都重置
         unknownTypes = []
+        protocolIssues = [:]
         summaries = []                      // 新一场:提要列表与状态区都从零开始
         sumState = "等待提要…"
         sumCode = "wait_period"
         lastSummary = ""
         status = "连接中…"
         isRecording = true
+        intent = .wanted
         livekEndReason = nil           // 新一代:上一代"被动结束"的原因作废
         shadowSignatures = []
         syncBoard()
@@ -315,6 +336,7 @@ final class SessionModel: ObservableObject {
         connectionGeneration += 1     // 在飞的连接尝试作废,不许它稍后回写状态
         stopTimer()
         isRecording = false
+        intent = .notWanted             // 只有用户按停止才清期望
         partials = []                 // 在飞的部分字幕属于上一场,停止后不该再挂在屏幕上
         lastSummary = "已停止:本地推流 \(Int(recordedSeconds)) 秒,家里已识别 \(Int(serverSeconds)) 秒"
         status = "已停止"
@@ -371,12 +393,16 @@ final class SessionModel: ObservableObject {
             case .connected: observed = .connected
             case .connecting: observed = .connecting
             case .reconnecting: observed = .reconnecting
-            default: observed = .disconnected      // .disconnected 与将来新增的态一律按断开处理
+            case .disconnected: observed = .disconnected
+            // SDK 新增了本版不认识的态:宁可 unknown,也不许当成"断开=失败"
+            default: observed = .unknown
             }
+        } else if intent == .wanted && connecting != nil {
+            // 已发起连接、Room 对象还没建出来的那一小段:如实说"正在连",而不是"没开始"
+            observed = .connecting
         }
-        let desired: LinkDesired = isRecording ? .wanted : .notWanted
         let reason: LinkReason? = (observed == .disconnected) ? (livekEndReason ?? .disconnected) : nil
-        board.livekit = Status(desired: desired, observed: observed, reason: reason,
+        board.livekit = Status(desired: intent, observed: observed, reason: reason,
                                lastSeen: Date(), generation: generation)
 
         let groupOK = BroadcastProbe.containerURL() != nil
@@ -456,19 +482,33 @@ final class SessionModel: ObservableObject {
         note("[派生] \(item) \(condition.debugName) · \(detail())")
     }
 
-    /// 广播卡时效:剩余秒数直接读 App Group 里那张卡,不新增状态源。
+    /// 广播卡时效四态:没有卡 / 读不到 / 有效 / 临期 / 过期。
+    /// 剩余时间按卡里记的**服务端 ttl** 算(老卡缺 ttl 才退回 900 秒);"读不到"不再是"已过期"。
     func syncTokenStatus() {
-        let remaining = cfg.broadcastCardRemaining()
-        board.broadcastToken = Status(desired: LinkDesired.wanted,
-                                      observed: TtlValue(remaining: remaining ?? 0),
-                                      reason: remaining == nil ? TtlReason.fetchFailed : nil,
-                                      lastSeen: Date(), generation: connectionGeneration)
-        let detail: String
-        if let value = remaining {
-            detail = "剩余=\(Int(value))秒"
-        } else {
-            detail = "还没有卡/读不到"
+        var observed = TtlValue(remaining: 0, present: false)
+        var reason: TtlReason? = nil
+        var detail = ""
+        switch cfg.broadcastCardState() {
+        case .missing:
+            reason = .fetchFailed
+            detail = "还没有卡"
+        case .unreadable:
+            reason = .fetchFailed
+            detail = "卡文件读不出来"
+        case .valid(let remaining):
+            observed = TtlValue(remaining: remaining, present: true)
+            if remaining <= 0 {
+                reason = .expired
+                detail = "卡已过期"
+            } else if remaining <= StatusBoard.broadcastTokenRefreshAt {
+                reason = .expiring
+                detail = "临期,剩余\(Int(remaining))秒"
+            } else {
+                detail = "剩余\(Int(remaining))秒"
+            }
         }
+        board.broadcastToken = Status(desired: LinkDesired.wanted, observed: observed,
+                                      reason: reason, lastSeen: Date(), generation: connectionGeneration)
         conditionNote("Ttl.BroadcastToken", board.ttlCondition(), detail: detail)
     }
 
@@ -484,15 +524,34 @@ final class SessionModel: ObservableObject {
         conditionNote("Cap.Config", board.configCondition(), detail: url)
     }
 
-    /// 协议是否落后(能力项 `Cap.Protocol`):收到过家里不认识的 type ⇒ 手机端旧了。
+    /// 协议项:分清「未知消息类型」与「结构性问题」(坏 JSON / 缺 type / topic 不符 / 版本不认)。
+    /// 注意:**家里多发了可选字段不算我们落后** —— 额外字段我们根本不看,所以这里不会因此报警。
     func syncProtocolStatus() {
-        let lag = !unknownTypes.isEmpty
+        var problems = protocolIssues.keys.sorted()
+        if !unknownTypes.isEmpty {
+            problems.append("未知 type:\(unknownTypes.sorted().joined(separator: ","))")
+        }
+        let lag = !problems.isEmpty
         board.protocolLag = Status(desired: LinkDesired.wanted,
                                    observed: lag ? CapObserved.no : CapObserved.yes,
                                    reason: lag ? CapReason.protocolLag : nil,
                                    lastSeen: Date(), generation: connectionGeneration)
         conditionNote("Cap.Protocol", board.protocolCondition(),
-                      detail: lag ? "未知 type:\(unknownTypes.sorted().joined(separator: ","))" : "无非预期字段")
+                      detail: lag ? problems.joined(separator: " / ") : "无未知 type、无格式错误")
+    }
+
+    /// 收包层结构性问题:计数 + 立刻刷新协议项。
+    func noteProtocolIssue(_ kind: String) {
+        protocolIssues[kind, default: 0] += 1
+        note("收包异常:\(kind)(累计 \(protocolIssues[kind] ?? 0) 次)")
+        syncProtocolStatus()
+    }
+
+    /// 家里给的 epoch 秒 → HH:mm(只给提要标时用)。
+    private static func clockFromEpoch(_ ts: Double) -> String {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm"
+        return f.string(from: Date(timeIntervalSince1970: ts))
     }
 
     /// 家里给的提要判定码 → 原因码(码表:规范第七节)。
@@ -542,6 +601,8 @@ final class SessionModel: ObservableObject {
     }
 
     /// 记录某一路的进度并重算「收」:优先麦克风那一路(与手机「录」同一个时钟),没有才取所有来源最大值。
+    /// 口径(Codex 2026-10-18 评审第 6 条):`seconds` 是**该音轨自身**的累计秒数,不是整场统一进度;
+    /// `source` 是"设备+采集者"全名,与 `speaker`(识别结果)不是一回事,不能互相替代。
     private func noteProgress(source: String, seconds: Double) {
         let key = source.isEmpty ? "unknown" : source
         let now = Date()
