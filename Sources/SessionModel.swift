@@ -66,6 +66,9 @@ final class SessionModel: ObservableObject {
     private var unknownTypes = Set<String>()
     /// 收包层结构性问题计数(`parse` / `missing_type` / `topic:x` / `version:x`)
     private var protocolIssues: [String: Int] = [:]
+    /// 上一场迟到消息的丢弃条数。**正常业务事件**,不参与 `Cap.Protocol` 结论 ——
+    /// 否则每换一次场它就亮红,变成噪音(2026-10-19 真机联调发现)。
+    private var sessionDrops = 0
 
     // ---- 会中滚动提要(方案 v3,2026-10-15)----
     /// 一轮提要 = 一行时间 + 1~3 条短要点(家里只对"新增"出要点,不重写整段)
@@ -309,6 +312,7 @@ final class SessionModel: ObservableObject {
         unknownTypes = []
         protocolIssues = [:]
         loggedUnknownFields = []
+        sessionDrops = 0
         summaries = []                      // 新一场:提要列表与状态区都从零开始
         sumState = "等待提要…"
         sumCode = "wait_period"
@@ -556,8 +560,9 @@ final class SessionModel: ObservableObject {
                                    observed: lag ? CapObserved.no : CapObserved.yes,
                                    reason: lag ? CapReason.protocolLag : nil,
                                    lastSeen: Date(), generation: connectionGeneration)
-        conditionNote("Cap.Protocol", board.protocolCondition(),
-                      detail: lag ? problems.joined(separator: " / ") : "无未知 type、无格式错误")
+        var detail = lag ? problems.joined(separator: " / ") : "无未知 type、无格式错误"
+        if sessionDrops > 0 { detail += " · 已丢上一场 \(sessionDrops) 条" }
+        conditionNote("Cap.Protocol", board.protocolCondition(), detail: detail)
     }
 
     /// 契约 §二:每种消息的“已知字段”。白名单外的字段**只记一条日志、不算协议错误**
@@ -581,6 +586,13 @@ final class SessionModel: ObservableObject {
 
     /// 收包层结构性问题:计数 + 立刻刷新协议项。
     func noteProtocolIssue(_ kind: String) {
+        if kind == "session_mismatch" {
+            // 场次不符 = 上一场的迟到件,丢弃才是正确行为 ⇒ 只记条数,不改结论
+            sessionDrops += 1
+            note("已丢弃上一场迟到消息(累计 \(sessionDrops) 条)")
+            syncProtocolStatus()
+            return
+        }
         protocolIssues[kind, default: 0] += 1
         note("收包异常:\(kind)(累计 \(protocolIssues[kind] ?? 0) 次)")
         syncProtocolStatus()
