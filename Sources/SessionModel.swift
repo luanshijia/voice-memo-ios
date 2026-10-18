@@ -23,10 +23,6 @@ struct TranscriptPartial: Identifiable {
 
 @MainActor
 final class SessionModel: ObservableObject {
-    @Published var status = "未连接"
-    /// 点「停止」那一刻的验收数字(推流秒数 / 家里已识别秒数)。
-    /// 单独一个字段:status 会被 delegate 的「已断开(主动停止)」覆盖,那个总结行只能闪现一瞬(2026-10-18 审计)。
-    @Published var lastSummary = ""
     @Published var lines: [TranscriptLine] = []
     /// 每个音源各自保留第一遍流式字幕，避免一路定稿清空另一路内容。
     @Published var partials: [TranscriptPartial] = []
@@ -54,7 +50,7 @@ final class SessionModel: ObservableObject {
     /// 这一代被动结束的原因码(主动停 = nil)。只由 VoiceRoom 的 onEndReason 写入。
     private var livekEndReason: LinkReason?
     /// 影子对照去重(同一组合只记一次),`start()` 时清空。
-    private var shadowSignatures = Set<String>()
+    private var noteSignatures = Set<String>()
     /// 各来源已识别的秒数。audio_s 是"单条音轨自创建以来"的秒数,
     /// 直接把任一路的值赋给「收」会让新开的播放轨(回传 5 秒)把麦克风那路(300 秒)压成 5 秒。
     private var serverBySource: [String: Double] = [:]
@@ -101,16 +97,12 @@ final class SessionModel: ObservableObject {
                                      observed: allowed ? CapObserved.yes : CapObserved.no,
                                      reason: allowed ? nil : CapReason.permissionDenied,
                                      lastSeen: Date(), generation: generation)
-        shadow("Cap.MicPermission", fresh: board.micPermissionCondition(),
-               legacy: allowed ? .ok : .failed, detail: allowed ? "已授权" : "未授权")
-
+        
         guard allowed else {
             micModeText = "未授权"; micIsWide = false
             board.micMode = Status(desired: LinkDesired.wanted, observed: MicModeObserved.unknownState,
                                    reason: nil, lastSeen: Date(), generation: generation)
-            shadow("Cap.MicMode", fresh: board.micModeCondition(),
-                   legacy: .unknown, detail: "未授权,读不到模式")
-            return
+                        return
         }
         let m = AVCaptureDevice.preferredMicrophoneMode
         micIsWide = (m == .wideSpectrum)
@@ -123,8 +115,7 @@ final class SessionModel: ObservableObject {
         board.micMode = Status(desired: LinkDesired.wanted,
                                observed: micIsWide ? MicModeObserved.wide : MicModeObserved.other,
                                reason: nil, lastSeen: Date(), generation: generation)
-        shadow("Cap.MicMode", fresh: board.micModeCondition(), legacy: .ok, detail: micModeText)
-    }
+            }
 
     /// 「宽谱」按钮:请系统把麦克风模式选择面板弹出来(选还是用户自己选)。
     /// 面板关掉后再刷一次,按钮颜色立刻跟上。
@@ -200,16 +191,14 @@ final class SessionModel: ObservableObject {
     private var timerStartedAt: Date?
 
     init() {
-        room.onState = { [weak self] s in
-            self?.status = s
-            self?.syncBoard()
-        }
+        // 连接态的文字由 board 的 observed 承载(底栏 LivK/RepK + 设置页派生行),不再存一份旧文案。
+        room.onState = { [weak self] _ in self?.syncBoard() }
         room.onNote = { [weak self] s in self?.note(s) }
         room.onEndReason = { [weak self] r in self?.livekEndReason = r }
         room.onProtocolIssue = { [weak self] kind in self?.noteProtocolIssue(kind) }
         room.onEnded = { [weak self] s in
             guard let self else { return }
-            self.status = s
+            self.note("连接结束:\(s)")
             self.stopTimer()
             self.isRecording = false
             self.connection = nil        // SDK 已经断了,别再重复断一次
@@ -324,13 +313,11 @@ final class SessionModel: ObservableObject {
         summaries = []                      // 新一场:提要列表与状态区都从零开始
         sumState = "等待提要…"
         sumCode = "wait_period"
-        lastSummary = ""
-        status = "连接中…"
         isRecording = true
         intent = .wanted
         sessionID = UUID().uuidString.lowercased()   // 新一场:场次号换新
         livekEndReason = nil           // 新一代:上一代"被动结束"的原因作废
-        shadowSignatures = []
+        noteSignatures = []
         syncBoard()
         syncProtocolStatus()
         let cfg = self.cfg
@@ -356,7 +343,7 @@ final class SessionModel: ObservableObject {
                 // VoiceRoom.connect 失败时已自行断开这条连接,这里只回写 UI
                 guard generation == self.connectionGeneration else { return }
                 self.note("连接异常:\(error.localizedDescription)")
-                self.status = "连接失败:\(error.localizedDescription)"
+                self.note("连接失败:\(error.localizedDescription)")
                 self.isRecording = false
                 self.syncBoard()
             }
@@ -370,8 +357,6 @@ final class SessionModel: ObservableObject {
         intent = .notWanted             // 只有用户按停止才清期望
         sessionID = ""                  // 契约:停止即换场,下一场重新生成
         partials = []                 // 在飞的部分字幕属于上一场,停止后不该再挂在屏幕上
-        lastSummary = "已停止:本地推流 \(Int(recordedSeconds)) 秒,家里已识别 \(Int(serverSeconds)) 秒"
-        status = "已停止"
         syncBoard()
         note("用户停止:推流 \(Int(recordedSeconds))s / 家里识别 \(Int(serverSeconds))s")
         // 只断开"我这一代"的那条连接:旧任务迟到时不会再拿新会话开刀
@@ -443,13 +428,7 @@ final class SessionModel: ObservableObject {
                                 reason: groupOK ? nil : CapReason.appGroupUnavailable,
                                 lastSeen: Date(), generation: generation)
 
-        shadow("Link.LiveKit",
-               fresh: board.livekitCondition(currentGeneration: generation),
-               legacy: legacyLiveKitCondition(),
-               detail: "status=\(status) 观测=\(observed) 码=\(reason?.code ?? "-")")
-        shadow("Cap.AppGroup", fresh: board.appGroupCondition(),
-               legacy: groupOK ? .ok : .failed, detail: BroadcastProbe.groupName())
-    }
+                    }
 
     /// 「网络」那一项的采集入口:TCP 探一次,结果写进事实(`netOK`)与面板(`probe`)。
     func refreshNet() async {
@@ -458,8 +437,7 @@ final class SessionModel: ObservableObject {
             board.probe = Status(desired: LinkDesired.wanted, observed: LinkObserved.disconnected,
                                  reason: LinkReason.probeTimeout,
                                  lastSeen: Date(), generation: connectionGeneration)
-            shadowProbe()
-            return
+                        return
         }
         let ok = await NetProbe.check(host: hp.host, port: hp.port)
         netOK = ok
@@ -468,8 +446,7 @@ final class SessionModel: ObservableObject {
                              observed: ok ? LinkObserved.connected : LinkObserved.disconnected,
                              reason: reason,
                              lastSeen: Date(), generation: connectionGeneration)
-        shadowProbe()
-    }
+            }
 
     /// 系统直播那一路的采集入口:读一次扩展日志,写事实(`broadcastAlive`)
     /// 与面板(`replaykit` / `extensionEmbedded`)。
@@ -499,17 +476,12 @@ final class SessionModel: ObservableObject {
                                          reason: embedded ? nil : CapReason.extensionMissing,
                                          lastSeen: Date(), generation: generation)
 
-        shadow("Link.ReplayKit", fresh: board.replaykitCondition(currentGeneration: generation),
-               legacy: legacyReplayKitCondition(status),
-               detail: "phase=\(status.phase) 码=\(status.reason?.code ?? "-")")
-        shadow("Cap.Extension", fresh: board.extensionCondition(),
-               legacy: embedded ? .ok : .failed, detail: embedded ? "包内有 appex" : "包内无 appex")
-    }
+                    }
 
     /// 「派生值变了」才记一行 —— 数值项没有旧显示值可对照,走这条。
     private func conditionNote(_ item: String, _ condition: Condition, detail: @autoclosure () -> String) {
         let signature = "\(item)|\(condition.debugName)|派生"
-        guard shadowSignatures.insert(signature).inserted else { return }
+        guard noteSignatures.insert(signature).inserted else { return }
         note("[派生] \(item) \(condition.debugName) · \(detail())")
     }
 
@@ -667,41 +639,6 @@ final class SessionModel: ObservableObject {
         case "go":         return nil
         default:           return code.hasPrefix("busy") ? .busy : nil
         }
-    }
-
-    private func shadowProbe() {
-        let legacy: Condition = netOK == nil ? .unknown : ((netOK == true) ? .ok : .failed)
-        shadow("Link.Probe",
-               fresh: board.probeCondition(currentGeneration: connectionGeneration),
-               legacy: legacy,
-               detail: "netOK=\(netOK.map { $0 ? "通" : "断" } ?? "未测")")
-    }
-
-    /// 影子对照:新派生值与旧显示值都记一行,同一组合只记一次(`start()` 清空)。
-    private func shadow(_ item: String, fresh: Condition, legacy: Condition,
-                        detail: @autoclosure () -> String) {
-        let signature = "\(item)|\(fresh.debugName)|\(legacy.debugName)"
-        guard shadowSignatures.insert(signature).inserted else { return }
-        let mark = fresh == legacy ? "一致" : "不一致"
-        note("[影子] \(item) \(mark) 新=\(fresh.debugName) 旧=\(legacy.debugName) · \(detail())")
-    }
-
-    /// 旧口径的 ReplayKit 判据 —— 只为对照:灰(没开播)=ok、蓝(等声)=unknown、红(在收)=ok、橙(错)=failed。
-    private func legacyReplayKitCondition(_ status: BroadcastProbe.Status) -> Condition {
-        switch status.phase {
-        case .stopped:   return .ok
-        case .waiting:   return .unknown
-        case .receiving: return .ok
-        case .error:     return .failed
-        }
-    }
-
-    /// 旧口径的 LiveKit 判据 —— 只为对照保留。它读文案,正是这次要消灭的做法。
-    private func legacyLiveKitCondition() -> Condition {
-        if !isRecording { return .ok }
-        if status.contains("已连上") || status.contains("连接状态:已连接") { return .ok }
-        if status.contains("失败") || status.contains("已断开") { return .failed }
-        return .unknown
     }
 
     /// 记录某一路的进度并重算「收」:优先麦克风那一路(与手机「录」同一个时钟),没有才取所有来源最大值。

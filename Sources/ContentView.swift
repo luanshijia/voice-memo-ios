@@ -500,7 +500,7 @@ struct SettingsSheet: View {
         """
         server=\(model.serverURL)
         identity=\(model.identity)
-        status=\(model.status)
+        LivK=\(model.livekWord) RepK=\(model.repkWord)
         录=\(Int(model.recordedSeconds)) 收=\(Int(model.serverSeconds)) 句=\(model.lines.count)
         麦克风模式=\(model.micModeText)(宽谱=\(model.micIsWide))
         App Group=\(BroadcastProbe.groupName())
