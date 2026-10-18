@@ -103,6 +103,12 @@ struct StatusBoard {
         desired: .wanted, observed: MetricValue(value: 0, unit: "轮"))
     var broadcastToken = Status<LinkDesired, TtlValue, TtlReason>(
         desired: .wanted, observed: TtlValue(remaining: 0))
+
+    // ---- 站 4:两个"输入侧"能力 —— 配置是否可用、协议是否落后 ----
+    var config = Status<LinkDesired, CapObserved, CapReason>(
+        desired: .wanted, observed: .unknownState)
+    var protocolLag = Status<LinkDesired, CapObserved, CapReason>(
+        desired: .wanted, observed: .unknownState)
 }
 
 // MARK: - 派生(纯函数:同一份事实,永远算出同一个结论)
@@ -231,6 +237,12 @@ extension StatusBoard {
         if remaining <= Self.broadcastTokenRefreshAt { return .unknown }
         return .ok
     }
+
+    // MARK: 站 4 的派生(能力类,判据同 cap)
+
+    func configCondition() -> Condition { Self.capabilityCondition(config.observed) }
+
+    func protocolCondition() -> Condition { Self.capabilityCondition(protocolLag.observed) }
 }
 
 // MARK: - 结论的可读名(只给日志/影子用;正式文案属显示层)

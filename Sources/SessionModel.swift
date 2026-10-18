@@ -70,7 +70,12 @@ final class SessionModel: ObservableObject {
     @Published var sumState = "等待提要…"           // 状态区文案:由家里推来的 sumstatus 驱动
     @Published var sumCode = "wait_period"         // 家里给的判定码:no_session/short/quality/busy_*/go
     var serverURL: String {
-        get { cfg.url } set { cfg.url = newValue; cfg.save() }
+        get { cfg.url }
+        set {
+            cfg.url = newValue
+            cfg.save()
+            syncConfigStatus()
+        }
     }
     var identity: String { cfg.identity }
 
@@ -232,12 +237,15 @@ final class SessionModel: ObservableObject {
                 if self.unknownTypes.insert(type).inserted {
                     self.note("收到未知消息 type=\(type),已忽略")
                 }
+                self.syncProtocolStatus()
             }
         }
         // 从 Bundle 读真实版本(以前写死成 v0.2.0(build 11),截图里会误导人)
         let ver = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
         note("App 启动,v\(ver)(build \(build), LiveKit)")
+        syncConfigStatus()
+        syncProtocolStatus()
         _ = prepareBroadcast() // 预先刷新短期 token，保证系统原生选择器可直接启动扩展
     }
 
@@ -273,6 +281,7 @@ final class SessionModel: ObservableObject {
         livekEndReason = nil           // 新一代:上一代"被动结束"的原因作废
         shadowSignatures = []
         syncBoard()
+        syncProtocolStatus()
         let cfg = self.cfg
         connecting = Task {
             // 先取走再等:await 期间用户可能又点了一次停止,stop() 会写入"新的一条" pendingDisconnect,
@@ -461,6 +470,29 @@ final class SessionModel: ObservableObject {
             detail = "还没有卡/读不到"
         }
         conditionNote("Ttl.BroadcastToken", board.ttlCondition(), detail: detail)
+    }
+
+    /// 配置是否可用(能力项 `Cap.Config`):URL 能解析、端口在合法范围。
+    /// 这一项存在的理由:端口写错时,旧代码只表现为"连接失败",根因要人倒推。
+    func syncConfigStatus() {
+        let url = serverURL
+        let ok = (NetProbe.hostPort(from: url) != nil)
+        board.config = Status(desired: LinkDesired.wanted,
+                              observed: ok ? CapObserved.yes : CapObserved.no,
+                              reason: ok ? nil : CapReason.configInvalid,
+                              lastSeen: Date(), generation: connectionGeneration)
+        conditionNote("Cap.Config", board.configCondition(), detail: url)
+    }
+
+    /// 协议是否落后(能力项 `Cap.Protocol`):收到过家里不认识的 type ⇒ 手机端旧了。
+    func syncProtocolStatus() {
+        let lag = !unknownTypes.isEmpty
+        board.protocolLag = Status(desired: LinkDesired.wanted,
+                                   observed: lag ? CapObserved.no : CapObserved.yes,
+                                   reason: lag ? CapReason.protocolLag : nil,
+                                   lastSeen: Date(), generation: connectionGeneration)
+        conditionNote("Cap.Protocol", board.protocolCondition(),
+                      detail: lag ? "未知 type:\(unknownTypes.sorted().joined(separator: ","))" : "无非预期字段")
     }
 
     /// 家里给的提要判定码 → 原因码(码表:规范第七节)。
