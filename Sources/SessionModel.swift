@@ -605,21 +605,44 @@ final class SessionModel: ObservableObject {
         syncProtocolStatus()
     }
 
-    /// 底栏用:两路链路状态的统一词表 —— 未连 / 连中 / 已连 / 异常(用户定稿 2026-10-18)。
-    /// 派生自 board 的 condition,不在视图里做字符串前缀匹配。
+    /// 底栏用:两路链路状态的统一词表 —— 未连 / 连中 / 已连 / 异常 / 未知(用户定稿 2026-10-19)。
+    /// 五词而不是四词,因为 `unknown` 承载两件事:"正在连"(observed=connecting/reconnecting)
+    /// 与"看不见"(心跳过期、读不到日志)。把后者说成"连中"正是这套规范最反对的糊弄。
     var livekWord: String {
-        Self.linkWord(board.livekitCondition(currentGeneration: connectionGeneration), desired: board.livekit.desired)
+        Self.linkWord(board.livekitCondition(currentGeneration: connectionGeneration),
+                      observed: board.livekit.observed, desired: board.livekit.desired)
     }
     var repkWord: String {
-        Self.linkWord(board.replaykitCondition(currentGeneration: connectionGeneration), desired: board.replaykit.desired)
+        Self.linkWord(board.replaykitCondition(currentGeneration: connectionGeneration),
+                      observed: board.replaykit.observed, desired: board.replaykit.desired)
     }
-    private static func linkWord(_ c: Condition, desired: LinkDesired) -> String {
+    private static func linkWord(_ c: Condition, observed: LinkObserved, desired: LinkDesired) -> String {
         if desired == .notWanted { return "未连" }
         switch c {
         case .ok: return "已连"
         case .failed: return "异常"
-        case .unknown: return "连中"
+        case .unknown:
+            switch observed {
+            case .connecting, .reconnecting: return "连中"
+            default: return "未知"          // 观测不到 ≠ 正在连
+            }
         }
+    }
+
+    /// 底栏右组:两个可分路的数(收/句)按 LivK|RepK 给出;`录` 不可分,不在这里。
+    var serverSecondsByWay: (livk: Double, repk: Double) {
+        var livk = 0.0, repk = 0.0
+        for (src, sec) in serverBySource {
+            if src.hasSuffix("-replaykit") { repk += sec } else { livk += sec }
+        }
+        return (livk, repk)
+    }
+    var linesByWay: (livk: Int, repk: Int) {
+        var livk = 0, repk = 0
+        for line in lines {
+            if line.source.hasSuffix("-replaykit") { repk += 1 } else { livk += 1 }
+        }
+        return (livk, repk)
     }
 
     /// 契约 §三.5:`summode` 必须带 `schema_version` 与当前 `session_id`。

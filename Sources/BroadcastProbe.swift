@@ -204,7 +204,7 @@ struct BroadcastPickerView: UIViewRepresentable {
 struct AppGroupRow: View {
     var body: some View {
         HStack(spacing: 6) {
-            Text("App Group")
+            Text("容器")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .layoutPriority(1)
@@ -240,14 +240,14 @@ struct ExtensionRow: View {
 
 /// 扩展日志(会长/要滚 → 按用户口径放在设置页下方)。没日志时整块不显示
 /// (以前那句「还没有探针日志:扩展从未启动过,或 App Group 不可用」已失效,按要求删掉)
-struct ExtLogSection: View {
+struct ExtLogBody: View {
     @State private var logText = ""
     @State private var logStatus = ""
     @State private var statusWarn = false
     @State private var refreshedAt = ""
 
     var body: some View {
-        Section {
+        VStack(alignment: .leading, spacing: 6) {
             if !logText.isEmpty {
                 ScrollView {
                     Text(logText)
@@ -273,10 +273,6 @@ struct ExtLogSection: View {
             if !refreshedAt.isEmpty {
                 Text(refreshedAt).font(.system(size: 10)).foregroundStyle(.secondary)
             }
-        } header: {
-            Text("扩展日志")
-        } footer: {
-            Text("扩展记录 LiveKit 连接、audioApp 格式与发送计数。主界面「扩展」按钮按系统声音是否到达显示状态。")
         }
         .onAppear { load() }
     }

@@ -67,10 +67,11 @@ struct ContentView: View {
         }
     }
 
-    /// 网络:只有显示功能。点了当场测一次;启动和回到前台也会自动测。
+    /// 代理(原名「网络」,2026-10-19 改名):只有显示功能。点了当场测一次;启动和回到前台也会自动测。
+    /// 它测的是"能不能穿过代理链到家里",叫「代理」比叫「网络」准确。
     /// 配色(用户口径 2026-10-15 晚):通 = 实心深蓝(与「宽谱」「开启」同一档);不通/没测 = 灰(与其它按钮关闭态同一档)。
     private var netButton: some View {
-        flatButton(icon: model.netOK == true ? "wifi" : "wifi.slash", title: "网络",
+        flatButton(icon: model.netOK == true ? "wifi" : "wifi.slash", title: "代理",
                    fill: model.netOK == true ? Color.blue : Color.secondary.opacity(0.25),
                    fg: model.netOK == true ? .white : .primary) {
             Task { await model.refreshNet() }
@@ -151,19 +152,18 @@ struct ContentView: View {
     /// 2026-10-16:整栏已下沉到屏幕底边(ZStack + ignoresSafeArea);左右各留 24 点(避开屏幕圆角吃字)、下方 12 点(避开 home 指示条)。
     private var bottomBar: some View {
         HStack(spacing: 8) {
-            Text(model.lastSummary.isEmpty ? model.status : model.lastSummary)
-                .font(.system(size: 10))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.tail)
-            Spacer(minLength: 6)
-            // 用户定稿(2026-10-18):撤掉「网络/麦克风」—— 它们与两路链接状态重复(颜色太多是信息混杂);
-            // 底栏只留两路链路 + 三个数,且两路一律用文字表述、不上色。
+            // 左组:两路与家里的链路状态(五词:未连/连中/已连/异常/未知,不上色)。
+            // 用户定稿 2026-10-19:左侧那句长文案整条撤掉 —— 连没连上这里已经说了,事件回执进设置页。
             inlineText("LivK", model.livekWord, .secondary)
+            Text("·").font(.system(size: 10)).foregroundStyle(.secondary)
             inlineText("RepK", model.repkWord, .secondary)
+            Spacer(minLength: 10)
+            // 右组三个数:录不可分(本机墙钟,与哪一路上传无关);收/句可分,固定顺序 左=LivK 右=RepK。
             inlineMetric("录", model.recordedSeconds, .primary)
-            inlineMetric("收", model.serverSeconds, .primary)     // 差值判据有缺陷(见待办),先不再用红绿
-            inlineMetric("句", Double(model.lines.count), .primary)
+            Text("·").font(.system(size: 10)).foregroundStyle(.secondary)
+            inlinePair("收", model.serverSecondsByWay.livk, model.serverSecondsByWay.repk, digits: 0)
+            Text("·").font(.system(size: 10)).foregroundStyle(.secondary)
+            inlinePair("句", Double(model.linesByWay.livk), Double(model.linesByWay.repk), digits: 0)
         }
         .padding(.horizontal, 24)     // iPhone 屏幕四角是圆角:左右各留 24 点,免得最外侧的字被吃掉
         .padding(.top, 3)
@@ -183,6 +183,21 @@ struct ContentView: View {
     }
 
     /// 「标签 + 数字」横向排(以前是标签一行、数字一行,占两行高度)
+    /// 「标签 + 两路数值」:`收 12|3` —— 左 = LivK,右 = RepK;某路无数据写 `-`(不是 0)。
+    private func inlinePair(_ label: String, _ left: Double, _ right: Double, digits: Int) -> some View {
+        func fmt(_ v: Double) -> String {
+            v > 0 ? String(format: "%.\(digits)f", v) : "-"
+        }
+        return HStack(spacing: 3) {
+            Text(label).font(.system(size: 10)).foregroundStyle(.secondary)
+            Text("\(fmt(left))|\(fmt(right))")
+                .font(.system(size: 10, weight: .medium))
+                .monospacedDigit()
+                .foregroundStyle(.primary)
+        }
+        .fixedSize()
+    }
+
     private func inlineMetric(_ label: String, _ value: Double, _ color: Color) -> some View {
         HStack(spacing: 3) {
             Text(label).font(.system(size: 10)).foregroundStyle(.secondary)
@@ -456,9 +471,7 @@ struct SettingsSheet: View {
             Form {
                 stateSection          // 固定信息(环境 / 身份 / 版本)—— 按用户口径放最上面
                 connectionSection     // 固定(可编辑)
-                copySection           // 固定(一个按钮)
-                ExtLogSection()       // 会长/要滚的全部集中在下面
-                stepsSection
+                logSection            // 日志:主 App 步骤 + 扩展日志 + 一键复制(用户口径 2026-10-19 合并)
                 crashSection          // 有才显示
             }
             .navigationTitle("设置")
@@ -479,28 +492,6 @@ struct SettingsSheet: View {
             Button("恢复默认连接参数") { model.resetToDefaults() }
         } header: {
             Text("连接参数")
-        } footer: {
-            Text("地址填家里的 TLS 代理 wss://100.64.0.2:7443。App 不再保存 key/secret:每次连接前向家里要一张 15 分钟的门禁卡(取不到会在状态栏报错)。")
-        }
-    }
-
-    /// 排错:一个按钮把「连接参数 + 状态 + 环境 + 扩展日志」一次复制走。
-    /// (以前是两个按钮——「复制探针日志」与「复制全套排错信息」,信息还重叠,已并成一个。)
-    private var copySection: some View {
-        Section {
-            Button {
-                UIPasteboard.general.string = debugBundle
-                copiedAt = "已复制 \(debugBundle.count) 字符(连接参数 + 状态 + 环境 + 扩展日志)"
-            } label: {
-                Label("复制排错信息", systemImage: "square.and.arrow.up")
-            }
-            if !copiedAt.isEmpty {
-                Text(copiedAt).font(.system(size: 11)).foregroundStyle(.secondary)
-            }
-        } header: {
-            Text("排错")
-        } footer: {
-            Text("顺序:①「网络」按钮看路通不通;②「扩展」按钮启动系统声音采集(灰/蓝/红三态);③点这里复制,贴回来给我。")
         }
     }
 
@@ -534,11 +525,32 @@ struct SettingsSheet: View {
         }
     }
 
-    @ViewBuilder private var stepsSection: some View {
-        if !model.notes.isEmpty {
-            Section("最近步骤") {
-                Text(model.notesText).font(.system(size: 10, design: .monospaced))
+    /// 日志(用户口径 2026-10-19):把「主 App 步骤」与「扩展日志」并进同一个分区,
+    /// 内部只用两行灰字小标题区分来源 —— 两者是不同进程的证据,不是同一事实的副本。
+    /// 底部保留唯一的复制入口(原「排错」分区不再单列)。
+    private var logSection: some View {
+        Section {
+            Text("主 App").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+            if model.notes.isEmpty {
+                Text("还没有步骤记录").font(.system(size: 10)).foregroundStyle(.secondary)
+            } else {
+                Text(model.notesText)
+                    .font(.system(size: 10, design: .monospaced))
+                    .textSelection(.enabled)
             }
+            Text("扩展").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+            ExtLogBody()
+            Button {
+                UIPasteboard.general.string = debugBundle
+                copiedAt = "已复制 \(debugBundle.count) 字符"
+            } label: {
+                Label("复制排错信息", systemImage: "square.and.arrow.up")
+            }
+            if !copiedAt.isEmpty {
+                Text(copiedAt).font(.system(size: 11)).foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("日志")
         }
     }
 
@@ -551,7 +563,7 @@ struct SettingsSheet: View {
             valueRow("身份", model.identity)
             valueRow("版本", appVersion)
         } header: {
-            Text("状态")
+            Text("注册状态")
         }
     }
 
