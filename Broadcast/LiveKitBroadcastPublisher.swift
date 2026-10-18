@@ -77,7 +77,20 @@ final class LiveKitBroadcastPublisher: NSObject, RoomDelegate {
                 return
             }
             self.log("LiveKit 正在连接 identity=\(configuration.identity)")
-            await self.connect(configuration)
+            // 连接失败不再一次性放弃:App 那边会一直补写新卡,但扩展只在 start() 读一次 ——
+            // 失败就再读一次(读到即删,所以能吃到刚写进来的那张),最多 3 次、间隔 5 秒。
+            var cfg: Configuration? = configuration
+            var attempt = 0
+            while let current = cfg, attempt < 3, !Task.isCancelled {
+                attempt += 1
+                if await self.connect(current) { return }
+                if attempt < 3 {
+                    self.log("LiveKit 连接失败,5 秒后重试(第 \(attempt + 1)/3 次)")
+                    try? await Task.sleep(nanoseconds: 5_000_000_000)
+                    cfg = Self.readConfiguration()
+                }
+            }
+            self.log("LiveKit 连接重试 3 次仍失败:本场系统声不会送到家里")
         }
     }
 
@@ -116,7 +129,7 @@ final class LiveKitBroadcastPublisher: NSObject, RoomDelegate {
         Task { await currentRoom?.disconnect() }
     }
 
-    private func connect(_ configuration: Configuration) async {
+    private func connect(_ configuration: Configuration) async -> Bool {
         let newRoom = Room()
         newRoom.add(delegate: self)
         do {
@@ -135,7 +148,7 @@ final class LiveKitBroadcastPublisher: NSObject, RoomDelegate {
 
             guard !shouldStop else {
                 await newRoom.disconnect()
-                return
+                return false
             }
 
             log("LiveKit 已连接并发布音频轨 identity=\(configuration.identity)")
@@ -146,9 +159,11 @@ final class LiveKitBroadcastPublisher: NSObject, RoomDelegate {
                 self.pending.removeAll(keepingCapacity: true)
                 buffered.forEach(self.publish)
             }
+            return true
         } catch {
             log("LiveKit 连接或发布失败: \(error.localizedDescription)")
             await newRoom.disconnect()
+            return false
         }
     }
 

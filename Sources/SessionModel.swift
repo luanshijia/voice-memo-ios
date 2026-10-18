@@ -24,6 +24,9 @@ struct TranscriptPartial: Identifiable {
 @MainActor
 final class SessionModel: ObservableObject {
     @Published var status = "未连接"
+    /// 点「停止」那一刻的验收数字(推流秒数 / 家里已识别秒数)。
+    /// 单独一个字段:status 会被 delegate 的「已断开(主动停止)」覆盖,那个总结行只能闪现一瞬(2026-10-18 审计)。
+    @Published var lastSummary = ""
     @Published var lines: [TranscriptLine] = []
     /// 每个音源各自保留第一遍流式字幕，避免一路定稿清空另一路内容。
     @Published var partials: [TranscriptPartial] = []
@@ -101,10 +104,14 @@ final class SessionModel: ObservableObject {
 
     @discardableResult
     func prepareBroadcast() -> Bool {
-        // 扩展到点就把 token 文件读走删掉,所以这里要反复补;取卡本身有 12 分钟节流,
-        // 3 秒一次的循环不会真的每轮去要卡。
-        Task { [weak self] in
+        // 扩展到点就把 token 文件读走删掉,所以这里要反复补;取卡本身有 12 分钟节流。
+        // 但刷新循环是 3 秒一轮、取卡超时 8 秒 ⇒ 上一轮还没回来就会再叠一个 Task:
+        // 并发向家里签多张卡、并发覆盖写同一个 broadcast 文件(先发后到的旧卡可能最后落盘)。
+        // 用 in-flight 去重(2026-10-18 审计)。
+        if broadcastTokenTask != nil { return true }
+        broadcastTokenTask = Task { [weak self] in
             guard let self else { return }
+            defer { self.broadcastTokenTask = nil }
             do {
                 if try await self.cfg.prepareBroadcastToken() {
                     self.note("已为 \(self.cfg.broadcastIdentity) 取到发布用门禁卡")
@@ -119,6 +126,8 @@ final class SessionModel: ObservableObject {
         }
         return true
     }
+
+    private var broadcastTokenTask: Task<Void, Never>?
 
     private var cfg = LiveKitConfig.load()
     /// 广播卡取卡失败提示的节流时间(免得离线时每 3 秒刷一条状态)
@@ -214,12 +223,16 @@ final class SessionModel: ObservableObject {
         summaries = []                      // 新一场:提要列表与状态区都从零开始
         sumState = "等待提要…"
         sumCode = "wait_period"
+        lastSummary = ""
         status = "连接中…"
         isRecording = true
         let cfg = self.cfg
         connecting = Task {
-            if let d = pendingDisconnect { await d.value }   // 等上一次断开落地,避免同身份双连
+            // 先取走再等:await 期间用户可能又点了一次停止,stop() 会写入"新的一条" pendingDisconnect,
+            // 这里若无条件置 nil 就把它的引用抹掉了(同身份双连就是在那个窗口发生的,2026-10-18 审计)。
+            let prev = pendingDisconnect
             pendingDisconnect = nil
+            if let prev { await prev.value }
             do {
                 let card = try await cfg.requestToken(identity: cfg.identity)   // 向家里要 15 分钟门禁卡
                 let live = try await room.connect(url: card.url, token: card.token, identity: cfg.identity)
@@ -245,7 +258,8 @@ final class SessionModel: ObservableObject {
         stopTimer()
         isRecording = false
         partials = []                 // 在飞的部分字幕属于上一场,停止后不该再挂在屏幕上
-        status = "已停止:本地推流 \(Int(recordedSeconds)) 秒,家里已识别 \(Int(serverSeconds)) 秒"
+        lastSummary = "已停止:本地推流 \(Int(recordedSeconds)) 秒,家里已识别 \(Int(serverSeconds)) 秒"
+        status = "已停止"
         note("用户停止:推流 \(Int(recordedSeconds))s / 家里识别 \(Int(serverSeconds))s")
         // 只断开"我这一代"的那条连接:旧任务迟到时不会再拿新会话开刀
         let live = connection

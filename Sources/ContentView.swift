@@ -178,7 +178,7 @@ struct ContentView: View {
     /// 2026-10-16:整栏已下沉到屏幕底边(ZStack + ignoresSafeArea);左右各留 24 点(避开屏幕圆角吃字)、下方 12 点(避开 home 指示条)。
     private var bottomBar: some View {
         HStack(spacing: 8) {
-            Text(model.status)
+            Text(model.lastSummary.isEmpty ? model.status : model.lastSummary)
                 .font(.system(size: 10))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
@@ -280,8 +280,9 @@ struct ContentView: View {
                 .simultaneousGesture(DragGesture(minimumDistance: 5).onChanged { _ in
                     followsLatestFinal = false
                 })
-                .onChange(of: model.lines.count) { _, _ in
-                    rows = buildRows()          // 只有定稿变多才重算,不再跟着 0.5 秒的计时器跑
+                .onChange(of: model.lines.last?.id) { _, _ in
+                    rows = buildRows()          // 定稿变多才重算;用最后一条的 id 而不是 count ——
+                                                // 到达 4000 条上限后 count 恒定,用 count 会永久冻结(2026-10-18 审计)
                     guard followsLatestFinal, let last = rows.last else { return }
                     proxy.scrollTo(last.id, anchor: .bottom)
                 }
@@ -454,7 +455,7 @@ struct ContentView: View {
     // MARK: - 刷新
 
     private func refreshExt() async {
-        let status = BroadcastProbe.status()
+        let status = await BroadcastProbe.status()
         broadcastAlive = status.isActive
         broadcastPhase = status.phase
     }

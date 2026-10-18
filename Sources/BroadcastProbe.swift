@@ -103,11 +103,14 @@ enum BroadcastProbe {
 
     /// 仅解读最近一次广播生命周期，避免旧日志计数把新一轮状态染绿。
     /// 必须看到 LiveKit 已连接且本轮 audioApp 帧数大于零，才报告“正在收声”。
-    static func status() -> Status {
+    static func status() async -> Status {
         guard let url = containerURL()?.appendingPathComponent(fileName) else {
             return Status(phase: .stopped, isActive: false, appFrames: 0)
         }
-        let lines = tailText(url: url, bytes: 512_000).split(separator: "\n").map(String.init)
+        // 读+解析最多 512KB,而调用方每 3 秒一轮、且跑在主线程:放后台做(2026-10-18 审计)。
+        let lines = await Task.detached(priority: .utility) {
+            Self.tailText(url: url, bytes: 512_000).split(separator: "\n").map(String.init)
+        }.value
         guard let start = lines.lastIndex(where: { $0.contains("=== 扩展启动") }) else {
             return Status(phase: .stopped, isActive: false, appFrames: 0)
         }
