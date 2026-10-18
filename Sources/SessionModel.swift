@@ -66,6 +66,8 @@ final class SessionModel: ObservableObject {
     private var unknownTypes = Set<String>()
     /// 收包层结构性问题计数(`parse` / `missing_type` / `topic:x` / `version:x`)
     private var protocolIssues: [String: Int] = [:]
+    /// 本场是否已补发过档位(每场只补一次,见 final 分支)。
+    private var didResyncSumMode = false
     /// 上一场迟到消息的丢弃条数。**正常业务事件**,不参与 `Cap.Protocol` 结论 ——
     /// 否则每换一次场它就亮红,变成噪音(2026-10-19 真机联调发现)。
     private var sessionDrops = 0
@@ -259,6 +261,13 @@ final class SessionModel: ObservableObject {
                                    detail: "码=\(self.sumCode)")
             case "final":
                 self.noteProgress(source: raw["source"] as? String ?? "", seconds: audioS)
+                // 电脑端在还没有场次时会拒收 summode(stage=no_session),导致重连后家里退回默认档位。
+                // 因此收到**本场首条有效 final** 后补发一次当前档位:每场只一次,带 v2 + 当前 session_id。
+                if !self.didResyncSumMode, !self.sessionID.isEmpty {
+                    self.didResyncSumMode = true
+                    Task { await self.room.send(self.summodePayload(self.sumMode)) }
+                    self.note("已补发当前档位 \(self.sumMode)(本场首条定稿后)")
+                }
                 if !text.isEmpty {
                     self.lines.append(TranscriptLine(who: who, source: raw["source"] as? String ?? "",
                                                      text: text, gap: gap, ts: ts))
@@ -313,6 +322,7 @@ final class SessionModel: ObservableObject {
         protocolIssues = [:]
         loggedUnknownFields = []
         sessionDrops = 0
+        didResyncSumMode = false
         summaries = []                      // 新一场:提要列表与状态区都从零开始
         sumState = "等待提要…"
         sumCode = "wait_period"
