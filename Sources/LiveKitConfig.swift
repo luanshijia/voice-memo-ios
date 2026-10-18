@@ -106,14 +106,18 @@ struct LiveKitConfig {
             throw Self.error(5, "App Group 不可用,扩展无法读取广播配置")
         }
         let target = container.appendingPathComponent("broadcast-livekit.json")
+        let wantSession = session ?? ""
         if !force,
            let data = try? Data(contentsOf: target),
            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            let stamp = (obj["fetchedAt"] as? NSNumber)?.doubleValue,
            let ident = obj["identity"] as? String, ident == broadcastIdentity,
            Date().timeIntervalSince1970 - stamp < 12 * 60,
-           (obj["token"] as? String)?.isEmpty == false {
-            return false                      // 卡还新鲜,不打扰家里
+           (obj["token"] as? String)?.isEmpty == false,
+           // 契约 §五:卡必须属于「本场」——录音中(有场次号)时,旧场的卡一律重取,
+           // 否则扩展拿到的 JWT metadata 会带上一场的 UUID,两路就归不到同一场。
+           wantSession.isEmpty || ((obj["session"] as? String) ?? "") == wantSession {
+            return false                      // 卡还新鲜且属于本场,不打扰家里
         }
         let card = try await requestToken(identity: broadcastIdentity, ttl: 15 * 60, session: session)
         let payload: [String: Any] = ["url": card.url,
@@ -121,7 +125,9 @@ struct LiveKitConfig {
                                       "token": card.token,
                                       "fetchedAt": Date().timeIntervalSince1970,
                                       // 服务端回什么 TTL 就记什么 —— 客户端不许再用写死的 15 分钟算剩余
-                                      "ttl": card.ttl ?? 15 * 60]
+                                      "ttl": card.ttl ?? 15 * 60,
+                                      // 记下这张卡属于哪一场,供上面的复用判断
+                                      "session": wantSession]
         let out = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
         try out.write(to: target, options: .atomic)
         return true

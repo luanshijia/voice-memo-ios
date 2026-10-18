@@ -214,9 +214,14 @@ final class SessionModel: ObservableObject {
         }
         room.onTranscript = { [weak self] type, who, audioS, text, gap, ts, raw in
             guard let self else { return }
-            // 契约 §五:带了场次号但与当前场不符 ⇒ 上一场的迟到消息,丢弃并记 session_mismatch。
+            // 契约 §三.5 / §五:v2 必须按场次过滤 —— 本机没有当前场次,或场次不符,一律丢弃。
             let incomingSession = (raw["session_id"] as? String) ?? ""
-            if !incomingSession.isEmpty, !self.sessionID.isEmpty, incomingSession != self.sessionID {
+            let incomingVersion = (raw["schema_version"] as? Int)
+                ?? (raw["schema_version"] as? NSNumber)?.intValue ?? 0
+            let dropBySession = incomingVersion >= 2
+                ? (self.sessionID.isEmpty || incomingSession != self.sessionID)
+                : (!incomingSession.isEmpty && !self.sessionID.isEmpty && incomingSession != self.sessionID)
+            if dropBySession {
                 self.noteProtocolIssue("session_mismatch")
                 return
             }
@@ -288,7 +293,8 @@ final class SessionModel: ObservableObject {
         guard m != sumMode else { return }
         sumMode = m
         note("会中提要档位 → \(m == "auto" ? "自动" : "手动")")
-        Task { await room.send(["type": "summode", "mode": m]) }
+        guard !sessionID.isEmpty else { return }   // 未在录音:只在本机切档,不发(契约要求 v2 带场次号)
+        Task { await room.send(summodePayload(m)) }
     }
 
     private func start() {
@@ -331,7 +337,7 @@ final class SessionModel: ObservableObject {
                     return
                 }
                 self.connection = live
-                await room.send(["type": "summode", "mode": self.sumMode])   // 让家里跟上本机档位
+                await room.send(self.summodePayload(self.sumMode))   // 让家里跟上本机档位
                 self.startTimer()
                 self.syncBoard()
             } catch {
@@ -578,6 +584,11 @@ final class SessionModel: ObservableObject {
         protocolIssues[kind, default: 0] += 1
         note("收包异常:\(kind)(累计 \(protocolIssues[kind] ?? 0) 次)")
         syncProtocolStatus()
+    }
+
+    /// 契约 §三.5:`summode` 必须带 `schema_version` 与当前 `session_id`。
+    private func summodePayload(_ mode: String) -> [String: Any] {
+        ["type": "summode", "schema_version": 1, "session_id": sessionID, "mode": mode]
     }
 
     /// 家里给的 epoch 秒 → HH:mm(只给提要标时用)。
