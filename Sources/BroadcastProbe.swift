@@ -244,7 +244,6 @@ struct ExtLogBody: View {
     @State private var logText = ""
     @State private var logStatus = ""
     @State private var statusWarn = false
-    @State private var refreshedAt = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -270,9 +269,6 @@ struct ExtLogBody: View {
                     .font(.system(size: 10))
                     .foregroundStyle(statusWarn ? Color.orange : Color.secondary)
             }
-            if !refreshedAt.isEmpty {
-                Text(refreshedAt).font(.system(size: 10)).foregroundStyle(.secondary)
-            }
         }
         .onAppear { load() }
     }
@@ -280,18 +276,17 @@ struct ExtLogBody: View {
     private func load() {
         let snap = BroadcastProbe.logSnapshot()
         logText = snap.text
+        // 用户口径 2026-10-19:成功态不报"已读 N 行 / X 字节",也不报"读取于";
+        // 只在真出问题时给一句(读不到 / 有坏字节),否则整块保持安静。
         if snap.bytes == 0 {
             logStatus = "未读到日志(文件不存在,或 App Group 不可用)"
             statusWarn = true
         } else if snap.badChars > 0 {
-            logStatus = "已读 \(snap.lines) 行 · \(snap.bytes) 字节 · \(snap.badChars) 处坏字节(已按替换符显示)"
+            logStatus = "\(snap.badChars) 处坏字节(已按替换符显示)"
             statusWarn = true
         } else {
-            logStatus = "已读 \(snap.lines) 行 · \(snap.bytes) 字节"
+            logStatus = ""
             statusWarn = false
         }
-        let f = DateFormatter()
-        f.dateFormat = "HH:mm:ss"
-        refreshedAt = "读取于 \(f.string(from: Date()))"
     }
 }

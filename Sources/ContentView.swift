@@ -525,12 +525,12 @@ struct SettingsSheet: View {
         }
     }
 
-    /// 日志(用户口径 2026-10-19):把「主 App 步骤」与「扩展日志」并进同一个分区,
+    /// 日志(用户口径 2026-10-19):把「主程序步骤」与「扩展日志」并进同一个分区,
     /// 内部只用两行灰字小标题区分来源 —— 两者是不同进程的证据,不是同一事实的副本。
     /// 底部保留唯一的复制入口(原「排错」分区不再单列)。
     private var logSection: some View {
         Section {
-            Text("主 App").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+            Text("主程序").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
             if model.notes.isEmpty {
                 Text("还没有步骤记录").font(.system(size: 10)).foregroundStyle(.secondary)
             } else {
