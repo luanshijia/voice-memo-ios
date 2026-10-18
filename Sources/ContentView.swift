@@ -279,7 +279,7 @@ struct ContentView: View {
     }
 
     /// 会中滚动提要(方案 v3;界面按用户 2026-10-16 两条反馈改):
-    ///   **整排只占一行**:[自动] [手动] + 「状态」+ 提示内容;
+    ///   **整排只占一行**:[自动] [手动] + 提示内容(2026-10-19 去掉「状态」二字);
     ///   两个档位按钮 = 纯文字、单行、宽度与第一排按钮严格一致(第一排是 5 等分,这里用同一算法算宽度),
     ///   靠左排;未选中灰、选中同第一排的实心蓝;高度 34 与第一排一致;
     ///   提示过长就地截断(够看出意思即可),不再换行、不再多占一行;
@@ -293,9 +293,7 @@ struct ContentView: View {
                 modeButton("自动", on: model.sumMode == "auto", width: btnW) { model.setSumMode("auto") }
                 modeButton("手动", on: model.sumMode == "manual", width: btnW) { model.setSumMode("manual") }
                 HStack(spacing: 4) {
-                    Text("状态")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(.secondary)
+                    // 用户口径 2026-10-19:去掉「状态」两个字 —— 这行本身就只讲提要状态,标签无意义。
                     Text(model.sumState)
                         .font(.system(size: 10))
                         .foregroundStyle(sumStateColor)
