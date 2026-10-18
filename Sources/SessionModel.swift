@@ -598,6 +598,23 @@ final class SessionModel: ObservableObject {
         syncProtocolStatus()
     }
 
+    /// 底栏用:两路链路状态的统一词表 —— 未连 / 连中 / 已连 / 异常(用户定稿 2026-10-18)。
+    /// 派生自 board 的 condition,不在视图里做字符串前缀匹配。
+    var livekWord: String {
+        Self.linkWord(board.livekitCondition(currentGeneration: connectionGeneration), desired: board.livekit.desired)
+    }
+    var repkWord: String {
+        Self.linkWord(board.replaykitCondition(currentGeneration: connectionGeneration), desired: board.replaykit.desired)
+    }
+    private static func linkWord(_ c: Condition, desired: LinkDesired) -> String {
+        if desired == .notWanted { return "未连" }
+        switch c {
+        case .ok: return "已连"
+        case .failed: return "异常"
+        case .unknown: return "连中"
+        }
+    }
+
     /// 契约 §三.5:`summode` 必须带 `schema_version` 与当前 `session_id`。
     /// 上行也取 2 —— 与下行一致,这样电脑端会按当前场次比对,上一场残留的切档会被 session_mismatch 挡掉。
     private func summodePayload(_ mode: String) -> [String: Any] {

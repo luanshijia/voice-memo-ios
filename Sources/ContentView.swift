@@ -109,7 +109,11 @@ struct ContentView: View {
                 .accessibilityLabel("开始或停止系统声音直播")
             Circle()
                 .fill(extStatusColor)
-                .frame(width: 23, height: 23)
+                // 定稿 B 版(2026-10-18 真机量:A/B 对照选定):
+                // 23 → 18.4pt(80%),与系统直播环之间留 3.3pt 的「按钮+它的灯」分组感;
+                // 常态 0.7 透明度、异常态(橙)回到 1.0 —— 橙在白底本来只有 2.20:1,再压到 0.7 就 1.76:1,告警会被弱化。
+                .frame(width: 18.4, height: 18.4)
+                .opacity(model.broadcastPhase == .error ? 1.0 : 0.7)
                 .accessibilityLabel(extStatusDescription)
         }
         .frame(maxWidth: .infinity, minHeight: 24, maxHeight: 24, alignment: .center)
@@ -181,12 +185,12 @@ struct ContentView: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
             Spacer(minLength: 6)
-            // 用户口径(2026-10-15):最下一行 = 网络状态 + 麦克风状态 + 录/收/句
-            inlineText("网络", model.netOK == true ? "通" : "断", model.netOK == true ? .blue : .secondary)
-            inlineText("麦克风", model.micModeText, model.micIsWide ? .blue : .secondary)
+            // 用户定稿(2026-10-18):撤掉「网络/麦克风」—— 它们与两路链接状态重复(颜色太多是信息混杂);
+            // 底栏只留两路链路 + 三个数,且两路一律用文字表述、不上色。
+            inlineText("LivK", model.livekWord, .secondary)
+            inlineText("RepK", model.repkWord, .secondary)
             inlineMetric("录", model.recordedSeconds, .primary)
-            inlineMetric("收", model.serverSeconds,
-                         (model.recordedSeconds - model.serverSeconds) > 5 ? .red : .green)
+            inlineMetric("收", model.serverSeconds, .primary)     // 差值判据有缺陷(见待办),先不再用红绿
             inlineMetric("句", Double(model.lines.count), .primary)
         }
         .padding(.horizontal, 24)     // iPhone 屏幕四角是圆角:左右各留 24 点,免得最外侧的字被吃掉
