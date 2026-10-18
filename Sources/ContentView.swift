@@ -104,7 +104,7 @@ struct ContentView: View {
     /// 也不再需要 offset 硬挪:选择器在 24 高的块里居中即可。
     private var extButton: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 6).fill(Color.blue)
+            RoundedRectangle(cornerRadius: 6).fill(extFill)
             // 系统图标当水印:半透明 + 略上移左移(用户口径 2026-10-19),
             // 文字「录屏」压在上面;文字必须 allowsHitTesting(false),否则点击被它吃掉、面板弹不出来。
             BroadcastPickerView()
@@ -114,11 +114,30 @@ struct ContentView: View {
                 .accessibilityLabel("开始或停止系统声音直播")
             Text("录屏")
                 .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(.white)
+                .foregroundStyle(extFg)
                 .allowsHitTesting(false)
         }
         .frame(maxWidth: .infinity)
         .frame(height: 24)
+    }
+
+    /// 录屏按钮的底色 = ReplayKit 那一路的状态灯(沿用旧 extStatusColor 的四色口径)。
+    /// 数据源是 `board.replaykit.observed`(站 5 已删掉重复的 broadcastPhase),视图里不另算状态。
+    private var extFill: Color {
+        switch model.board.replaykit.observed {
+        case .notStarted, .unknown:      return Color.secondary.opacity(0.25)   // 没开 / 看不出来
+        case .connecting, .reconnecting: return Color.blue                       // 已启动,等系统声
+        case .connected:                 return Color.red                        // 正在收到系统声
+        case .disconnected:              return Color.orange                     // 异常/中断
+        }
+    }
+
+    /// 灰底上用主色文字,其它底色用白字(与「代理」「宽谱」两个按钮的规律一致)。
+    private var extFg: Color {
+        switch model.board.replaykit.observed {
+        case .notStarted, .unknown: return Color.primary
+        default:                    return Color.white
+        }
     }
 
     /// 设置:配色统一成「宽谱」「开启」那档实心深蓝(用户口径 2026-10-15 晚;以前是浅蓝 0.18)。
