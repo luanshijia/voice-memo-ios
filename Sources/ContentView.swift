@@ -510,19 +510,11 @@ struct SettingsSheet: View {
                 .textInputAutocapitalization(.never)
                 .keyboardType(.URL)
                 .font(.system(size: 14, design: .monospaced))
-            TextField("API Key", text: $model.apiKey)
-                .autocorrectionDisabled()
-                .textInputAutocapitalization(.never)
-                .font(.system(size: 14, design: .monospaced))
-            TextField("API Secret", text: $model.apiSecret)
-                .autocorrectionDisabled()
-                .textInputAutocapitalization(.never)
-                .font(.system(size: 14, design: .monospaced))
             Button("恢复默认连接参数") { model.resetToDefaults() }
         } header: {
             Text("连接参数")
         } footer: {
-            Text("地址填家里的 TLS 代理 wss://100.64.0.2:7443。开发模式:key/secret 存在 App 内(对应家里的 livekit-server --dev),正式版应改成服务端发 token。")
+            Text("地址填家里的 TLS 代理 wss://100.64.0.2:7443。App 不再保存 key/secret:每次连接前向家里要一张 15 分钟的门禁卡(取不到会在状态栏报错)。")
         }
     }
 

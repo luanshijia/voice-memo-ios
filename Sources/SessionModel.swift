@@ -55,12 +55,6 @@ final class SessionModel: ObservableObject {
     var serverURL: String {
         get { cfg.url } set { cfg.url = newValue; cfg.save() }
     }
-    var apiKey: String {
-        get { cfg.apiKey } set { cfg.apiKey = newValue; cfg.save() }
-    }
-    var apiSecret: String {
-        get { cfg.apiSecret } set { cfg.apiSecret = newValue; cfg.save() }
-    }
     var identity: String { cfg.identity }
 
     /// 读一次当前麦克风模式。未授权时不碰这个 API(iOS 17 起未授权访问有风险)。
@@ -100,23 +94,24 @@ final class SessionModel: ObservableObject {
     var notesText: String { notes.joined(separator: "\n") }
 
     func resetToDefaults() {
-        cfg = LiveKitConfig(url: LiveKitConfig.defaultURL, apiKey: LiveKitConfig.defaultKey,
-                            apiSecret: LiveKitConfig.defaultSecret,
-                            device: LiveKitConfig.defaultDevice)
+        cfg = LiveKitConfig(url: LiveKitConfig.defaultURL, device: LiveKitConfig.defaultDevice)
         cfg.save()
         objectWillChange.send()
     }
 
     @discardableResult
     func prepareBroadcast() -> Bool {
-        do {
-            try cfg.prepareBroadcast()
-            note("已为 \(cfg.device)-replaykit 准备单独发布权限")
-            return true
-        } catch {
-            note("扩展配置失败: \(error.localizedDescription)")
-            return false
+        // 扩展到点就把 token 文件读走删掉,所以这里要反复补;取卡是网络请求,必须异步
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await self.cfg.prepareBroadcastToken()
+                self.note("已为 \(self.cfg.broadcastIdentity) 取到发布用门禁卡")
+            } catch {
+                self.note("广播 token 预取失败:\(error.localizedDescription)")
+            }
         }
+        return true
     }
 
     private var cfg = LiveKitConfig.load()
@@ -215,7 +210,8 @@ final class SessionModel: ObservableObject {
             if let d = pendingDisconnect { await d.value }   // 等上一次断开落地,避免同身份双连
             pendingDisconnect = nil
             do {
-                let live = try await room.connect(cfg)
+                let card = try await cfg.requestToken(identity: cfg.identity)   // 向家里要 15 分钟门禁卡
+                let live = try await room.connect(url: card.url, token: card.token, identity: cfg.identity)
                 guard generation == self.connectionGeneration else {   // 这一轮已被停止/重开取代
                     await self.room.disconnect(live)                   // 只断自己这条,不碰新会话
                     return

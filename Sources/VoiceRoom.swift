@@ -34,17 +34,14 @@ final class VoiceRoom: NSObject {
     }
 
     @discardableResult
-    func connect(_ cfg: LiveKitConfig) async throws -> Room {
-        guard let token = cfg.makeToken() else {
-            throw NSError(domain: "VoiceMemo", code: 1,
-                          userInfo: [NSLocalizedDescriptionKey: "token 参数不合法"])
-        }
+    func connect(url: String, token: String, identity: String) async throws -> Room {
+        // token 由主 App 向家里现取(LiveKitConfig.requestToken),这里只管连
         let newRoom = Room()
         newRoom.add(delegate: self)
         self.room = newRoom
-        onNote?("发起连接 \(cfg.url) 身份=\(cfg.identity)")
+        onNote?("发起连接 \(url) 身份=\(identity)")
         do {
-            try await newRoom.connect(url: cfg.url, token: token)
+            try await newRoom.connect(url: url, token: token)
             try await newRoom.localParticipant.setMicrophone(enabled: true)
         } catch {
             // 连上一半失败(例如开麦被拒)也要把这条连接收干净:不留同身份影子
