@@ -99,6 +99,21 @@ struct LiveKitConfig {
         return true
     }
 
+    /// 广播卡剩余可用秒数(卡 TTL 15 分钟,`fetchedAt` 就是写入时刻)。
+    /// `nil` = 还没有卡 / App Group 读不到 —— 与"卡已过期"不是同一件事。
+    /// 只读那张既有文件,不新增状态源。
+    func broadcastCardRemaining() -> TimeInterval? {
+        guard let container = BroadcastProbe.containerURL() else { return nil }
+        let target = container.appendingPathComponent("broadcast-livekit.json")
+        guard let data = try? Data(contentsOf: target),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let stamp = (obj["fetchedAt"] as? NSNumber)?.doubleValue,
+              (obj["token"] as? String)?.isEmpty == false
+        else { return nil }
+        let elapsed = Date().timeIntervalSince1970 - stamp
+        return max(0, 15 * 60 - elapsed)
+    }
+
     private static func error(_ code: Int, _ msg: String) -> NSError {
         NSError(domain: "VoiceMemo.Token", code: code, userInfo: [NSLocalizedDescriptionKey: msg])
     }

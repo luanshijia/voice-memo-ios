@@ -20,6 +20,17 @@ enum CapObserved: Equatable { case yes, no, unknownState }
 /// 麦克风模式实况(值域独立:它不是"有没有",而是"哪一种")。
 enum MicModeObserved: Equatable { case wide, other, unknownState }
 
+/// 数值实况:值 + 单位。它本身没有健康语义 —— 健康由"多久没更新"决定。
+struct MetricValue: Equatable {
+    var value: Double
+    var unit: String
+}
+
+/// 时效实况:还能用多久(秒)。
+struct TtlValue: Equatable {
+    var remaining: TimeInterval
+}
+
 // MARK: - 原因码(只发码,句子在显示层)
 
 enum LinkReason: String, StatusReason {
@@ -46,6 +57,23 @@ enum CapReason: String, StatusReason {
     var code: String { rawValue }
 }
 
+enum MetricReason: String, StatusReason {
+    case noProgress = "Metric.NoProgress"
+    case insufficient = "Metric.Insufficient"
+    case quality = "Metric.Quality"
+    case busy = "Metric.Busy"
+    case noSession = "Metric.NoSession"
+
+    var code: String { rawValue }
+}
+
+enum TtlReason: String, StatusReason {
+    case expiring = "Ttl.Expiring"
+    case fetchFailed = "Ttl.FetchFailed"
+
+    var code: String { rawValue }
+}
+
 // MARK: - 面板(每一项一列,五列齐全)
 
 struct StatusBoard {
@@ -65,6 +93,16 @@ struct StatusBoard {
         desired: .wanted, observed: .unknownState)
     var extensionEmbedded = Status<LinkDesired, CapObserved, CapReason>(
         desired: .wanted, observed: .unknownState)
+
+    // ---- 站 3:数值三项(录 / 收 / 提要)+ 广播卡时效 ----
+    var recorded = Status<LinkDesired, MetricValue, MetricReason>(
+        desired: .wanted, observed: MetricValue(value: 0, unit: "秒"))
+    var received = Status<LinkDesired, MetricValue, MetricReason>(
+        desired: .wanted, observed: MetricValue(value: 0, unit: "秒"))
+    var summary = Status<LinkDesired, MetricValue, MetricReason>(
+        desired: .wanted, observed: MetricValue(value: 0, unit: "轮"))
+    var broadcastToken = Status<LinkDesired, TtlValue, TtlReason>(
+        desired: .wanted, observed: TtlValue(remaining: 0))
 }
 
 // MARK: - 派生(纯函数:同一份事实,永远算出同一个结论)
@@ -157,6 +195,41 @@ extension StatusBoard {
 
     func extensionCondition() -> Condition {
         Self.capabilityCondition(extensionEmbedded.observed)
+    }
+
+    // MARK: 站 3 的派生
+
+    /// 项定义表 `Metric.Progress`:家里每送来一条进度就刷新 `lastSeen`;
+    /// 10 秒没有任何上报 ⇒ 这一路"看不见了"(unknown),而不是"坏了"(failed)。
+    static let receivedStaleAfter: TimeInterval = 10
+    /// 项定义表 `Metric.Summary`:家里每 60 秒推一次 sumstatus(哪怕这轮不出提要)。
+    static let summaryStaleAfter: TimeInterval = 60
+    /// 项定义表 `Ttl.BroadcastToken`:卡 900 秒有效,App 每 720 秒补写一次
+    /// ⇒ 剩余 ≤180 秒算"该刷新了"(unknown),≤0 算"没有可用卡"(failed)。
+    static let broadcastTokenTtl: TimeInterval = 900
+    static let broadcastTokenRefreshAt: TimeInterval = 180
+
+    /// 数值类派生:只看新鲜度。数值本身不判好坏 —— 判好坏是显示层的事。
+    func metricCondition(_ status: Status<LinkDesired, MetricValue, MetricReason>,
+                         staleAfter: TimeInterval, now: Date = Date()) -> Condition {
+        now.timeIntervalSince(status.lastSeen) > staleAfter ? .unknown : .ok
+    }
+
+    func receivedCondition(currentGeneration: Int, now: Date = Date()) -> Condition {
+        guard received.generation == currentGeneration else { return .unknown }
+        return metricCondition(received, staleAfter: Self.receivedStaleAfter, now: now)
+    }
+
+    func summaryCondition(now: Date = Date()) -> Condition {
+        metricCondition(summary, staleAfter: Self.summaryStaleAfter, now: now)
+    }
+
+    /// 时效类派生:剩余 0 = 没有可用卡(failed);进入刷新窗 = unknown;否则 ok。
+    func ttlCondition(now: Date = Date()) -> Condition {
+        let remaining = broadcastToken.observed.remaining
+        if remaining <= 0 { return .failed }
+        if remaining <= Self.broadcastTokenRefreshAt { return .unknown }
+        return .ok
     }
 }
 

@@ -155,6 +155,7 @@ final class SessionModel: ObservableObject {
                     self.note("广播 token 预取失败:\(error.localizedDescription)")
                 }
             }
+            self.syncTokenStatus()
         }
         return true
     }
@@ -208,6 +209,12 @@ final class SessionModel: ObservableObject {
                 self.sumState = text
                 if let m = raw["mode"] as? String, !m.isEmpty { self.sumMode = m }
                 if let c = raw["code"] as? String, !c.isEmpty { self.sumCode = c }
+                self.board.summary = Status(desired: LinkDesired.wanted,
+                                            observed: MetricValue(value: Double(self.summaries.count), unit: "轮"),
+                                            reason: Self.summaryReason(code: self.sumCode),
+                                            lastSeen: Date(), generation: self.connectionGeneration)
+                self.conditionNote("Metric.Summary", self.board.summaryCondition(),
+                                   detail: "码=\(self.sumCode) 轮=\(self.summaries.count)")
             case "final":
                 self.noteProgress(source: raw["source"] as? String ?? "", seconds: audioS)
                 if !text.isEmpty {
@@ -325,6 +332,14 @@ final class SessionModel: ObservableObject {
             Task { @MainActor in
                 guard let self, let start = self.timerStartedAt else { return }
                 self.recordedSeconds = Date().timeIntervalSince(start)
+                self.board.recorded = Status(desired: LinkDesired.wanted,
+                                             observed: MetricValue(value: self.recordedSeconds, unit: "秒"),
+                                             reason: nil, lastSeen: Date(),
+                                             generation: self.connectionGeneration)
+                self.conditionNote("Metric.Recorded", .ok, detail: "录=\(Int(self.recordedSeconds))秒(墙钟)")
+                self.conditionNote("Metric.Progress",
+                                   self.board.receivedCondition(currentGeneration: self.connectionGeneration),
+                                   detail: "收=\(Int(self.serverSeconds))秒")
             }
         }
         RunLoop.main.add(t, forMode: .common)
@@ -425,6 +440,40 @@ final class SessionModel: ObservableObject {
                legacy: embedded ? .ok : .failed, detail: embedded ? "包内有 appex" : "包内无 appex")
     }
 
+    /// 「派生值变了」才记一行 —— 数值项没有旧显示值可对照,走这条。
+    private func conditionNote(_ item: String, _ condition: Condition, detail: @autoclosure () -> String) {
+        let signature = "\(item)|\(condition.debugName)|派生"
+        guard shadowSignatures.insert(signature).inserted else { return }
+        note("[派生] \(item) \(condition.debugName) · \(detail())")
+    }
+
+    /// 广播卡时效:剩余秒数直接读 App Group 里那张卡,不新增状态源。
+    func syncTokenStatus() {
+        let remaining = cfg.broadcastCardRemaining()
+        board.broadcastToken = Status(desired: LinkDesired.wanted,
+                                      observed: TtlValue(remaining: remaining ?? 0),
+                                      reason: remaining == nil ? TtlReason.fetchFailed : nil,
+                                      lastSeen: Date(), generation: connectionGeneration)
+        let detail: String
+        if let value = remaining {
+            detail = "剩余=\(Int(value))秒"
+        } else {
+            detail = "还没有卡/读不到"
+        }
+        conditionNote("Ttl.BroadcastToken", board.ttlCondition(), detail: detail)
+    }
+
+    /// 家里给的提要判定码 → 原因码(码表:规范第七节)。
+    private static func summaryReason(code: String) -> MetricReason? {
+        switch code {
+        case "no_session": return .noSession
+        case "short":      return .insufficient
+        case "quality":    return .quality
+        case "go":         return nil
+        default:           return code.hasPrefix("busy") ? .busy : nil
+        }
+    }
+
     private func shadowProbe() {
         let legacy: Condition = netOK == nil ? .unknown : ((netOK == true) ? .ok : .failed)
         shadow("Link.Probe",
@@ -475,6 +524,11 @@ final class SessionModel: ObservableObject {
         progressSeenAt[key] = now
         let mic = serverBySource.filter { $0.key.hasSuffix("-livekit") }.values.max()
         serverSeconds = mic ?? serverBySource.values.max() ?? 0
+        board.received = Status(desired: LinkDesired.wanted,
+                                observed: MetricValue(value: serverSeconds, unit: "秒"),
+                                reason: nil, lastSeen: now, generation: connectionGeneration)
+        conditionNote("Metric.Progress", board.receivedCondition(currentGeneration: connectionGeneration),
+                      detail: "收=\(Int(serverSeconds))秒 来源=\(key)")
     }
 
     private func updatePartial(source: String, who: String, text: String) {
