@@ -138,11 +138,16 @@ enum BroadcastProbe {
         let timestamp = referenceLine.split(separator: " ", maxSplits: 1).first.map(String.init) ?? ""
         let formatter = ISO8601DateFormatter()
         let heartbeatAge = formatter.date(from: timestamp).map { Date().timeIntervalSince($0) } ?? .infinity
-        let stale = !paused && heartbeatAge > 15
+        // 15 秒太紧:静止画面时 ReplayKit 给帧稀疏,静音会议会被判成"扩展死了"→ 圆点变橙、按钮"未开播"。
+        // 30 秒没有新计数行才算进程真的没了。
+        let stale = !paused && heartbeatAge > 30
         // 第二重判活:screen 帧一直在跳(所以 heartbeat 新鲜),但 audioApp 计数 12 秒没涨 = 系统声那一路死了。
         let audioFresh = Self.noteAppFrames(frames)
+        // 静音会议里 audioApp 本来就不涨(对方没说话/视频静音),12 秒判死必然误报。
+        // 改成 40 秒,并要求进程还活着(心跳 10 秒内):真死的是心跳,假死的是音频。
         let stalled = connected && frames > 0 && !paused && !audioFresh
-            && Date().timeIntervalSince(Self.lastAppFramesAt) > 12
+            && heartbeatAge < 10
+            && Date().timeIntervalSince(Self.lastAppFramesAt) > 40
         let phase: Phase = failed || stale || stalled ? .error
             : (connected && sentAudio && frames > 0 && !paused ? .receiving : .waiting)
         // isActive 必须由 phase 推导:stale/failed 时主 App 要重新补写广播 token,并把按钮显示成未开播。

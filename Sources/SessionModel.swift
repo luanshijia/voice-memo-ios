@@ -134,6 +134,9 @@ final class SessionModel: ObservableObject {
     private var connectionGeneration = 0
     /// 这一代真正连上的 Room 实例。断开时只断它 —— 旧任务迟到完成不许碰新会话。
     private var connection: Room?
+    /// 正在取卡/连接的那一次(此时 connection 还是 nil)。stop() 必须等它收尾,
+    /// 否则它会带着同一身份连上来,把刚重开的那条挤掉。
+    private var connecting: Task<Void, Never>?
     /// 计时的真实起点。以前每 0.5 秒 +0.5,滚动列表时定时器停摆、丢掉的 tick 永远不补。
     private var timerStartedAt: Date?
 
@@ -214,7 +217,7 @@ final class SessionModel: ObservableObject {
         status = "连接中…"
         isRecording = true
         let cfg = self.cfg
-        Task {
+        connecting = Task {
             if let d = pendingDisconnect { await d.value }   // 等上一次断开落地,避免同身份双连
             pendingDisconnect = nil
             do {
@@ -241,14 +244,18 @@ final class SessionModel: ObservableObject {
         connectionGeneration += 1     // 在飞的连接尝试作废,不许它稍后回写状态
         stopTimer()
         isRecording = false
+        partials = []                 // 在飞的部分字幕属于上一场,停止后不该再挂在屏幕上
         status = "已停止:本地推流 \(Int(recordedSeconds)) 秒,家里已识别 \(Int(serverSeconds)) 秒"
         note("用户停止:推流 \(Int(recordedSeconds))s / 家里识别 \(Int(serverSeconds))s")
         // 只断开"我这一代"的那条连接:旧任务迟到时不会再拿新会话开刀
         let live = connection
         connection = nil
+        let inflight = connecting          // 还没连成的那一次:它自己有世代校验,连成后会作废并断开
+        connecting = nil
         pendingDisconnect = Task { [weak self] in
-            guard let self, let live else { return }
-            await self.room.disconnect(live)
+            guard let self else { return }
+            await inflight?.value          // 等它彻底收尾,否则同身份双连会把新会话挤掉
+            if let live { await self.room.disconnect(live) }
         }
     }
 

@@ -21,6 +21,9 @@ struct ContentView: View {
     @State private var broadcastAlive = false        // 扩展写过「=== 扩展启动」且没写「结束」
     @State private var broadcastPhase: BroadcastProbe.Phase = .stopped
     @State private var followsLatestFinal = true
+    /// 合并后的定稿行。以前是 computed property:status 每秒变两次 → 每 0.5 秒把整场字幕重合并一遍
+    /// (两小时会议几千行,单人长文 O(n²) 拼接)。改成只在定稿条数变化时重算。
+    @State private var rows: [DisplayRow] = []
 
     var body: some View {
         // 底部那一行(未连接 / 网络 断 / 麦克风 … / 录 收 句)改成**真正贴屏幕底边**:
@@ -267,7 +270,7 @@ struct ContentView: View {
             ZStack(alignment: .bottomTrailing) {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 16) {
-                        ForEach(displayRows) { row in
+                        ForEach(rows) { row in
                             paragraph(who: row.who, text: row.text, color: .primary)
                                 .id(row.id)
                         }
@@ -278,10 +281,12 @@ struct ContentView: View {
                     followsLatestFinal = false
                 })
                 .onChange(of: model.lines.count) { _, _ in
-                    guard followsLatestFinal, let last = displayRows.last else { return }
+                    rows = buildRows()          // 只有定稿变多才重算,不再跟着 0.5 秒的计时器跑
+                    guard followsLatestFinal, let last = rows.last else { return }
                     proxy.scrollTo(last.id, anchor: .bottom)
                 }
-                if !followsLatestFinal, let last = displayRows.last {
+                .onAppear { if rows.isEmpty { rows = buildRows() } }
+                if !followsLatestFinal, let last = rows.last {
                     Button {
                         followsLatestFinal = true
                         withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
@@ -390,26 +395,26 @@ struct ContentView: View {
     /// 静音超过这么久,才在同一人的两段之间夹一个 ~(沿用家里断句阈值 2.4 秒)
     private static let gapThreshold: Double = 2.4
 
-    private var displayRows: [DisplayRow] {
-        var rows: [DisplayRow] = []
+    private func buildRows() -> [DisplayRow] {
+        var out: [DisplayRow] = []
         var prevWho = ""
         for (idx, line) in model.lines.enumerated() {
             let speakerKey = "\(line.source)|\(line.who)"
             let sameSpeaker = (speakerKey == prevWho)
-            if sameSpeaker, !rows.isEmpty {
+            if sameSpeaker, !out.isEmpty {
                 // 同一人:接着上一段往后写;中间停顿 ≥2.4 秒就夹一个 ~(不换行)
                 if let gap = line.gap, gap >= Self.gapThreshold {
-                    rows[rows.count - 1].text += " " + Self.gapLabel(gap)
+                    out[out.count - 1].text += " " + Self.gapLabel(gap)
                 }
-                rows[rows.count - 1].text += line.text
+                out[out.count - 1].text += line.text
             } else {
                 // 换人:起新的一段,并显示说话人
-                rows.append(DisplayRow(id: "line-\(idx)",
-                                       who: displayWho(line.who, source: line.source), text: line.text))
+                out.append(DisplayRow(id: "line-\(idx)",
+                                      who: displayWho(line.who, source: line.source), text: line.text))
             }
             prevWho = speakerKey
         }
-        return rows
+        return out
     }
 
     /// 身份标签(用户口径 2026-10-15 晚:**自己那一路不再显示任何标签** ——

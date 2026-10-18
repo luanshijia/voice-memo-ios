@@ -57,16 +57,28 @@ final class LiveKitBroadcastPublisher: NSObject, RoomDelegate {
     }
 
     func start() {
-        guard let configuration = Self.readConfiguration() else {
-            log("LiveKit 配置缺失或无效；请从主 App 重新启动广播")
-            return
+        // 主 App 的卡是 12 分钟一张,扩展读到即删(consume once);扩展可能在 App 还没写之前就起来了,
+        // 或者刚好处在两张卡之间。原来一次读不到就 log + return,用户只能停掉重开 —— 改成最多等 10 秒。
+        connectionTask = Task { [weak self] in
+            guard let self else { return }
+            var configuration = Self.readConfiguration()
+            var waited = 0
+            while configuration == nil && waited < 25 && !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 400_000_000)
+                waited += 1
+                configuration = Self.readConfiguration()
+            }
+            guard let configuration else {
+                self.log("LiveKit 配置缺失或无效；请从主 App 重新启动广播")
+                return
+            }
+            guard configuration.identity.hasSuffix("-replaykit") else {
+                self.log("LiveKit 配置身份不符合 -replaykit 约定")
+                return
+            }
+            self.log("LiveKit 正在连接 identity=\(configuration.identity)")
+            await self.connect(configuration)
         }
-        guard configuration.identity.hasSuffix("-replaykit") else {
-            log("LiveKit 配置身份不符合 -replaykit 约定")
-            return
-        }
-        log("LiveKit 正在连接 identity=\(configuration.identity)")
-        connectionTask = Task { await connect(configuration) }
     }
 
     func append(_ sampleBuffer: CMSampleBuffer) {
