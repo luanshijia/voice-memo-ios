@@ -17,7 +17,6 @@ struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
 
     // 顶部按钮状态
-    @State private var netOK: Bool? = nil            // nil = 还没测过
     @State private var broadcastAlive = false        // 扩展写过「=== 扩展启动」且没写「结束」
     @State private var broadcastPhase: BroadcastProbe.Phase = .stopped
     @State private var followsLatestFinal = true
@@ -49,7 +48,7 @@ struct ContentView: View {
                 Task {
                     await refreshExt()
                     if !broadcastAlive { _ = model.prepareBroadcast() }
-                    await refreshNet()
+                    await model.refreshNet()
                 }
             }
         }
@@ -73,10 +72,10 @@ struct ContentView: View {
     /// 网络:只有显示功能。点了当场测一次;启动和回到前台也会自动测。
     /// 配色(用户口径 2026-10-15 晚):通 = 实心深蓝(与「宽谱」「开启」同一档);不通/没测 = 灰(与其它按钮关闭态同一档)。
     private var netButton: some View {
-        flatButton(icon: netOK == true ? "wifi" : "wifi.slash", title: "网络",
-                   fill: netOK == true ? Color.blue : Color.secondary.opacity(0.25),
-                   fg: netOK == true ? .white : .primary) {
-            Task { await refreshNet() }
+        flatButton(icon: model.netOK == true ? "wifi" : "wifi.slash", title: "网络",
+                   fill: model.netOK == true ? Color.blue : Color.secondary.opacity(0.25),
+                   fg: model.netOK == true ? .white : .primary) {
+            Task { await model.refreshNet() }
         }
     }
 
@@ -185,7 +184,7 @@ struct ContentView: View {
                 .truncationMode(.tail)
             Spacer(minLength: 6)
             // 用户口径(2026-10-15):最下一行 = 网络状态 + 麦克风状态 + 录/收/句
-            inlineText("网络", netOK == true ? "通" : "断", netOK == true ? .blue : .secondary)
+            inlineText("网络", model.netOK == true ? "通" : "断", model.netOK == true ? .blue : .secondary)
             inlineText("麦克风", model.micModeText, model.micIsWide ? .blue : .secondary)
             inlineMetric("录", model.recordedSeconds, .primary)
             inlineMetric("收", model.serverSeconds,
@@ -460,15 +459,10 @@ struct ContentView: View {
         broadcastPhase = status.phase
     }
 
-    private func refreshNet() async {
-        guard let hp = NetProbe.hostPort(from: model.serverURL) else { netOK = false; return }
-        netOK = await NetProbe.check(host: hp.host, port: hp.port)
-    }
-
     private func refreshLoop() async {
         await refreshExt()
         if !broadcastAlive { _ = model.prepareBroadcast() }
-        await refreshNet()
+        await model.refreshNet()
         model.refreshMicMode()
         var tick = 0
         while !Task.isCancelled {
@@ -480,7 +474,7 @@ struct ContentView: View {
             if tick % 100 == 0 { _ = model.prepareBroadcast() }  // 长直播:保持随时有一份未过期的 token
             model.refreshMicMode()
             tick += 1
-            if tick % 5 == 0 { await refreshNet() }             // 每 15 秒顺手探一次网络
+            if tick % 5 == 0 { await model.refreshNet() }        // 每 15 秒顺手探一次网络
         }
     }
 }

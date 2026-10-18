@@ -20,6 +20,12 @@ final class VoiceRoom: NSObject {
 
     var isConnected: Bool { room?.connectionState == .connected }
 
+    /// 传输层实况(只交值,不交句子)。`nil` = 当前没有房间对象。
+    var connectionState: ConnectionState? { room?.connectionState }
+
+    /// 这一代被动结束的原因码。主动性由上层"期望"决定,这里只报原因。
+    var onEndReason: ((LinkReason) -> Void)?
+
     /// 往房间里发一条自己的数据消息(topic=stt,与 agent 回传同一条通道,可靠送达)。
     /// 用途:「实时总结」按钮点一次 → 请家里立刻出一段总结。
     func send(_ payload: [String: Any]) async {
@@ -100,6 +106,7 @@ extension VoiceRoom: RoomDelegate {
         Task { @MainActor [weak self] in
             guard let self, self.room === room else { return }
             if self.consumeIntentionalDisconnect(room) { return }      // 自己停的,不算连接失败
+            self.onEndReason?(.connectFailed)
             self.onEnded?("连接失败:" + (error?.description ?? "未知"))
         }
     }
@@ -111,6 +118,7 @@ extension VoiceRoom: RoomDelegate {
                 self.onState?("已断开(主动停止)")
                 return
             }
+            self.onEndReason?(.disconnected)
             self.onEnded?(error.map { "连接断开:" + $0.description } ?? "连接已断开")
         }
     }

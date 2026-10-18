@@ -36,6 +36,16 @@ final class SessionModel: ObservableObject {
     @Published var micIsWide = false
     @Published var recordedSeconds: Double = 0     // 本地推流时长
     @Published var serverSeconds: Double = 0       // 家里已识别到的音频秒数(agent 回传,按来源分开记)
+
+    // ---- 状态面板(规范见 notes/规范-状态显示.md;站 1 = App Group / 链路探测 / LiveKit)----
+    /// 「网络」那一项的事实:nil = 还没探过(未知)。显示层只读它。
+    @Published var netOK: Bool? = nil
+    /// 五列面板。**唯一写入点 = `syncBoard()` 与 `refreshNet()`**。
+    @Published var board = StatusBoard()
+    /// 这一代被动结束的原因码(主动停 = nil)。只由 VoiceRoom 的 onEndReason 写入。
+    private var livekEndReason: LinkReason?
+    /// 影子对照去重(同一组合只记一次),`start()` 时清空。
+    private var shadowSignatures = Set<String>()
     /// 各来源已识别的秒数。audio_s 是"单条音轨自创建以来"的秒数,
     /// 直接把任一路的值赋给「收」会让新开的播放轨(回传 5 秒)把麦克风那路(300 秒)压成 5 秒。
     private var serverBySource: [String: Double] = [:]
@@ -150,14 +160,19 @@ final class SessionModel: ObservableObject {
     private var timerStartedAt: Date?
 
     init() {
-        room.onState = { [weak self] s in self?.status = s }
+        room.onState = { [weak self] s in
+            self?.status = s
+            self?.syncBoard()
+        }
         room.onNote = { [weak self] s in self?.note(s) }
+        room.onEndReason = { [weak self] r in self?.livekEndReason = r }
         room.onEnded = { [weak self] s in
             guard let self else { return }
             self.status = s
             self.stopTimer()
             self.isRecording = false
             self.connection = nil        // SDK 已经断了,别再重复断一次
+            self.syncBoard()
         }
         room.onTranscript = { [weak self] type, who, audioS, text, gap, ts, raw in
             guard let self else { return }
@@ -226,6 +241,9 @@ final class SessionModel: ObservableObject {
         lastSummary = ""
         status = "连接中…"
         isRecording = true
+        livekEndReason = nil           // 新一代:上一代"被动结束"的原因作废
+        shadowSignatures = []
+        syncBoard()
         let cfg = self.cfg
         connecting = Task {
             // 先取走再等:await 期间用户可能又点了一次停止,stop() 会写入"新的一条" pendingDisconnect,
@@ -243,12 +261,14 @@ final class SessionModel: ObservableObject {
                 self.connection = live
                 await room.send(["type": "summode", "mode": self.sumMode])   // 让家里跟上本机档位
                 self.startTimer()
+                self.syncBoard()
             } catch {
                 // VoiceRoom.connect 失败时已自行断开这条连接,这里只回写 UI
                 guard generation == self.connectionGeneration else { return }
                 self.note("连接异常:\(error.localizedDescription)")
                 self.status = "连接失败:\(error.localizedDescription)"
                 self.isRecording = false
+                self.syncBoard()
             }
         }
     }
@@ -260,6 +280,7 @@ final class SessionModel: ObservableObject {
         partials = []                 // 在飞的部分字幕属于上一场,停止后不该再挂在屏幕上
         lastSummary = "已停止:本地推流 \(Int(recordedSeconds)) 秒,家里已识别 \(Int(serverSeconds)) 秒"
         status = "已停止"
+        syncBoard()
         note("用户停止:推流 \(Int(recordedSeconds))s / 家里识别 \(Int(serverSeconds))s")
         // 只断开"我这一代"的那条连接:旧任务迟到时不会再拿新会话开刀
         let live = connection
@@ -289,6 +310,87 @@ final class SessionModel: ObservableObject {
     }
 
     private func stopTimer() { timer?.invalidate(); timer = nil; timerStartedAt = nil }
+
+    // MARK: - 状态面板(站 1:App Group / 链路探测 / LiveKit)
+    // 规范见 `notes/规范-状态显示.md`。这一节只做两件事:把事实写进五列面板、把影子对照写进 notes。
+    // **不驱动任何界面** —— 站 1 的验收靠 notes,不靠画面。
+
+    /// 把「此刻的事实」写进面板 —— LiveKit 与 App Group 两项的**唯一写入点**。
+    /// 只读事实(SDK 连接态 / 是否在录 / 被动结束原因),不读任何旧文案。
+    func syncBoard() {
+        let generation = connectionGeneration
+        var observed: LinkObserved = .notStarted
+        if let state = room.connectionState {
+            switch state {
+            case .connected: observed = .connected
+            case .connecting: observed = .connecting
+            case .reconnecting: observed = .reconnecting
+            default: observed = .disconnected      // .disconnected 与将来新增的态一律按断开处理
+            }
+        }
+        let desired: LinkDesired = isRecording ? .wanted : .notWanted
+        let reason: LinkReason? = (observed == .disconnected) ? (livekEndReason ?? .disconnected) : nil
+        board.livekit = Status(desired: desired, observed: observed, reason: reason,
+                               lastSeen: Date(), generation: generation)
+
+        let groupOK = BroadcastProbe.containerURL() != nil
+        board.appGroup = Status(desired: LinkDesired.wanted,
+                                observed: groupOK ? CapObserved.yes : CapObserved.no,
+                                reason: groupOK ? nil : CapReason.appGroupUnavailable,
+                                lastSeen: Date(), generation: generation)
+
+        shadow("Link.LiveKit",
+               fresh: board.livekitCondition(currentGeneration: generation),
+               legacy: legacyLiveKitCondition(),
+               detail: "status=\(status) 观测=\(observed) 码=\(reason?.code ?? "-")")
+        shadow("Cap.AppGroup", fresh: board.appGroupCondition(),
+               legacy: groupOK ? .ok : .failed, detail: BroadcastProbe.groupName())
+    }
+
+    /// 「网络」那一项的采集入口:TCP 探一次,结果写进事实(`netOK`)与面板(`probe`)。
+    func refreshNet() async {
+        guard let hp = NetProbe.hostPort(from: serverURL) else {
+            netOK = false
+            board.probe = Status(desired: LinkDesired.wanted, observed: LinkObserved.disconnected,
+                                 reason: LinkReason.probeTimeout,
+                                 lastSeen: Date(), generation: connectionGeneration)
+            shadowProbe()
+            return
+        }
+        let ok = await NetProbe.check(host: hp.host, port: hp.port)
+        netOK = ok
+        let reason: LinkReason? = ok ? nil : .probeTimeout
+        board.probe = Status(desired: LinkDesired.wanted,
+                             observed: ok ? LinkObserved.connected : LinkObserved.disconnected,
+                             reason: reason,
+                             lastSeen: Date(), generation: connectionGeneration)
+        shadowProbe()
+    }
+
+    private func shadowProbe() {
+        let legacy: Condition = netOK == nil ? .unknown : ((netOK == true) ? .ok : .failed)
+        shadow("Link.Probe",
+               fresh: board.probeCondition(currentGeneration: connectionGeneration),
+               legacy: legacy,
+               detail: "netOK=\(netOK.map { $0 ? "通" : "断" } ?? "未测")")
+    }
+
+    /// 影子对照:新派生值与旧显示值都记一行,同一组合只记一次(`start()` 清空)。
+    private func shadow(_ item: String, fresh: Condition, legacy: Condition,
+                        detail: @autoclosure () -> String) {
+        let signature = "\(item)|\(fresh.debugName)|\(legacy.debugName)"
+        guard shadowSignatures.insert(signature).inserted else { return }
+        let mark = fresh == legacy ? "一致" : "不一致"
+        note("[影子] \(item) \(mark) 新=\(fresh.debugName) 旧=\(legacy.debugName) · \(detail())")
+    }
+
+    /// 旧口径的判据 —— 只为对照保留。它读文案,正是这次要消灭的做法。
+    private func legacyLiveKitCondition() -> Condition {
+        if !isRecording { return .ok }
+        if status.contains("已连上") || status.contains("连接状态:已连接") { return .ok }
+        if status.contains("失败") || status.contains("已断开") { return .failed }
+        return .unknown
+    }
 
     /// 记录某一路的进度并重算「收」:优先麦克风那一路(与手机「录」同一个时钟),没有才取所有来源最大值。
     private func noteProgress(source: String, seconds: Double) {
