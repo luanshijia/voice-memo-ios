@@ -587,8 +587,9 @@ final class SessionModel: ObservableObject {
     }
 
     /// 契约 §三.5:`summode` 必须带 `schema_version` 与当前 `session_id`。
+    /// 上行也取 2 —— 与下行一致,这样电脑端会按当前场次比对,上一场残留的切档会被 session_mismatch 挡掉。
     private func summodePayload(_ mode: String) -> [String: Any] {
-        ["type": "summode", "schema_version": 1, "session_id": sessionID, "mode": mode]
+        ["type": "summode", "schema_version": 2, "session_id": sessionID, "mode": mode]
     }
 
     /// 家里给的 epoch 秒 → HH:mm(只给提要标时用)。
