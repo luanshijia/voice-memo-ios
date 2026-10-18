@@ -3,8 +3,10 @@ import Foundation
 /// 状态层的第二层(L2):持有事实、算结论。
 /// 规则正本:`notes/规范-状态显示.md`。本文件只放"值 → 结论"的纯逻辑,不碰 UI、不碰 IO。
 ///
-/// 站 1 范围:`Cap.AppGroup` / `Link.Probe` / `Link.LiveKit` 三项。
-/// 其余项(RepK、麦克风、数值、时效、配置、协议)随后续站点逐项加进来。
+/// 覆盖范围(站 1–4 已全部落地,2026-10-19 核对):`Cap.AppGroup`、`Link.Probe`、`Link.LiveKit`、
+/// `Link.ReplayKit`、`Cap.MicPermission`、`Cap.MicMode`、`Cap.ExtensionEmbedded`、
+/// `Metric.Recorded`/`Received`/`Progress`/`Summary(+Fresh/Round)`、`Ttl.BroadcastToken`、`Cap.Config`、`Cap.Protocol`。
+/// 旧注释曾写“只完成站 1”,已过期 —— 站 5(界面全量改读本文件的结论、删旧 `status` 字段)尚未完成。
 
 // MARK: - 值域
 
