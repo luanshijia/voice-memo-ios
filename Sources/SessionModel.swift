@@ -35,6 +35,9 @@ final class SessionModel: ObservableObject {
     /// SDK 被动断开时不许清它 —— 否则"掉线"会被当成"用户不想录",状态层就把故障判成正常
     /// (Codex 2026-10-18 评审第 1 条)。
     @Published private(set) var intent: LinkDesired = .notWanted
+    /// 本场次标识(契约 §五):开始录音时生成、停止时清空、断线重连沿用。
+    /// 它与服务端台账编号是两件事,也替代本地 `connectionGeneration` 用于丢弃上一场的迟到消息。
+    @Published private(set) var sessionID = ""
     /// 当前麦克风模式(只读 —— iOS 不给 App 设置接口;界面只用来看「是不是宽谱」)
     @Published var micModeText = "读取中"
     @Published var micIsWide = false
@@ -156,7 +159,7 @@ final class SessionModel: ObservableObject {
             guard let self else { return }
             defer { self.broadcastTokenTask = nil }
             do {
-                if try await self.cfg.prepareBroadcastToken() {
+                if try await self.cfg.prepareBroadcastToken(session: self.sessionID.isEmpty ? nil : self.sessionID) {
                     self.note("已为 \(self.cfg.broadcastIdentity) 取到发布用门禁卡")
                 }
             } catch {
@@ -211,6 +214,13 @@ final class SessionModel: ObservableObject {
         }
         room.onTranscript = { [weak self] type, who, audioS, text, gap, ts, raw in
             guard let self else { return }
+            // 契约 §五:带了场次号但与当前场不符 ⇒ 上一场的迟到消息,丢弃并记 session_mismatch。
+            let incomingSession = (raw["session_id"] as? String) ?? ""
+            if !incomingSession.isEmpty, !self.sessionID.isEmpty, incomingSession != self.sessionID {
+                self.noteProtocolIssue("session_mismatch")
+                return
+            }
+            self.noteUnknownFields(type: type, raw: raw)
             switch type {
             case "summary":
                 // 会中提要:只追加,不顶走上面的定稿;每条都带手机本地时间(家里的 clock 不一定对得上)
@@ -292,6 +302,7 @@ final class SessionModel: ObservableObject {
         progressSeenAt = [:]                // 新一场:进度墙钟与未知 type 提示都重置
         unknownTypes = []
         protocolIssues = [:]
+        loggedUnknownFields = []
         summaries = []                      // 新一场:提要列表与状态区都从零开始
         sumState = "等待提要…"
         sumCode = "wait_period"
@@ -299,6 +310,7 @@ final class SessionModel: ObservableObject {
         status = "连接中…"
         isRecording = true
         intent = .wanted
+        sessionID = UUID().uuidString.lowercased()   // 新一场:场次号换新
         livekEndReason = nil           // 新一代:上一代"被动结束"的原因作废
         shadowSignatures = []
         syncBoard()
@@ -311,7 +323,8 @@ final class SessionModel: ObservableObject {
             pendingDisconnect = nil
             if let prev { await prev.value }
             do {
-                let card = try await cfg.requestToken(identity: cfg.identity)   // 向家里要 15 分钟门禁卡
+                let card = try await cfg.requestToken(identity: cfg.identity,
+                                                      session: self.sessionID.isEmpty ? nil : self.sessionID)
                 let live = try await room.connect(url: card.url, token: card.token, identity: cfg.identity)
                 guard generation == self.connectionGeneration else {   // 这一轮已被停止/重开取代
                     await self.room.disconnect(live)                   // 只断自己这条,不碰新会话
@@ -337,6 +350,7 @@ final class SessionModel: ObservableObject {
         stopTimer()
         isRecording = false
         intent = .notWanted             // 只有用户按停止才清期望
+        sessionID = ""                  // 契约:停止即换场,下一场重新生成
         partials = []                 // 在飞的部分字幕属于上一场,停止后不该再挂在屏幕上
         lastSummary = "已停止:本地推流 \(Int(recordedSeconds)) 秒,家里已识别 \(Int(serverSeconds)) 秒"
         status = "已停止"
@@ -538,6 +552,25 @@ final class SessionModel: ObservableObject {
                                    lastSeen: Date(), generation: connectionGeneration)
         conditionNote("Cap.Protocol", board.protocolCondition(),
                       detail: lag ? problems.joined(separator: " / ") : "无未知 type、无格式错误")
+    }
+
+    /// 契约 §二:每种消息的“已知字段”。白名单外的字段**只记一条日志、不算协议错误**
+    /// —— 允许服务端先加可选字段,不能因此把整块判成“客户端落后”。
+    private static let knownFields: [String: Set<String>] = [
+        "partial": ["type", "schema_version", "session_id", "who", "source", "text", "audio_s", "ts"],
+        "final": ["type", "schema_version", "session_id", "who", "source", "text", "audio_s", "gap_s", "ts"],
+        "summary": ["type", "schema_version", "session_id", "text", "clock", "ts", "unsupported"],
+        "sumstatus": ["type", "schema_version", "session_id", "mode", "code", "text", "chars", "next_in", "ts"],
+    ]
+    private var loggedUnknownFields = Set<String>()
+
+    private func noteUnknownFields(type: String, raw: [String: Any]) {
+        guard let known = Self.knownFields[type] else { return }
+        for key in raw.keys where !known.contains(key) && !key.hasPrefix("_") {
+            if loggedUnknownFields.insert("\(type).\(key)").inserted {
+                note("收到未知可选字段 \(type).\(key)(已忽略)")
+            }
+        }
     }
 
     /// 收包层结构性问题:计数 + 立刻刷新协议项。

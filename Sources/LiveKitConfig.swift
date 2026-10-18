@@ -46,13 +46,18 @@ struct LiveKitConfig {
     }
 
     /// 向家里要一张卡。失败一律抛出 —— 调用方必须让用户看到"取卡失败",不能静默连不上。
-    func requestToken(identity: String, ttl: Int = 15 * 60) async throws -> Token {
+    func requestToken(identity: String, ttl: Int = 15 * 60, session: String? = nil) async throws -> Token {
         guard let endpoint = tokenEndpoint,
               var comps = URLComponents(url: endpoint, resolvingAgainstBaseURL: false) else {
             throw Self.error(2, "连接地址不合法:\(url)")
         }
-        comps.queryItems = [URLQueryItem(name: "identity", value: identity),
-                            URLQueryItem(name: "ttl", value: String(ttl))]
+        var items = [URLQueryItem(name: "identity", value: identity),
+                     URLQueryItem(name: "ttl", value: String(ttl))]
+        // 契约 §五:场次号随取卡带上,家里写进 JWT metadata,agent 据此把两路音轨归到同一场。
+        if let session = session, !session.isEmpty {
+            items.append(URLQueryItem(name: "session", value: session))
+        }
+        comps.queryItems = items
         guard let finalURL = comps.url else { throw Self.error(2, "取卡地址拼不出来") }
         var req = URLRequest(url: finalURL)
         req.timeoutInterval = 8
@@ -77,6 +82,10 @@ struct LiveKitConfig {
             guard !card.token.isEmpty else {
                 throw Self.error(5, "取卡回包 token 为空")
             }
+            // 契约 §六:回包主机必须与本机配置一致,防止被指到别的服务器
+            if let configured = URL(string: url)?.host, u.host != configured {
+                throw Self.error(5, "取卡回包主机与配置不符:配置 \(configured),回 \(u.host ?? "-")")
+            }
             if let t = card.ttl, t <= 0 || t > 24 * 3600 {
                 throw Self.error(5, "取卡回包 ttl 越界:\(t)")
             }
@@ -92,7 +101,7 @@ struct LiveKitConfig {
     /// 每次都真去取会变成每 3 秒一次 TLS 请求 + 一次写盘(实测 3 分钟签了 21 次)。
     /// 原子写:扩展随时可能读,绝不能让它读到半个文件。
     @discardableResult
-    func prepareBroadcastToken(force: Bool = false) async throws -> Bool {
+    func prepareBroadcastToken(force: Bool = false, session: String? = nil) async throws -> Bool {
         guard let container = BroadcastProbe.containerURL() else {
             throw Self.error(5, "App Group 不可用,扩展无法读取广播配置")
         }
@@ -106,7 +115,7 @@ struct LiveKitConfig {
            (obj["token"] as? String)?.isEmpty == false {
             return false                      // 卡还新鲜,不打扰家里
         }
-        let card = try await requestToken(identity: broadcastIdentity, ttl: 15 * 60)
+        let card = try await requestToken(identity: broadcastIdentity, ttl: 15 * 60, session: session)
         let payload: [String: Any] = ["url": card.url,
                                       "identity": broadcastIdentity,
                                       "token": card.token,

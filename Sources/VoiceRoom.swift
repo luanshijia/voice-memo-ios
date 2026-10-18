@@ -103,14 +103,34 @@ extension VoiceRoom: RoomDelegate {
                 self.onProtocolIssue?("parse")
                 return
             }
-            // 版本只在服务端显式给了的时候校验;没给 = 视为 v1(老服务端)。
-            if let v = obj["schema_version"] as? String, v != "1" {
-                self.onProtocolIssue?("version:\(v)")
+            // 契约 §二:版本必须存在且为整数;v1/v2 都接受,v2 只多要求 session_id。
+            guard let rawVersion = obj["schema_version"] else {
+                self.onProtocolIssue?("missing_schema_version")
+                return
+            }
+            let version: Int
+            if let n = rawVersion as? Int {
+                version = n
+            } else if let n = rawVersion as? NSNumber {
+                version = n.intValue
+            } else {
+                self.onProtocolIssue?("invalid_schema_version")
+                return
+            }
+            guard version == 1 || version == 2 else {
+                self.onProtocolIssue?("version:\(version)")
                 return
             }
             guard let type = obj["type"] as? String, !type.isEmpty else {
                 self.onProtocolIssue?("missing_type")
                 return
+            }
+            // v2:session_id 必填(是否属于本场由上层比对,这里只查存在性)
+            if version == 2 {
+                guard let sid = obj["session_id"] as? String, !sid.isEmpty else {
+                    self.onProtocolIssue?("missing_session_id")
+                    return
+                }
             }
             // text 缺省视为空串:控制类消息(新协议字段)不带 text 时,整条丢掉等于状态永远不更新
             let text = (obj["text"] as? String) ?? ""
