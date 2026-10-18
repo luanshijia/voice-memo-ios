@@ -101,20 +101,28 @@ final class SessionModel: ObservableObject {
 
     @discardableResult
     func prepareBroadcast() -> Bool {
-        // 扩展到点就把 token 文件读走删掉,所以这里要反复补;取卡是网络请求,必须异步
+        // 扩展到点就把 token 文件读走删掉,所以这里要反复补;取卡本身有 12 分钟节流,
+        // 3 秒一次的循环不会真的每轮去要卡。
         Task { [weak self] in
             guard let self else { return }
             do {
-                try await self.cfg.prepareBroadcastToken()
-                self.note("已为 \(self.cfg.broadcastIdentity) 取到发布用门禁卡")
+                if try await self.cfg.prepareBroadcastToken() {
+                    self.note("已为 \(self.cfg.broadcastIdentity) 取到发布用门禁卡")
+                }
             } catch {
-                self.note("广播 token 预取失败:\(error.localizedDescription)")
+                let now = Date()
+                if now.timeIntervalSince(self.lastBroadcastNote) > 60 {   // 网络断了别每 3 秒刷一条
+                    self.lastBroadcastNote = now
+                    self.note("广播 token 预取失败:\(error.localizedDescription)")
+                }
             }
         }
         return true
     }
 
     private var cfg = LiveKitConfig.load()
+    /// 广播卡取卡失败提示的节流时间(免得离线时每 3 秒刷一条状态)
+    private var lastBroadcastNote = Date.distantPast
     private let room = VoiceRoom()
     private var timer: Timer?
     /// 上一次「停止」的断开动作。实测踩过:点停止后立刻再点开始,新旧两条连接同身份并存,

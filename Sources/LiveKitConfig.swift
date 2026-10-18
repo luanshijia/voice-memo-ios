@@ -71,17 +71,32 @@ struct LiveKitConfig {
     }
 
     /// 为广播扩展准备一张只发布用的卡,写进 App Group。
-    /// 原子写:扩展在 3 秒一次的轮询里随时可能读,绝不能让它读到半个文件。
-    func prepareBroadcastToken() async throws {
+    /// 已经有一张 12 分钟内的卡就直接返回 —— 调用点是 3 秒一次的刷新循环,
+    /// 每次都真去取会变成每 3 秒一次 TLS 请求 + 一次写盘(实测 3 分钟签了 21 次)。
+    /// 原子写:扩展随时可能读,绝不能让它读到半个文件。
+    @discardableResult
+    func prepareBroadcastToken(force: Bool = false) async throws -> Bool {
         guard let container = BroadcastProbe.containerURL() else {
             throw Self.error(5, "App Group 不可用,扩展无法读取广播配置")
         }
+        let target = container.appendingPathComponent("broadcast-livekit.json")
+        if !force,
+           let data = try? Data(contentsOf: target),
+           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let stamp = (obj["fetchedAt"] as? NSNumber)?.doubleValue,
+           let ident = obj["identity"] as? String, ident == broadcastIdentity,
+           Date().timeIntervalSince1970 - stamp < 12 * 60,
+           (obj["token"] as? String)?.isEmpty == false {
+            return false                      // 卡还新鲜,不打扰家里
+        }
         let card = try await requestToken(identity: broadcastIdentity, ttl: 15 * 60)
-        let payload: [String: String] = ["url": card.url,
-                                         "identity": broadcastIdentity,
-                                         "token": card.token]
-        let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
-        try data.write(to: container.appendingPathComponent("broadcast-livekit.json"), options: .atomic)
+        let payload: [String: Any] = ["url": card.url,
+                                      "identity": broadcastIdentity,
+                                      "token": card.token,
+                                      "fetchedAt": Date().timeIntervalSince1970]
+        let out = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+        try out.write(to: target, options: .atomic)
+        return true
     }
 
     private static func error(_ code: Int, _ msg: String) -> NSError {

@@ -34,8 +34,8 @@ targets:
         # (实测报错:An invalid value ... was provided for the parameter 'appIdName'.)
         # → 显示名一律用纯 ASCII,才能走「每个扩展注册 App ID」这条路。
         CFBundleDisplayName: VoiceMemoBroadcast
-        CFBundleShortVersionString: "0.9.0"
-        CFBundleVersion: "65"
+        CFBundleShortVersionString: "0.9.1"
+        CFBundleVersion: "66"
         # 必须写在 properties 里:XcodeGen 会用这里的属性【覆盖】path 指向的 Info.plist,
         # 只写在文件里会被覆盖掉(实测:CI 报 "NSExtension:NSExtensionPointIdentifier Does Not Exist")
         NSExtension:
@@ -47,8 +47,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.luanshijia.voicememo.broadcast
         PRODUCT_NAME: VoiceMemoBroadcast
-        MARKETING_VERSION: "0.9.0"
-        CURRENT_PROJECT_VERSION: "65"
+        MARKETING_VERSION: "0.9.1"
+        CURRENT_PROJECT_VERSION: "66"
         SWIFT_VERSION: "5.0"
         IPHONEOS_DEPLOYMENT_TARGET: "17.0"
         # LiveKit 的动态框架(RTC/UniFFI)由主 App 嵌入;扩展运行时从主 App Frameworks 查找。
@@ -82,8 +82,8 @@ targets:
         CFBundleDisplayName: VoiceMemo
         # 必须写成带引号的字符串:YAML 会把 6 当数字,CFNetwork 拼 User-Agent 时
         # 拿到数字会抛异常直接 abort(实测崩溃栈:initializeUserAgentString)
-        CFBundleShortVersionString: "0.9.0"
-        CFBundleVersion: "65"
+        CFBundleShortVersionString: "0.9.1"
+        CFBundleVersion: "66"
         # 图标:光设 ASSETCATALOG_COMPILER_APPICON_NAME 不够 —— 本工程 Info.plist 是手写的
         # (GENERATE_INFOPLIST_FILE: NO),必须显式给 CFBundleIconName,否则主屏还是空白
         CFBundleIconName: AppIcon
@@ -99,8 +99,8 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.luanshijia.voicememo
         PRODUCT_NAME: VoiceMemo
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-        MARKETING_VERSION: "0.9.0"
-        CURRENT_PROJECT_VERSION: "65"
+        MARKETING_VERSION: "0.9.1"
+        CURRENT_PROJECT_VERSION: "66"
         SWIFT_VERSION: "5.0"
         # 显式锁定:接 SwiftPM 依赖后产物 Info.plist 的 MinimumOSVersion 曾变成 13.0(依赖的声明下限),
         # 而代码用了 iOS 17 的 API —— 写死避免漂移。
