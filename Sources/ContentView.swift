@@ -17,8 +17,6 @@ struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
 
     // 顶部按钮状态
-    @State private var broadcastAlive = false        // 扩展写过「=== 扩展启动」且没写「结束」
-    @State private var broadcastPhase: BroadcastProbe.Phase = .stopped
     @State private var followsLatestFinal = true
     /// 合并后的定稿行。以前是 computed property:status 每秒变两次 → 每 0.5 秒把整场字幕重合并一遍
     /// (两小时会议几千行,单人长文 O(n²) 拼接)。改成只在定稿条数变化时重算。
@@ -46,8 +44,8 @@ struct ContentView: View {
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
                 Task {
-                    await refreshExt()
-                    if !broadcastAlive { _ = model.prepareBroadcast() }
+                    await model.refreshExt()
+                    if !model.broadcastAlive { _ = model.prepareBroadcast() }
                     await model.refreshNet()
                 }
             }
@@ -121,7 +119,7 @@ struct ContentView: View {
     }
 
     private var extStatusColor: Color {
-        switch broadcastPhase {
+        switch model.broadcastPhase {
         case .stopped: return .secondary
         case .waiting: return .blue
         case .receiving: return .red
@@ -130,7 +128,7 @@ struct ContentView: View {
     }
 
     private var extStatusDescription: String {
-        switch broadcastPhase {
+        switch model.broadcastPhase {
         case .stopped: return "直播未启动"
         case .waiting: return "直播已启动,正在连接或等待系统声音"
         case .receiving: return "正在接收并发送系统声音"
@@ -453,24 +451,18 @@ struct ContentView: View {
 
     // MARK: - 刷新
 
-    private func refreshExt() async {
-        let status = await BroadcastProbe.status()
-        broadcastAlive = status.isActive
-        broadcastPhase = status.phase
-    }
-
     private func refreshLoop() async {
-        await refreshExt()
-        if !broadcastAlive { _ = model.prepareBroadcast() }
+        await model.refreshExt()
+        if !model.broadcastAlive { _ = model.prepareBroadcast() }
         await model.refreshNet()
         model.refreshMicMode()
         var tick = 0
         while !Task.isCancelled {
             try? await Task.sleep(nanoseconds: 3_000_000_000)   // 每 3 秒看一次扩展状态 + 麦克风模式
-            await refreshExt()
+            await model.refreshExt()
             // 扩展到点就把 token 文件读走并删掉:一发现"没在播"必须立刻补写。
             // 以前只在 tick % 100(300 秒)补,于是"按停→从系统选择器重开"这段窗口里必哑(配置缺失)。
-            if !broadcastAlive { _ = model.prepareBroadcast() }
+            if !model.broadcastAlive { _ = model.prepareBroadcast() }
             if tick % 100 == 0 { _ = model.prepareBroadcast() }  // 长直播:保持随时有一份未过期的 token
             model.refreshMicMode()
             tick += 1

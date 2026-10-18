@@ -28,6 +28,17 @@ enum BroadcastProbe {
         return nil
     }
 
+    /// 扩展是否真的嵌在包里(能力项 `Cap.Extension` 的采集入口)。
+    /// 只查包内 `PlugIns/` 有没有 `.appex` —— 这与"App Group 可用"不是同一件事:
+    /// 组能用只说明容器通了,不代表扩展被签进包里(2026-10-18 调研发现的缺口)。
+    static var isExtensionEmbedded: Bool {
+        guard let dir = Bundle.main.builtInPlugInsURL,
+              let items = try? FileManager.default.contentsOfDirectory(at: dir,
+                                                                      includingPropertiesForKeys: nil)
+        else { return false }
+        return items.contains { $0.pathExtension == "appex" }
+    }
+
     static func groupStatus() -> String {
         guard containerURL() != nil else {
             return "不可用(试过 \(groupCandidates.count) 个候选名,都没命中)"
@@ -72,7 +83,9 @@ enum BroadcastProbe {
     /// 不做"N 秒没写入就算停"的猜测 —— 静音期间扩展会按设计断开那条传输连接但仍在直播,
     /// 超时猜测会把静音时段误判成已停止(实测踩过,别再改回去)。
     enum Phase { case stopped, waiting, receiving, error }
-    struct Status { let phase: Phase; let isActive: Bool; let appFrames: Int }
+    struct Status { let phase: Phase; let isActive: Bool; let appFrames: Int
+                    /// 这一轮判定为 error 时的原因码(只发码,句子在显示层)。
+                    let reason: LinkReason? }
 
     /// audioApp 计数的增量基线。整场累计值涨不动,才说明那一路真的停了 ——
     /// 用累计值判活(旧写法)会把"中途死掉的系统声轨"一直显示成在收。
@@ -94,18 +107,18 @@ enum BroadcastProbe {
     /// 必须看到 LiveKit 已连接且本轮 audioApp 帧数大于零，才报告“正在收声”。
     static func status() async -> Status {
         guard let url = containerURL()?.appendingPathComponent(fileName) else {
-            return Status(phase: .stopped, isActive: false, appFrames: 0)
+            return Status(phase: .stopped, isActive: false, appFrames: 0, reason: nil)
         }
         // 读+解析最多 512KB,而调用方每 3 秒一轮、且跑在主线程:放后台做(2026-10-18 审计)。
         let lines = await Task.detached(priority: .utility) {
             Self.tailText(url: url, bytes: 512_000).split(separator: "\n").map(String.init)
         }.value
         guard let start = lines.lastIndex(where: { $0.contains("=== 扩展启动") }) else {
-            return Status(phase: .stopped, isActive: false, appFrames: 0)
+            return Status(phase: .stopped, isActive: false, appFrames: 0, reason: nil)
         }
         let current = lines[start...]
         guard !current.contains(where: { $0.contains("=== 扩展结束") }) else {
-            return Status(phase: .stopped, isActive: false, appFrames: 0)
+            return Status(phase: .stopped, isActive: false, appFrames: 0, reason: nil)
         }
         let failed = current.contains { line in
             ["连接或发布失败", "配置缺失或无效", "身份不符合", "无法建立", "不支持 ReplayKit", "复制 ReplayKit PCM 失败", "ReplayKit PCM 转换失败", "LiveKit 连接断开"]
@@ -140,11 +153,20 @@ enum BroadcastProbe {
         let stalled = connected && frames > 0 && !paused && !audioFresh
             && heartbeatAge < 10
             && Date().timeIntervalSince(Self.lastAppFramesAt) > 40
+        var reason: LinkReason? = nil
+        if failed {
+            // 细分两种最常见、但处置完全不同的失败:配置没准备好 vs 连接/握手坏了
+            reason = current.contains { $0.contains("配置缺失或无效") } ? .configMissing : .bridgeFailed
+        } else if stale {
+            reason = .heartbeatStale
+        } else if stalled {
+            reason = .noAudioFrames
+        }
         let phase: Phase = failed || stale || stalled ? .error
             : (connected && sentAudio && frames > 0 && !paused ? .receiving : .waiting)
         // isActive 必须由 phase 推导:stale/failed 时主 App 要重新补写广播 token,并把按钮显示成未开播。
         // 以前恒为 true,日志里残留一条"扩展启动"就会让主 App 永远不再补写 token,下一次开播直接"配置缺失"。
-        return Status(phase: phase, isActive: phase != .error, appFrames: frames)
+        return Status(phase: phase, isActive: phase != .error, appFrames: frames, reason: reason)
     }
 
     /// 整份探针日志(设置页「复制排错信息」用),带上限免得把大文件全读进内存

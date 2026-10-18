@@ -40,6 +40,10 @@ final class SessionModel: ObservableObject {
     // ---- 状态面板(规范见 notes/规范-状态显示.md;站 1 = App Group / 链路探测 / LiveKit)----
     /// 「网络」那一项的事实:nil = 还没探过(未知)。显示层只读它。
     @Published var netOK: Bool? = nil
+    /// 系统直播那一路的事实:扩展写过「=== 扩展启动」且没写「结束」。
+    @Published var broadcastAlive = false
+    /// 扩展日志解析出来的四态(判据与阈值都在 `BroadcastProbe` 里)。
+    @Published var broadcastPhase: BroadcastProbe.Phase = .stopped
     /// 五列面板。**唯一写入点 = `syncBoard()` 与 `refreshNet()`**。
     @Published var board = StatusBoard()
     /// 这一代被动结束的原因码(主动停 = nil)。只由 VoiceRoom 的 onEndReason 写入。
@@ -74,8 +78,22 @@ final class SessionModel: ObservableObject {
     /// 官方口径:iOS 会按 App 记住用户选过的模式(Apple 支持文档 101993)→ 用户选一次宽谱
     /// 就等于给它定了默认;App 只能读、只能请系统弹面板,不能替用户选。
     func refreshMicMode() {
-        guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else {
-            micModeText = "未授权"; micIsWide = false; return
+        let generation = connectionGeneration
+        let allowed = (AVCaptureDevice.authorizationStatus(for: .audio) == .authorized)
+        board.micPermission = Status(desired: LinkDesired.wanted,
+                                     observed: allowed ? CapObserved.yes : CapObserved.no,
+                                     reason: allowed ? nil : CapReason.permissionDenied,
+                                     lastSeen: Date(), generation: generation)
+        shadow("Cap.MicPermission", fresh: board.micPermissionCondition(),
+               legacy: allowed ? .ok : .failed, detail: allowed ? "已授权" : "未授权")
+
+        guard allowed else {
+            micModeText = "未授权"; micIsWide = false
+            board.micMode = Status(desired: LinkDesired.wanted, observed: MicModeObserved.unknownState,
+                                   reason: nil, lastSeen: Date(), generation: generation)
+            shadow("Cap.MicMode", fresh: board.micModeCondition(),
+                   legacy: .unknown, detail: "未授权,读不到模式")
+            return
         }
         let m = AVCaptureDevice.preferredMicrophoneMode
         micIsWide = (m == .wideSpectrum)
@@ -85,6 +103,10 @@ final class SessionModel: ObservableObject {
         case .wideSpectrum:   micModeText = "宽谱"
         default:              micModeText = "自动"
         }
+        board.micMode = Status(desired: LinkDesired.wanted,
+                               observed: micIsWide ? MicModeObserved.wide : MicModeObserved.other,
+                               reason: nil, lastSeen: Date(), generation: generation)
+        shadow("Cap.MicMode", fresh: board.micModeCondition(), legacy: .ok, detail: micModeText)
     }
 
     /// 「宽谱」按钮:请系统把麦克风模式选择面板弹出来(选还是用户自己选)。
@@ -367,6 +389,42 @@ final class SessionModel: ObservableObject {
         shadowProbe()
     }
 
+    /// 系统直播那一路的采集入口:读一次扩展日志,写事实(`broadcastAlive` / `broadcastPhase`)
+    /// 与面板(`replaykit` / `extensionEmbedded`)。
+    /// `desired` 取自扩展日志里的「=== 扩展启动 / 结束」标记 —— 那是**用户动作的记录**,
+    /// 不是从失败结果倒推;所以这里既不猜也不越权。
+    func refreshExt() async {
+        let status = await BroadcastProbe.status()
+        broadcastAlive = status.isActive
+        broadcastPhase = status.phase
+
+        let generation = connectionGeneration
+        let observed: LinkObserved
+        switch status.phase {
+        case .stopped:   observed = .notStarted
+        case .waiting:   observed = .connecting
+        case .receiving: observed = .connected
+        case .error:     observed = .disconnected
+        }
+        // 没启动过 = 期望"不要"(condition 判 ok);启动了就别用 isActive 当期望,
+        // 否则 error 态会被算成"用户没要求" → 误判为正常。
+        let desired: LinkDesired = (status.phase == .stopped) ? .notWanted : .wanted
+        board.replaykit = Status(desired: desired, observed: observed, reason: status.reason,
+                                 lastSeen: Date(), generation: generation)
+
+        let embedded = BroadcastProbe.isExtensionEmbedded
+        board.extensionEmbedded = Status(desired: LinkDesired.wanted,
+                                         observed: embedded ? CapObserved.yes : CapObserved.no,
+                                         reason: embedded ? nil : CapReason.extensionMissing,
+                                         lastSeen: Date(), generation: generation)
+
+        shadow("Link.ReplayKit", fresh: board.replaykitCondition(currentGeneration: generation),
+               legacy: legacyReplayKitCondition(status),
+               detail: "phase=\(status.phase) 码=\(status.reason?.code ?? "-")")
+        shadow("Cap.Extension", fresh: board.extensionCondition(),
+               legacy: embedded ? .ok : .failed, detail: embedded ? "包内有 appex" : "包内无 appex")
+    }
+
     private func shadowProbe() {
         let legacy: Condition = netOK == nil ? .unknown : ((netOK == true) ? .ok : .failed)
         shadow("Link.Probe",
@@ -384,7 +442,17 @@ final class SessionModel: ObservableObject {
         note("[影子] \(item) \(mark) 新=\(fresh.debugName) 旧=\(legacy.debugName) · \(detail())")
     }
 
-    /// 旧口径的判据 —— 只为对照保留。它读文案,正是这次要消灭的做法。
+    /// 旧口径的 ReplayKit 判据 —— 只为对照:灰(没开播)=ok、蓝(等声)=unknown、红(在收)=ok、橙(错)=failed。
+    private func legacyReplayKitCondition(_ status: BroadcastProbe.Status) -> Condition {
+        switch status.phase {
+        case .stopped:   return .ok
+        case .waiting:   return .unknown
+        case .receiving: return .ok
+        case .error:     return .failed
+        }
+    }
+
+    /// 旧口径的 LiveKit 判据 —— 只为对照保留。它读文案,正是这次要消灭的做法。
     private func legacyLiveKitCondition() -> Condition {
         if !isRecording { return .ok }
         if status.contains("已连上") || status.contains("连接状态:已连接") { return .ok }

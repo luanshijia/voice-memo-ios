@@ -17,6 +17,9 @@ enum LinkObserved: Equatable { case notStarted, connecting, connected, reconnect
 /// 能力实况:具备 / 不具备 / 不知道。
 enum CapObserved: Equatable { case yes, no, unknownState }
 
+/// 麦克风模式实况(值域独立:它不是"有没有",而是"哪一种")。
+enum MicModeObserved: Equatable { case wide, other, unknownState }
+
 // MARK: - 原因码(只发码,句子在显示层)
 
 enum LinkReason: String, StatusReason {
@@ -52,6 +55,16 @@ struct StatusBoard {
         desired: .wanted, observed: .notStarted)
     var livekit = Status<LinkDesired, LinkObserved, LinkReason>(
         desired: .notWanted, observed: .notStarted)
+
+    // ---- 站 2:系统直播那一路 + 两项能力 + 扩展是否在包里 ----
+    var replaykit = Status<LinkDesired, LinkObserved, LinkReason>(
+        desired: .notWanted, observed: .notStarted)
+    var micPermission = Status<LinkDesired, CapObserved, CapReason>(
+        desired: .wanted, observed: .unknownState)
+    var micMode = Status<LinkDesired, MicModeObserved, CapReason>(
+        desired: .wanted, observed: .unknownState)
+    var extensionEmbedded = Status<LinkDesired, CapObserved, CapReason>(
+        desired: .wanted, observed: .unknownState)
 }
 
 // MARK: - 派生(纯函数:同一份事实,永远算出同一个结论)
@@ -114,6 +127,36 @@ extension StatusBoard {
 
     func appGroupCondition() -> Condition {
         Self.capabilityCondition(appGroup.observed)
+    }
+
+    // MARK: 站 2 的派生
+
+    /// 项定义表 `Link.ReplayKit`:心跳 30 秒没动 = 观测不到;系统声 40 秒不涨 = 系统声那一路死了。
+    /// 判定本身在 `BroadcastProbe`(它读日志);这里只声明"多久算过期",供派生与显示层共用。
+    static let replaykitStaleAfter: TimeInterval = 30
+    static let replaykitStallAfter: TimeInterval = 40
+
+    func replaykitCondition(currentGeneration: Int, now: Date = Date()) -> Condition {
+        Self.linkCondition(desired: replaykit.desired, observed: replaykit.observed, reason: replaykit.reason,
+                           lastSeen: replaykit.lastSeen, generation: replaykit.generation,
+                           currentGeneration: currentGeneration,
+                           staleAfter: Self.replaykitStaleAfter, now: now)
+    }
+
+    func micPermissionCondition() -> Condition {
+        Self.capabilityCondition(micPermission.observed)
+    }
+
+    /// 模式不是健康项:宽谱与其它都算"可用",只有"观测不到"才是 unknown。
+    func micModeCondition() -> Condition {
+        switch micMode.observed {
+        case .wide, .other: return .ok
+        case .unknownState: return .unknown
+        }
+    }
+
+    func extensionCondition() -> Condition {
+        Self.capabilityCondition(extensionEmbedded.observed)
     }
 }
 
