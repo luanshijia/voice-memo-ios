@@ -49,8 +49,6 @@ final class SessionModel: ObservableObject {
     @Published var netOK: Bool? = nil
     /// 系统直播那一路的事实:扩展写过「=== 扩展启动」且没写「结束」。
     @Published var broadcastAlive = false
-    /// 扩展日志解析出来的四态(判据与阈值都在 `BroadcastProbe` 里)。
-    @Published var broadcastPhase: BroadcastProbe.Phase = .stopped
     /// 五列面板。**唯一写入点 = `syncBoard()` 与 `refreshNet()`**。
     @Published var board = StatusBoard()
     /// 这一代被动结束的原因码(主动停 = nil)。只由 VoiceRoom 的 onEndReason 写入。
@@ -473,14 +471,13 @@ final class SessionModel: ObservableObject {
         shadowProbe()
     }
 
-    /// 系统直播那一路的采集入口:读一次扩展日志,写事实(`broadcastAlive` / `broadcastPhase`)
+    /// 系统直播那一路的采集入口:读一次扩展日志,写事实(`broadcastAlive`)
     /// 与面板(`replaykit` / `extensionEmbedded`)。
     /// `desired` 取自扩展日志里的「=== 扩展启动 / 结束」标记 —— 那是**用户动作的记录**,
     /// 不是从失败结果倒推;所以这里既不猜也不越权。
     func refreshExt() async {
         let status = await BroadcastProbe.status()
         broadcastAlive = status.isActive
-        broadcastPhase = status.phase
 
         let generation = connectionGeneration
         let observed: LinkObserved
