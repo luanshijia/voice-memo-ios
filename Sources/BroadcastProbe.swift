@@ -68,20 +68,9 @@ enum BroadcastProbe {
         try? FileManager.default.removeItem(at: url)
     }
 
-    /// 直播是否在进行:**只认扩展显式写的标记行**
-    /// (启动时 `=== 扩展启动`、收尾时 `=== 扩展结束`),不做任何超时猜测。
-    /// 为什么不要"N 秒没写入就算停":实测停顿期间可能整段时间都没有新行
-    /// (音频静音超过 30 秒后扩展会按设计关掉那条传输连接,此时扩展仍在直播),
-    /// 超时会把正在直播的静音时段误判成已停止 —— 用户实测反馈"没必要",故去掉。
-    static func isBroadcasting() -> Bool {
-        status().isActive
-    }
-
-    /// 扩展最近一次记下的系统声音采样帧数(>0 = ReplayKit 已交付 audioApp)。
-    static func appFramesSeen() -> Int {
-        status().appFrames
-    }
-
+    /// 注意:是否在直播只认扩展显式写的标记行(`=== 扩展启动` / `=== 扩展结束`),
+    /// 不做"N 秒没写入就算停"的猜测 —— 静音期间扩展会按设计断开那条传输连接但仍在直播,
+    /// 超时猜测会把静音时段误判成已停止(实测踩过,别再改回去)。
     enum Phase { case stopped, waiting, receiving, error }
     struct Status { let phase: Phase; let isActive: Bool; let appFrames: Int }
 
