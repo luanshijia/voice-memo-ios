@@ -105,17 +105,27 @@ struct ContentView: View {
     private var extButton: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 6).fill(extFill)
-            // 系统图标必须藏掉,但 picker 要留在可命中状态:
-            // UIKit 的 hitTest 只跳过 alpha ≤ 0.01 的视图 ⇒ 取 0.02,肉眼不可见、点击照常。
-            // (试过"上面盖同色挡板":picker 被画在 SwiftUI 覆盖层之上,盖不住。)
+            // 复原 build 23 的做法:picker 沉到最底层(1% 透明,只当触发器),
+            // 上面是我们自己的按钮,点击时用 BroadcastPickerTrigger.open() 程序触发系统面板。
+            // 系统图标因此完全不出现,也不用依赖 alpha 阈值能不能命中。
             BroadcastPickerView()
-                .frame(width: 24, height: 24)
-                .opacity(0.02)
-                .accessibilityLabel("开始或停止系统声音直播")
-            Text("录屏")
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(extFg)
-                .allowsHitTesting(false)
+                .frame(width: 44, height: 44)
+                .opacity(0.01)
+                .accessibilityHidden(true)
+            Button {
+                BroadcastPickerTrigger.open()
+            } label: {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 6).fill(extFill)
+                    Text("录屏")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(extFg)
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: 24)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("开始或停止系统声音直播")
         }
         .frame(maxWidth: .infinity)
         .frame(height: 24)
