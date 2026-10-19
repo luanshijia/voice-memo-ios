@@ -191,8 +191,13 @@ extension VoiceRoom: RoomDelegate {
 
     private static func present(_ obj: [String: Any], _ k: String) -> Bool { obj.keys.contains(k) }
 
+    /// `sumstatus.mode` 的合法取值(契约 §3.4)。
+    private static let sumModes: Set<String> = ["auto", "manual"]
+
     /// 按 type 校验必填字段与类型(契约 §3.1–§3.4)。返回诊断码,nil = 合规。
-    /// 码:missing_field:<name>(缺字段)/ invalid_field:<name>(类型不对);仅本地诊断,不上网线。
+    /// 码:missing_field:<name>(缺字段)/ invalid_field:<name>(类型或范围不对);仅本地诊断,不上网线。
+    /// 注意:这里刻意写成"数组 + 顺序取第一个错误",不用 `??` 长链 ——
+    /// 长链会让 Swift 类型检查器超时(CI 实测 `unable to type-check this expression in reasonable time`)。
     static func fieldProblem(type: String, obj: [String: Any]) -> String? {
         func missing(_ k: String) -> String? { obj[k] == nil ? "missing_field:\(k)" : nil }
         func str(_ k: String) -> String? {
@@ -208,13 +213,12 @@ extension VoiceRoom: RoomDelegate {
             if let m = missing(k) { return m }
             return strictInteger(obj[k]) != nil ? nil : "invalid_field:\(k)"
         }
+        func isNull(_ k: String) -> Bool { if let v = obj[k] { return v is NSNull }; return false }
         func numOrNull(_ k: String) -> String? {
             if let m = missing(k) { return m }
-            if let v = obj[k], v is NSNull { return nil }
+            if isNull(k) { return nil }
             return number(obj[k]) != nil ? nil : "invalid_field:\(k)"
         }
-        // 非负 / 正数:与 contracts.py 的 `value[...] < 0` 检查一一对应
-        func isNull(_ k: String) -> Bool { if let v = obj[k] { return v is NSNull }; return false }
         func nonNeg(_ k: String) -> String? {
             if let m = missing(k) { return m }
             guard let d = number(obj[k]) else { return "invalid_field:\(k)" }
@@ -243,25 +247,31 @@ extension VoiceRoom: RoomDelegate {
                   h <= 23, m <= 59 else { return "invalid_field:\(k)" }
             return nil
         }
+        func first(_ checks: [String?]) -> String? {
+            for c in checks { if let c { return c } }
+            return nil
+        }
+
         switch type {
         case "partial":
-            return str("who") ?? str("source") ?? str("text") ?? num("audio_s") ?? num("ts")
-                ?? nonNeg("audio_s") ?? positive("ts")
+            return first([str("who"), str("source"), str("text"),
+                          num("audio_s"), nonNeg("audio_s"), num("ts"), positive("ts")])
         case "final":
-            return str("who") ?? str("source") ?? str("text") ?? num("audio_s")
-                ?? numOrNull("gap_s") ?? num("ts")
-                ?? nonNeg("audio_s") ?? positive("ts")
-                ?? (isNull("gap_s") ? nil : nonNeg("gap_s"))
+            return first([str("who"), str("source"), str("text"),
+                          num("audio_s"), nonNeg("audio_s"),
+                          numOrNull("gap_s"), isNull("gap_s") ? nil : nonNeg("gap_s"),
+                          num("ts"), positive("ts")])
         case "summary":
-            // 注意:刻意不校验 code —— 电脑端在 build_message 里做白名单,
-            // 注释写明是为了让 App 收包端保持前向兼容。本端遇到新码按未知处理、照常显示。
-            return str("text") ?? str("clock") ?? num("ts") ?? int("unsupported")
-                ?? clockHM("clock") ?? nonNeg("unsupported") ?? positive("ts")
+            // 刻意不校验 code —— 电脑端 build_message 做 9 码白名单,注释写明是为了让 App 收包端前向兼容。
+            return first([str("text"), str("clock"), clockHM("clock"),
+                          num("ts"), positive("ts"),
+                          int("unsupported"), nonNeg("unsupported")])
         case "sumstatus":
-            return str("mode") ?? str("code") ?? str("text") ?? int("chars")
-                ?? numOrNull("next_in") ?? num("ts")
-                ?? oneOf("mode", ["auto", "manual"]) ?? nonNeg("chars") ?? positive("ts")
-                ?? (isNull("next_in") ? nil : nonNeg("next_in"))
+            return first([str("mode"), oneOf("mode", VoiceRoom.sumModes),
+                          str("code"), str("text"),
+                          int("chars"), nonNeg("chars"),
+                          numOrNull("next_in"), isNull("next_in") ? nil : nonNeg("next_in"),
+                          num("ts"), positive("ts")])
         default:
             return nil       // 未知 type 交给上层(记未知类型),这里不重复判
         }
