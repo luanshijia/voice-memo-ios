@@ -208,8 +208,7 @@ final class SessionModel: ObservableObject {
             guard let self else { return }
             // 契约 §三.5 / §五:v2 必须按场次过滤 —— 本机没有当前场次,或场次不符,一律丢弃。
             let incomingSession = (raw["session_id"] as? String) ?? ""
-            let incomingVersion = (raw["schema_version"] as? Int)
-                ?? (raw["schema_version"] as? NSNumber)?.intValue ?? 0
+            let incomingVersion = VoiceRoom.strictInteger(raw["schema_version"]) ?? 0
             let dropBySession = incomingVersion >= 2
                 ? (self.sessionID.isEmpty || incomingSession != self.sessionID)
                 : (!incomingSession.isEmpty && !self.sessionID.isEmpty && incomingSession != self.sessionID)

@@ -1,4 +1,5 @@
 import Foundation
+import CoreFoundation
 import LiveKit
 
 /// LiveKit 房间的薄封装:连/断、开关麦克风、把收到的文字回调出去。
@@ -108,12 +109,8 @@ extension VoiceRoom: RoomDelegate {
                 self.onProtocolIssue?("missing_schema_version")
                 return
             }
-            let version: Int
-            if let n = rawVersion as? Int {
-                version = n
-            } else if let n = rawVersion as? NSNumber {
-                version = n.intValue
-            } else {
+            // NSNumber.intValue 会把 2.5 截成 2、把 true 读成 1 ⇒ 必须显式判"整数字面值"。
+            guard let version = VoiceRoom.strictInteger(rawVersion) else {
                 self.onProtocolIssue?("invalid_schema_version")
                 return
             }
@@ -125,6 +122,12 @@ extension VoiceRoom: RoomDelegate {
                 self.onProtocolIssue?("missing_type")
                 return
             }
+            // 契约 §三:收包端必须按 type 校验全部必填字段与类型 ——
+            // 缺字段/类型不对就记诊断并丢弃,不能默认成 ""/?/0/nil 继续往下处理。
+            if let bad = VoiceRoom.fieldProblem(type: type, obj: obj) {
+                self.onProtocolIssue?(bad)
+                return
+            }
             // v2:session_id 必填(是否属于本场由上层比对,这里只查存在性)
             if version == 2 {
                 guard let sid = obj["session_id"] as? String, !sid.isEmpty else {
@@ -132,12 +135,12 @@ extension VoiceRoom: RoomDelegate {
                     return
                 }
             }
-            // text 缺省视为空串:控制类消息(新协议字段)不带 text 时,整条丢掉等于状态永远不更新
+            // 走到这里字段已按契约校验过,不再用默认值兜底(以前的 ?? "" / ?? "?" / ?? 0 会掩盖协议错误)。
             let text = (obj["text"] as? String) ?? ""
-            let who = (obj["who"] as? String) ?? "?"
-            let audioS = (obj["audio_s"] as? Double) ?? 0
-            let gap = obj["gap_s"] as? Double          // JSON null / 老服务端缺字段 → nil
-            let ts = (obj["ts"] as? Double) ?? 0
+            let who = (obj["who"] as? String) ?? ""
+            let audioS = VoiceRoom.number(obj["audio_s"]) ?? 0
+            let gap = VoiceRoom.number(obj["gap_s"])           // 契约:显式 null 或数字
+            let ts = VoiceRoom.number(obj["ts"]) ?? 0
             self.onTranscript?(type, who, audioS, text, gap, ts, obj)
         }
     }
@@ -160,6 +163,61 @@ extension VoiceRoom: RoomDelegate {
             }
             self.onEndReason?(.disconnected)
             self.onEnded?(error.map { "连接断开:" + $0.description } ?? "连接已断开")
+        }
+    }
+
+    // MARK: - 契约字段校验(§ 三)
+
+    /// JSON 数字:排除 Bool(JSONSerialization 把 true/false 也包成 NSNumber)。
+    static func number(_ v: Any?) -> Double? {
+        guard let n = v as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID() else { return nil }
+        let d = n.doubleValue
+        return d.isFinite ? d : nil
+    }
+
+    /// 严格整数:schema_version 只认整数字面值 —— 2.5 不能被 intValue 截成 2,true 不能读成 1。
+    static func strictInteger(_ v: Any?) -> Int? {
+        guard let d = number(v), d == d.rounded(), abs(d) < 1_000_000 else { return nil }
+        return Int(d)
+    }
+
+    private static func present(_ obj: [String: Any], _ k: String) -> Bool { obj.keys.contains(k) }
+
+    /// 按 type 校验必填字段与类型(契约 §3.1–§3.4)。返回诊断码,nil = 合规。
+    /// 码:missing_field:<name>(缺字段)/ invalid_field:<name>(类型不对);仅本地诊断,不上网线。
+    static func fieldProblem(type: String, obj: [String: Any]) -> String? {
+        func missing(_ k: String) -> String? { obj[k] == nil ? "missing_field:\(k)" : nil }
+        func str(_ k: String) -> String? {
+            if let m = missing(k) { return m }
+            guard let v = obj[k] else { return nil }
+            return v is String ? nil : "invalid_field:\(k)"
+        }
+        func num(_ k: String) -> String? {
+            if let m = missing(k) { return m }
+            return number(obj[k]) != nil ? nil : "invalid_field:\(k)"
+        }
+        func int(_ k: String) -> String? {
+            if let m = missing(k) { return m }
+            return strictInteger(obj[k]) != nil ? nil : "invalid_field:\(k)"
+        }
+        func numOrNull(_ k: String) -> String? {
+            if let m = missing(k) { return m }
+            if let v = obj[k], v is NSNull { return nil }
+            return number(obj[k]) != nil ? nil : "invalid_field:\(k)"
+        }
+        switch type {
+        case "partial":
+            return str("who") ?? str("source") ?? str("text") ?? num("audio_s") ?? num("ts")
+        case "final":
+            return str("who") ?? str("source") ?? str("text") ?? num("audio_s")
+                ?? numOrNull("gap_s") ?? num("ts")
+        case "summary":
+            return str("text") ?? str("clock") ?? num("ts") ?? int("unsupported")
+        case "sumstatus":
+            return str("mode") ?? str("code") ?? str("text") ?? int("chars")
+                ?? numOrNull("next_in") ?? num("ts")
+        default:
+            return nil       // 未知 type 交给上层(记未知类型),这里不重复判
         }
     }
 
