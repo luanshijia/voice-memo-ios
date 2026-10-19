@@ -103,27 +103,26 @@ struct ContentView: View {
     /// 底栏 `RepK` 已有唯一显示位(用户口径 2026-10-19:一个事实一个显示位)。
     /// 也不再需要 offset 硬挪:选择器在 24 高的块里居中即可。
     private var extButton: some View {
-        Button {
-            BroadcastPickerTrigger.open()
-        } label: {
-            ZStack {
-                RoundedRectangle(cornerRadius: 6).fill(extFill)
-                Text("录屏")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(extFg)
-            }
-            .frame(maxWidth: .infinity)
-            .frame(height: 24)
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("开始或停止系统声音直播")
-        // picker 只负责提供 ReplayKit 的系统触发器，不参与布局；否则它的 44×44
-        // 尺寸会把灰色背景撑出 24pt 按钮，形成截图里上下多出来的浅灰面板。
-        .background {
+        ZStack {
+            // 按历史 build 23 的结构：系统 picker 放底层，仅作程序触发器。
             BroadcastPickerView()
                 .frame(width: 44, height: 44)
-                .opacity(0)
+                .opacity(0.01)
                 .accessibilityHidden(true)
+            Button {
+                BroadcastPickerTrigger.open()
+            } label: {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 6).fill(extFill)
+                    Text("录屏")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(extFg)
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: 24)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("开始或停止系统声音直播")
         }
         .frame(maxWidth: .infinity)
         .frame(height: 24)
