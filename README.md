@@ -6,8 +6,9 @@ VoiceMemo iOS 是会议录音客户端。主 App 采集麦克风音频；用户�
 
 ## 当前代码基线
 
-- 2026-10-19 源码 tag：`v0.9.16`，build `81`。
-- 主界面：五个顶部控制按钮、第一遍/定稿字幕、会中提要面板（自动/手动档位、状态和要点）及底部状态栏。
+- build 83 功能源码提交：`77257e6`，版本 `0.9.16 / build 83`；本轮之后只修订了文档和注释。tag `v0.9.16` 仍指向较早的 `9f10d06 / build 81`，不能代表 build 83。
+- build 83 IPA：`C:\Users\luans\Desktop\VoiceMemo-v0.9.16-build83-ReplayPicker.ipa`；SHA-256：`675C2F6E96A425DBDB0511610572A33E82C0328A33B5556BCDB312438AF6C6B4`。CI 已完成；用户决定本轮不做真机验收。
+- 当前主界面：五个顶部控制按钮、第一遍/定稿字幕、会中提要面板（档位、状态和要点）及底部状态栏。
 - 收包端按消息类型校验必填字段和类型；schema 整数采用跨端安全范围，`summary.clock` 只接受 ASCII `HH:mm`。
 - tag 或 CI 编译成功都不能代替真机运行验收。当前包和 CI 状态以 GitHub Actions 实际结果为准。
 

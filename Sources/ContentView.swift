@@ -29,7 +29,7 @@ struct ContentView: View {
         ZStack(alignment: .bottom) {
             VStack(spacing: 6) {
                 buttonRow                   // 顶部五个按钮(状态行搬到屏幕最下方)
-                transcript                  // 提要面板已删 → 字幕铺满整屏
+                transcript // 字幕与会中提要区域
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .padding(.horizontal, 12)
