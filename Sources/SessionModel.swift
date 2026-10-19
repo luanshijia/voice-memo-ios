@@ -214,8 +214,8 @@ final class SessionModel: ObservableObject {
             guard let self else { return }
             // 契约 §三.5 / §五:v2 必须按场次过滤 —— 本机没有当前场次,或场次不符,一律丢弃。
             let incomingSession = (raw["session_id"] as? String) ?? ""
-            let incomingVersion = VoiceRoom.strictInteger(raw["schema_version"]) ?? 0
-            let dropBySession = incomingVersion >= 2
+            let incomingVersion = WireContract.strictInteger(raw["schema_version"]) ?? 0
+            let dropBySession = incomingVersion >= WireContract.sessionIDRequiredFromVersion
                 ? (self.sessionID.isEmpty || incomingSession != self.sessionID)
                 : (!incomingSession.isEmpty && !self.sessionID.isEmpty && incomingSession != self.sessionID)
             if dropBySession {
@@ -549,16 +549,10 @@ final class SessionModel: ObservableObject {
 
     /// 契约 §二:每种消息的“已知字段”。白名单外的字段**只记一条日志、不算协议错误**
     /// —— 允许服务端先加可选字段,不能因此把整块判成“客户端落后”。
-    private static let knownFields: [String: Set<String>] = [
-        "partial": ["type", "schema_version", "session_id", "who", "source", "text", "audio_s", "ts"],
-        "final": ["type", "schema_version", "session_id", "who", "source", "text", "audio_s", "gap_s", "ts"],
-        "summary": ["type", "schema_version", "session_id", "text", "clock", "ts", "unsupported"],
-        "sumstatus": ["type", "schema_version", "session_id", "mode", "code", "text", "chars", "next_in", "ts"],
-    ]
     private var loggedUnknownFields = Set<String>()
 
     private func noteUnknownFields(type: String, raw: [String: Any]) {
-        guard let known = Self.knownFields[type] else { return }
+        guard let known = WireContract.knownFields[type] else { return }
         for key in raw.keys where !known.contains(key) && !key.hasPrefix("_") {
             if loggedUnknownFields.insert("\(type).\(key)").inserted {
                 note("收到未知可选字段 \(type).\(key)(已忽略)")
@@ -623,7 +617,8 @@ final class SessionModel: ObservableObject {
     /// 契约 §三.5:`summode` 必须带 `schema_version` 与当前 `session_id`。
     /// 上行也取 2 —— 与下行一致,这样电脑端会按当前场次比对,上一场残留的切档会被 session_mismatch 挡掉。
     private func summodePayload(_ mode: String) -> [String: Any] {
-        ["type": "summode", "schema_version": 2, "session_id": sessionID, "mode": mode]
+        ["type": "summode", "schema_version": WireContract.currentSchemaVersion,
+         "session_id": sessionID, "mode": mode]
     }
 
     /// 家里给的 epoch 秒 → HH:mm(只给提要标时用)。

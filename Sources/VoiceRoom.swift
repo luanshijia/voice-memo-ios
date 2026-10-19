@@ -38,7 +38,7 @@ final class VoiceRoom: NSObject {
         do {
             // 2.17.0 的 API 是 publish(data:options:);reliable=true 保证这条请求不丢
             try await room.localParticipant.publish(data: data,
-                                                    options: DataPublishOptions(topic: "stt", reliable: true))
+                                                    options: DataPublishOptions(topic: WireContract.topic, reliable: true))
         } catch {
             onNote?("发消息失败:\(error.localizedDescription)")
         }
@@ -96,7 +96,7 @@ extension VoiceRoom: RoomDelegate {
         Task { @MainActor [weak self] in
             guard let self, self.room === room else { return }
             // topic 是契约的一部分:只处理 stt,别的 topic 记一笔结构性问题,不当字幕。
-            guard topic == "stt" else {
+            guard topic == WireContract.topic else {
                 self.onProtocolIssue?("topic:\(topic.isEmpty ? "(空)" : topic)")
                 return
             }
@@ -110,11 +110,11 @@ extension VoiceRoom: RoomDelegate {
                 return
             }
             // NSNumber.intValue 会把 2.5 截成 2、把 true 读成 1 ⇒ 必须显式判"整数字面值"。
-            guard let version = VoiceRoom.strictInteger(rawVersion) else {
+            guard let version = WireContract.strictInteger(rawVersion) else {
                 self.onProtocolIssue?("invalid_schema_version")
                 return
             }
-            guard version == 1 || version == 2 else {
+            guard WireContract.supportedSchemaVersions.contains(version) else {
                 self.onProtocolIssue?("version:\(version)")
                 return
             }
@@ -122,15 +122,19 @@ extension VoiceRoom: RoomDelegate {
                 self.onProtocolIssue?("missing_type")
                 return
             }
+            guard WireContract.inboundTypes.contains(type) else {
+                self.onProtocolIssue?("unknown_type:\(type)")
+                return
+            }
             // 契约 §三:收包端必须按 type 校验全部必填字段与类型 ——
             // 缺字段/类型不对就记诊断并丢弃,不能默认成 ""/?/0/nil 继续往下处理。
-            if let bad = VoiceRoom.fieldProblem(type: type, obj: obj) {
+            if let bad = WireContract.fieldProblem(type: type, object: obj) {
                 self.onProtocolIssue?(bad)
                 return
             }
             // v2:session_id 必填(是否属于本场由上层比对,这里只查存在性)
-            if version == 2 {
-                guard let sid = obj["session_id"] as? String, !sid.isEmpty else {
+            if version >= WireContract.sessionIDRequiredFromVersion {
+                guard let sid = obj["session_id"] as? String, WireContract.isValidSessionID(sid) else {
                     self.onProtocolIssue?("missing_session_id")
                     return
                 }
@@ -173,107 +177,6 @@ extension VoiceRoom: RoomDelegate {
         guard let n = v as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID() else { return nil }
         let d = n.doubleValue
         return d.isFinite ? d : nil
-    }
-
-    /// 严格整数:schema_version 只认整数字面值。
-    /// 与电脑端 `contracts.py` 的 `type(v) is not int` 对齐:2.5 不能被 intValue 截成 2、
-    /// 2.0 虽然数学上是整数但字面值是浮点,同样不算 integer、true 不能读成 1。
-    static func strictInteger(_ v: Any?) -> Int? {
-        guard let n = v as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID() else { return nil }
-        let t = String(cString: n.objCType)
-        guard t != "d", t != "f" else { return nil }        // JSON 里的 2.0 / 2.5 落成 double
-        // 直接按十进制字符串解析,不经过 Double,避免大整数先舍入再误通过边界检查。
-        guard let i = Int64(n.stringValue), i >= -9_007_199_254_740_991,
-              i <= 9_007_199_254_740_991 else { return nil }
-        return Int(i)
-    }
-
-    private static func present(_ obj: [String: Any], _ k: String) -> Bool { obj.keys.contains(k) }
-
-    /// `sumstatus.mode` 的合法取值(契约 §3.4)。
-    private static let sumModes: Set<String> = ["auto", "manual"]
-
-    /// 按 type 校验必填字段与类型(契约 §3.1–§3.4)。返回诊断码,nil = 合规。
-    /// 码:missing_field:<name>(缺字段)/ invalid_field:<name>(类型或范围不对);仅本地诊断,不上网线。
-    /// 注意:这里刻意写成"数组 + 顺序取第一个错误",不用 `??` 长链 ——
-    /// 长链会让 Swift 类型检查器超时(CI 实测 `unable to type-check this expression in reasonable time`)。
-    static func fieldProblem(type: String, obj: [String: Any]) -> String? {
-        func missing(_ k: String) -> String? { obj[k] == nil ? "missing_field:\(k)" : nil }
-        func str(_ k: String) -> String? {
-            if let m = missing(k) { return m }
-            guard let v = obj[k] else { return nil }
-            return v is String ? nil : "invalid_field:\(k)"
-        }
-        func num(_ k: String) -> String? {
-            if let m = missing(k) { return m }
-            return number(obj[k]) != nil ? nil : "invalid_field:\(k)"
-        }
-        func int(_ k: String) -> String? {
-            if let m = missing(k) { return m }
-            return strictInteger(obj[k]) != nil ? nil : "invalid_field:\(k)"
-        }
-        func isNull(_ k: String) -> Bool { if let v = obj[k] { return v is NSNull }; return false }
-        func numOrNull(_ k: String) -> String? {
-            if let m = missing(k) { return m }
-            if isNull(k) { return nil }
-            return number(obj[k]) != nil ? nil : "invalid_field:\(k)"
-        }
-        func nonNeg(_ k: String) -> String? {
-            if let m = missing(k) { return m }
-            guard let d = number(obj[k]) else { return "invalid_field:\(k)" }
-            return d >= 0 ? nil : "invalid_field:\(k)"
-        }
-        func positive(_ k: String) -> String? {
-            if let m = missing(k) { return m }
-            guard let d = number(obj[k]) else { return "invalid_field:\(k)" }
-            return d > 0 ? nil : "invalid_field:\(k)"
-        }
-        func oneOf(_ k: String, _ allowed: Set<String>) -> String? {
-            if let m = missing(k) { return m }
-            guard let s = obj[k] as? String else { return "invalid_field:\(k)" }
-            return allowed.contains(s) ? nil : "invalid_field:\(k)"
-        }
-        // HH:mm,且 00–23 : 00–59(契约 §3.3;电脑端 contracts.py 同口径)
-        func clockHM(_ k: String) -> String? {
-            if let m = missing(k) { return m }
-            guard let s = obj[k] as? String else { return "invalid_field:\(k)" }
-            let parts = s.split(separator: ":", omittingEmptySubsequences: false)
-            guard parts.count == 2, parts[0].count == 2, parts[1].count == 2 else { return "invalid_field:\(k)" }
-            // 只认 ASCII 数字:Int("+1") 会是 1;契约与电脑端均使用 [0-9] 拒绝 "+1" / " 1"
-            func asciiDigits(_ t: Substring) -> Bool { t.allSatisfy { $0 >= "0" && $0 <= "9" } }
-            guard asciiDigits(parts[0]), asciiDigits(parts[1]),
-                  let h = Int(parts[0]), let m = Int(parts[1]),
-                  h <= 23, m <= 59 else { return "invalid_field:\(k)" }
-            return nil
-        }
-        func first(_ checks: [String?]) -> String? {
-            for c in checks { if let c { return c } }
-            return nil
-        }
-
-        switch type {
-        case "partial":
-            return first([str("who"), str("source"), str("text"),
-                          num("audio_s"), nonNeg("audio_s"), num("ts"), positive("ts")])
-        case "final":
-            return first([str("who"), str("source"), str("text"),
-                          num("audio_s"), nonNeg("audio_s"),
-                          numOrNull("gap_s"), isNull("gap_s") ? nil : nonNeg("gap_s"),
-                          num("ts"), positive("ts")])
-        case "summary":
-            // 刻意不校验 code —— 电脑端 build_message 做 9 码白名单,注释写明是为了让 App 收包端前向兼容。
-            return first([str("text"), str("clock"), clockHM("clock"),
-                          num("ts"), positive("ts"),
-                          int("unsupported"), nonNeg("unsupported")])
-        case "sumstatus":
-            return first([str("mode"), oneOf("mode", VoiceRoom.sumModes),
-                          str("code"), str("text"),
-                          int("chars"), nonNeg("chars"),
-                          numOrNull("next_in"), isNull("next_in") ? nil : nonNeg("next_in"),
-                          num("ts"), positive("ts")])
-        default:
-            return nil       // 未知 type 交给上层(记未知类型),这里不重复判
-        }
     }
 
     /// 取走"主动断开"标记:只对同一个 Room 实例有效,不留给下一次断开。
