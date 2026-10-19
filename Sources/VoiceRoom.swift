@@ -182,11 +182,10 @@ extension VoiceRoom: RoomDelegate {
         guard let n = v as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID() else { return nil }
         let t = String(cString: n.objCType)
         guard t != "d", t != "f" else { return nil }        // JSON 里的 2.0 / 2.5 落成 double
-        let d = n.doubleValue
-        // 只挡 NaN/Inf 和 double 已无法精确表示整数的区间(2^53)——这是表示能力边界,不是人为策略上限;
-        // 电脑端 Python int 无上限,所以这里不设 1e6 之类的人为阈值。
-        guard d.isFinite, d == d.rounded(), abs(d) <= 9_007_199_254_740_992 else { return nil }
-        return Int(d)
+        // 直接按十进制字符串解析,不经过 Double,避免大整数先舍入再误通过边界检查。
+        guard let i = Int64(n.stringValue), i >= -9_007_199_254_740_991,
+              i <= 9_007_199_254_740_991 else { return nil }
+        return Int(i)
     }
 
     private static func present(_ obj: [String: Any], _ k: String) -> Bool { obj.keys.contains(k) }
@@ -240,7 +239,7 @@ extension VoiceRoom: RoomDelegate {
             guard let s = obj[k] as? String else { return "invalid_field:\(k)" }
             let parts = s.split(separator: ":", omittingEmptySubsequences: false)
             guard parts.count == 2, parts[0].count == 2, parts[1].count == 2 else { return "invalid_field:\(k)" }
-            // 只认 ASCII 数字:Int("+1") 会是 1,而契约(和电脑端 \d{2})不接受 "+1" / " 1"
+            // 只认 ASCII 数字:Int("+1") 会是 1;契约与电脑端均使用 [0-9] 拒绝 "+1" / " 1"
             func asciiDigits(_ t: Substring) -> Bool { t.allSatisfy { $0 >= "0" && $0 <= "9" } }
             guard asciiDigits(parts[0]), asciiDigits(parts[1]),
                   let h = Int(parts[0]), let m = Int(parts[1]),
