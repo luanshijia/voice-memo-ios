@@ -105,17 +105,20 @@ struct ContentView: View {
     private var extButton: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 6).fill(extFill)
-            // 系统图标当水印:半透明 + 略上移左移(用户口径 2026-10-19),
-            // 文字「录屏」压在上面;文字必须 allowsHitTesting(false),否则点击被它吃掉、面板弹不出来。
+            // 系统 picker 必须活在可命中状态:os 的 hitTest 会把 alpha≤0.01 的视图整个跳过,
+            // 所以不能用"调到全透明"来隐藏它,否则按钮点了没反应。
+            // 做法:上面盖一块同色挡板 + 文字,两者都 allowsHitTesting(false) ⇒ 视觉上没有图标,
+            // 点击照样穿透到下面的 picker。
             BroadcastPickerView()
                 .frame(width: 24, height: 24)
-                .opacity(0.35)
-                .offset(x: -2, y: -3)
                 .accessibilityLabel("开始或停止系统声音直播")
-            Text("录屏")
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(extFg)
-                .allowsHitTesting(false)
+            ZStack {
+                RoundedRectangle(cornerRadius: 6).fill(extFill)
+                Text("录屏")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(extFg)
+            }
+            .allowsHitTesting(false)
         }
         .frame(maxWidth: .infinity)
         .frame(height: 24)
@@ -192,7 +195,7 @@ struct ContentView: View {
             Text("·").font(.system(size: 10)).foregroundStyle(.secondary)
             inlinePair("句", Double(model.linesByWay.livk), Double(model.linesByWay.repk), digits: 0)
         }
-        .padding(.horizontal, 16)     // 用户口径 2026-10-19:两组略向中间靠拢(屏幕四角是圆角,24 太靠边)
+        .padding(.horizontal, 10)     // 用户口径 2026-10-19:再向内收一档(16→10;屏幕四角是圆角)
         .padding(.top, 3)
         .padding(.bottom, 12)
         .background(
