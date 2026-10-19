@@ -36,17 +36,23 @@ final class SessionModel: ObservableObject {
     @Published private(set) var sessionID = ""
     /// 当前麦克风模式(只读 —— iOS 不给 App 设置接口;界面只用来看「是不是宽谱」)
     @Published var micModeText = "读取中"
-    @Published var micIsWide = false
     @Published var recordedSeconds: Double = 0     // 本地推流时长
     @Published var serverSeconds: Double = 0       // 家里已识别到的音频秒数(agent 回传,按来源分开记)
 
     // ---- 状态面板(规范见 notes/规范-状态显示.md;站 1 = App Group / 链路探测 / LiveKit)----
-    /// 「网络」那一项的事实:nil = 还没探过(未知)。显示层只读它。
-    @Published var netOK: Bool? = nil
     /// 系统直播那一路的事实:扩展写过「=== 扩展启动」且没写「结束」。
     @Published var broadcastAlive = false
     /// 五列面板。**唯一写入点 = `syncBoard()` 与 `refreshNet()`**。
     @Published var board = StatusBoard()
+    /// 兼容现有视图的派生读取口；状态事实只保存在 board，不再维护第二份布尔值。
+    var netOK: Bool? {
+        switch board.probe.observed {
+        case .connected: return true
+        case .disconnected: return false
+        case .notStarted, .connecting, .reconnecting, .unknown: return nil
+        }
+    }
+    var micIsWide: Bool { board.micMode.observed == .wide }
     /// 这一代被动结束的原因码(主动停 = nil)。只由 VoiceRoom 的 onEndReason 写入。
     private var livekEndReason: LinkReason?
     /// 影子对照去重(同一组合只记一次),`start()` 时清空。
@@ -99,13 +105,13 @@ final class SessionModel: ObservableObject {
                                      lastSeen: Date(), generation: generation)
         
         guard allowed else {
-            micModeText = "未授权"; micIsWide = false
+            micModeText = "未授权"
             board.micMode = Status(desired: LinkDesired.wanted, observed: MicModeObserved.unknownState,
                                    reason: nil, lastSeen: Date(), generation: generation)
-                        return
+            return
         }
         let m = AVCaptureDevice.preferredMicrophoneMode
-        micIsWide = (m == .wideSpectrum)
+        let observedMode: MicModeObserved = m == .wideSpectrum ? .wide : .other
         switch m {
         case .standard:       micModeText = "标准"
         case .voiceIsolation: micModeText = "语音突显"
@@ -113,9 +119,9 @@ final class SessionModel: ObservableObject {
         default:              micModeText = "自动"
         }
         board.micMode = Status(desired: LinkDesired.wanted,
-                               observed: micIsWide ? MicModeObserved.wide : MicModeObserved.other,
+                               observed: observedMode,
                                reason: nil, lastSeen: Date(), generation: generation)
-            }
+    }
 
     /// 「宽谱」按钮:请系统把麦克风模式选择面板弹出来(选还是用户自己选)。
     /// 面板关掉后再刷一次,按钮颜色立刻跟上。
@@ -429,23 +435,21 @@ final class SessionModel: ObservableObject {
 
                     }
 
-    /// 「网络」那一项的采集入口:TCP 探一次,结果写进事实(`netOK`)与面板(`probe`)。
+    /// 「网络」那一项的采集入口:TCP 探一次,只更新状态板事实；视图从 board 派生显示。
     func refreshNet() async {
         guard let hp = NetProbe.hostPort(from: serverURL) else {
-            netOK = false
             board.probe = Status(desired: LinkDesired.wanted, observed: LinkObserved.disconnected,
                                  reason: LinkReason.probeTimeout,
                                  lastSeen: Date(), generation: connectionGeneration)
-                        return
+            return
         }
         let ok = await NetProbe.check(host: hp.host, port: hp.port)
-        netOK = ok
         let reason: LinkReason? = ok ? nil : .probeTimeout
         board.probe = Status(desired: LinkDesired.wanted,
                              observed: ok ? LinkObserved.connected : LinkObserved.disconnected,
                              reason: reason,
                              lastSeen: Date(), generation: connectionGeneration)
-            }
+    }
 
     /// 系统直播那一路的采集入口:读一次扩展日志,写事实(`broadcastAlive`)
     /// 与面板(`replaykit` / `extensionEmbedded`)。
