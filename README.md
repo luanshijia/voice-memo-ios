@@ -6,8 +6,8 @@ VoiceMemo iOS 是会议录音客户端。主 App 采集麦克风音频；用户�
 
 ## 当前代码基线
 
-- 当前源码版本：`0.9.17 / build 85`，包含由电脑端 `contracts/wire-v2.json` 生成的 `WireContract.generated.swift`；CI 构建状态以对应 GitHub Actions 运行结果为准。
-- 最近一个已核验 IPA：build 84，仓库工作区 `dist/ci-build84/VoiceMemo-v0.9.16-build84-unified-status.ipa`；SHA-256：`573493E45BBA6FA83186D526E198A6FFAF3B65F97703D8DEB9BC5CF271EE3B34`。它不包含 build 85 的协议生成器改动。
+- 当前源码版本：`0.9.18 / build 86`，收发两端均由电脑端 `contracts/wire-v2.json` 生成的 `WireContract.generated.swift` 校验；最终 CI/IPA 结果以对应 GitHub Actions 运行为准。
+- 最近一个已核验 IPA：build 84，仓库工作区 `dist/ci-build84/VoiceMemo-v0.9.16-build84-unified-status.ipa`；SHA-256：`573493E45BBA6FA83186D526E198A6FFAF3B65F97703D8DEB9BC5CF271EE3B34`。它不包含 build 86 的机器契约校验改动。
 - 当前主界面：五个顶部控制按钮、第一遍/定稿字幕、会中提要面板（档位、状态和要点）及底部状态栏。
 - 字段、方向、版本和类型范围以电脑端机器正本生成 App 校验器；本轮待 CI 编译确认，未做真机验收。
 - tag、CI 编译成功都不能代替真机运行验收。当前包和 CI 状态以 GitHub Actions 实际结果为准。

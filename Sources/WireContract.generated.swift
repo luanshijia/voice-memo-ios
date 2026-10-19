@@ -83,6 +83,27 @@ enum WireContract {
         return nil
     }
 
+    static func messageProblem(object: [String: Any], direction: String) -> String? {
+        guard direction == "up" || direction == "down" else { return "direction" }
+        guard let rawVersion = object["schema_version"] else { return "missing_schema_version" }
+        guard let version = strictInteger(rawVersion) else { return "invalid_schema_version" }
+        guard supportedSchemaVersions.contains(version) else { return "version:\(version)" }
+        guard let type = object["type"] as? String, !type.isEmpty else { return "missing_type" }
+        guard let expectedDirection = knownFields[type] == nil ? nil : (inboundTypes.contains(type) ? "down" : "up") else {
+            return "unknown_type:\(type)"
+        }
+        guard expectedDirection == direction else { return "direction" }
+        if let problem = fieldProblem(type: type, object: object) { return problem }
+        if version >= sessionIDRequiredFromVersion {
+            guard let sessionID = object["session_id"] as? String, isValidSessionID(sessionID) else {
+                return "missing_session_id"
+            }
+        } else if let sessionID = object["session_id"] as? String, !isValidSessionID(sessionID) {
+            return "invalid_field:session_id"
+        }
+        return nil
+    }
+
     static func isValidSessionID(_ value: String) -> Bool {
         guard let expression = try? NSRegularExpression(pattern: sessionIDPattern) else { return false }
         let range = NSRange(value.startIndex..., in: value)

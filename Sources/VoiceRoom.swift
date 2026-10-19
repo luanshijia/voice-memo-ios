@@ -34,6 +34,10 @@ final class VoiceRoom: NSObject {
     /// 往房间里发一条自己的数据消息(topic=stt,与 agent 回传同一条通道,可靠送达)。
     /// 用途:「实时总结」按钮点一次 → 请家里立刻出一段总结。
     func send(_ payload: [String: Any]) async {
+        if let problem = WireContract.messageProblem(object: payload, direction: "up") {
+            onProtocolIssue?(problem)
+            return
+        }
         guard let room, let data = try? JSONSerialization.data(withJSONObject: payload) else { return }
         do {
             // 2.17.0 的 API 是 publish(data:options:);reliable=true 保证这条请求不丢
@@ -104,41 +108,12 @@ extension VoiceRoom: RoomDelegate {
                 self.onProtocolIssue?("parse")
                 return
             }
-            // 契约 §二:版本必须存在且为整数;v1/v2 都接受,v2 只多要求 session_id。
-            guard let rawVersion = obj["schema_version"] else {
-                self.onProtocolIssue?("missing_schema_version")
+            // 收发双方都走生成的完整契约校验器:版本、方向、字段、范围与 session UUID 同源。
+            if let problem = WireContract.messageProblem(object: obj, direction: "down") {
+                self.onProtocolIssue?(problem)
                 return
             }
-            // NSNumber.intValue 会把 2.5 截成 2、把 true 读成 1 ⇒ 必须显式判"整数字面值"。
-            guard let version = WireContract.strictInteger(rawVersion) else {
-                self.onProtocolIssue?("invalid_schema_version")
-                return
-            }
-            guard WireContract.supportedSchemaVersions.contains(version) else {
-                self.onProtocolIssue?("version:\(version)")
-                return
-            }
-            guard let type = obj["type"] as? String, !type.isEmpty else {
-                self.onProtocolIssue?("missing_type")
-                return
-            }
-            guard WireContract.inboundTypes.contains(type) else {
-                self.onProtocolIssue?("unknown_type:\(type)")
-                return
-            }
-            // 契约 §三:收包端必须按 type 校验全部必填字段与类型 ——
-            // 缺字段/类型不对就记诊断并丢弃,不能默认成 ""/?/0/nil 继续往下处理。
-            if let bad = WireContract.fieldProblem(type: type, object: obj) {
-                self.onProtocolIssue?(bad)
-                return
-            }
-            // v2:session_id 必填(是否属于本场由上层比对,这里只查存在性)
-            if version >= WireContract.sessionIDRequiredFromVersion {
-                guard let sid = obj["session_id"] as? String, WireContract.isValidSessionID(sid) else {
-                    self.onProtocolIssue?("missing_session_id")
-                    return
-                }
-            }
+            let type = obj["type"] as! String
             // 走到这里字段已按契约校验过,不再用默认值兜底(以前的 ?? "" / ?? "?" / ?? 0 会掩盖协议错误)。
             let text = (obj["text"] as? String) ?? ""
             let who = (obj["who"] as? String) ?? ""
