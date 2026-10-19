@@ -2,98 +2,46 @@ import Foundation
 
 /// 家里 LiveKit 的连接参数。
 ///
-/// 2026-10-18 起:**App 不再内置 key/secret**。连接前先向家里要一张短期门禁卡
-/// (`GET https://<host>:7443/token?identity=…&ttl=…`,默认 15 分钟)。
-/// 签发口在 `server/lk_tls_proxy.py`:只接受白名单 IP,只发 `*-livekit` / `*-replaykit`,
-/// 拒绝 `stt-agent` 这类服务身份。长期密钥只在服务器上(secrets/livekit.json,不进仓库)。
+/// 会议启动由电脑总管统一发号与授权；App 不生成会议 UUID，也不持有 LiveKit 长期密钥。
 struct LiveKitConfig {
     static let defaultURL = "wss://100.64.0.2:7443"   // 经本地 TLS 代理(ATS 要求 wss)
     static let defaultDevice = "iphone"               // C 口径:公开仓库里不写自己的设备名
 
     var url: String
     var device: String
+    var userID: String
     var identity: String { device + "-livekit" }
     var broadcastIdentity: String { device + "-replaykit" }
 
     static func load() -> LiveKitConfig {
         let d = UserDefaults.standard
         return LiveKitConfig(url: d.string(forKey: "lk.url") ?? defaultURL,
-                             device: d.string(forKey: "lk.device") ?? defaultDevice)
+                             device: d.string(forKey: "lk.device") ?? defaultDevice,
+                             userID: d.string(forKey: "lk.user") ?? "owner")
     }
 
     func save() {
         let d = UserDefaults.standard
         d.set(url, forKey: "lk.url")
         d.set(device, forKey: "lk.device")
+        d.set(userID, forKey: "lk.user")
+        if let shared = MeetingControlClient.sharedDefaults() {
+            shared.set(url, forKey: "lk.url")
+            shared.set(device, forKey: "lk.device")
+            shared.set(userID, forKey: "lk.user")
+        }
         d.removeObject(forKey: "lk.key")        // 老版本留下的长期密钥:不再使用,清掉
         d.removeObject(forKey: "lk.secret")
     }
 
-    /// 门禁卡端点:`wss://host:port` → `https://host:port/token`。
-    var tokenEndpoint: URL? {
-        guard var comps = URLComponents(string: url) else { return nil }
-        comps.scheme = (comps.scheme == "wss") ? "https" : "http"
-        comps.path = "/token"
-        comps.query = nil
-        return comps.url
-    }
-
-    struct Token: Decodable {
-        let url: String
-        let token: String
-        let identity: String?
-        let ttl: Int?
-    }
+    typealias Token = MeetingGrant
 
     /// 向家里要一张卡。失败一律抛出 —— 调用方必须让用户看到"取卡失败",不能静默连不上。
-    func requestToken(identity: String, ttl: Int = 15 * 60, session: String? = nil) async throws -> Token {
-        guard let endpoint = tokenEndpoint,
-              var comps = URLComponents(url: endpoint, resolvingAgainstBaseURL: false) else {
-            throw Self.error(2, "连接地址不合法:\(url)")
-        }
-        var items = [URLQueryItem(name: "identity", value: identity),
-                     URLQueryItem(name: "ttl", value: String(ttl))]
-        // 契约 §五:场次号随取卡带上,家里写进 JWT metadata,agent 据此把两路音轨归到同一场。
-        if let session = session, !session.isEmpty {
-            items.append(URLQueryItem(name: "session", value: session))
-        }
-        comps.queryItems = items
-        guard let finalURL = comps.url else { throw Self.error(2, "取卡地址拼不出来") }
-        var req = URLRequest(url: finalURL)
-        req.timeoutInterval = 8
-        req.cachePolicy = .reloadIgnoringLocalCacheData
-        let (data, resp) = try await URLSession.shared.data(for: req)
-        guard let http = resp as? HTTPURLResponse else { throw Self.error(3, "取卡没有响应") }
-        guard http.statusCode == 200 else {
-            let body = String(data: data.prefix(200), encoding: .utf8) ?? ""
-            throw Self.error(http.statusCode, "家里拒绝签发(\(http.statusCode))\(body.isEmpty ? "" : ":" + body)")
-        }
-        do {
-            let card = try JSONDecoder().decode(Token.self, from: data)
-            // 回包必须能对上我们发出的那次请求(Codex 2026-10-18 评审第 4 条):
-            // 身份不符/地址不合法/空 token/TTL 越界,都按"取卡失败"抛出,不许当成功继续用。
-            if let back = card.identity, back != identity {
-                throw Self.error(5, "取卡回包身份不符:要 \(identity),回 \(back)")
-            }
-            guard let u = URL(string: card.url),
-                  let scheme = u.scheme, scheme == "wss" || scheme == "ws", u.host?.isEmpty == false else {
-                throw Self.error(5, "取卡回包地址不合法:\(card.url)")
-            }
-            guard !card.token.isEmpty else {
-                throw Self.error(5, "取卡回包 token 为空")
-            }
-            // 契约 §六:回包主机必须与本机配置一致,防止被指到别的服务器
-            if let configured = URL(string: url)?.host, u.host != configured {
-                throw Self.error(5, "取卡回包主机与配置不符:配置 \(configured),回 \(u.host ?? "-")")
-            }
-            if let t = card.ttl, t <= 0 || t > 24 * 3600 {
-                throw Self.error(5, "取卡回包 ttl 越界:\(t)")
-            }
-            return card
-        } catch let err as NSError {
-            if err.domain == "VoiceMemo.Token" { throw err }   // 上面几条校验自己抛的,原样上抛
-            throw Self.error(4, "取卡回包解析失败:\(err.localizedDescription)")
-        }
+    func requestToken(identity: String, ttl: Int = 15 * 60, channel: String? = nil) async throws -> Token {
+        let resolvedChannel = channel ?? (identity == broadcastIdentity ? "system_audio" : "mic")
+        return try await MeetingControlClient.requestGrant(serverURL: url, identity: identity,
+                                                            userID: userID, deviceID: device,
+                                                            channel: resolvedChannel, ttl: ttl)
     }
 
     /// 为广播扩展准备一张只发布用的卡,写进 App Group。
@@ -119,17 +67,8 @@ struct LiveKitConfig {
            wantSession.isEmpty || ((obj["session"] as? String) ?? "") == wantSession {
             return false                      // 卡还新鲜且属于本场,不打扰家里
         }
-        let card = try await requestToken(identity: broadcastIdentity, ttl: 15 * 60, session: session)
-        let payload: [String: Any] = ["url": card.url,
-                                      "identity": broadcastIdentity,
-                                      "token": card.token,
-                                      "fetchedAt": Date().timeIntervalSince1970,
-                                      // 服务端回什么 TTL 就记什么 —— 客户端不许再用写死的 15 分钟算剩余
-                                      "ttl": card.ttl ?? 15 * 60,
-                                      // 记下这张卡属于哪一场,供上面的复用判断
-                                      "session": wantSession]
-        let out = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
-        try out.write(to: target, options: .atomic)
+        let card = try await requestToken(identity: broadcastIdentity, ttl: 15 * 60, channel: "system_audio")
+        try MeetingControlClient.storeBroadcastGrant(card)
         return true
     }
 

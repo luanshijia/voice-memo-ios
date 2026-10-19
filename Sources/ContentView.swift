@@ -505,6 +505,18 @@ struct SettingsSheet: View {
             Form {
                 stateSection          // 固定信息(环境 / 身份 / 版本)—— 按用户口径放最上面
                 connectionSection     // 固定(可编辑)
+                if !model.finalReportText.isEmpty {
+                    Section("会后材料") {
+                        NavigationLink("查看已保存的纪要和逐字稿") {
+                            ScrollView {
+                                Text(model.finalReportText)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding()
+                            }
+                            .navigationTitle("会后材料")
+                        }
+                    }
+                }
                 logSection            // 日志:主 App 步骤 + 扩展日志 + 一键复制(用户口径 2026-10-19 合并)
                 crashSection          // 有才显示
             }
@@ -523,6 +535,18 @@ struct SettingsSheet: View {
                 .textInputAutocapitalization(.never)
                 .keyboardType(.URL)
                 .font(.system(size: 14, design: .monospaced))
+            TextField("设备名", text: $model.deviceID)
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+                .disabled(model.isRecording)
+            TextField("使用者", text: $model.userID)
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+                .disabled(model.isRecording)
+            SecureField("设备登记凭据", text: $model.deviceToken)
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+                .disabled(model.isRecording)
             Button("恢复默认连接参数") { model.resetToDefaults() }
         } header: {
             Text("连接参数")

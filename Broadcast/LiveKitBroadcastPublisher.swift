@@ -11,6 +11,7 @@ final class LiveKitBroadcastPublisher: NSObject, RoomDelegate {
         let url: String
         let identity: String
         let token: String
+        let session: String?
     }
 
     private static let groupCandidates = [
@@ -24,6 +25,7 @@ final class LiveKitBroadcastPublisher: NSObject, RoomDelegate {
     private let outputFormat = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1)!
 
     private var room: Room?
+    private var meeting: (id: String, url: String, device: String)?
     private var connectionTask: Task<Void, Never>?
     private var stopped = false
     private var ready = false                         // workQueue only
@@ -67,6 +69,15 @@ final class LiveKitBroadcastPublisher: NSObject, RoomDelegate {
                 try? await Task.sleep(nanoseconds: 400_000_000)
                 waited += 1
                 configuration = Self.readConfiguration()
+            }
+            if configuration == nil && !Task.isCancelled {
+                do {
+                    let grant = try await MeetingControlClient.requestBroadcastGrant()
+                    configuration = Configuration(url: grant.url, identity: grant.identity,
+                                                   token: grant.token, session: grant.meetingID)
+                } catch {
+                    self.log("ReplayKit 独立申请会议授权失败: \(error.localizedDescription)")
+                }
             }
             guard let configuration else {
                 self.log("LiveKit 配置缺失或无效；请从主 App 重新启动广播")
@@ -117,6 +128,8 @@ final class LiveKitBroadcastPublisher: NSObject, RoomDelegate {
         stopped = true
         let currentRoom = room
         room = nil
+        let currentMeeting = meeting
+        meeting = nil
         let task = connectionTask
         connectionTask = nil
         lock.unlock()
@@ -127,6 +140,18 @@ final class LiveKitBroadcastPublisher: NSObject, RoomDelegate {
             self.pending.removeAll(keepingCapacity: false)
         }
         Task { await currentRoom?.disconnect() }
+        if let currentMeeting {
+            Task {
+                do {
+                    try await MeetingControlClient.stopChannel(serverURL: currentMeeting.url,
+                                                              meetingID: currentMeeting.id,
+                                                              deviceID: currentMeeting.device,
+                                                              channel: "system_audio")
+                } catch {
+                    self.log("系统声音停止状态同步失败: \(error.localizedDescription)")
+                }
+            }
+        }
     }
 
     private func connect(_ configuration: Configuration) async -> Bool {
@@ -143,7 +168,14 @@ final class LiveKitBroadcastPublisher: NSObject, RoomDelegate {
 
             lock.lock()
             let shouldStop = stopped || Task.isCancelled
-            if !shouldStop { room = newRoom }
+            if !shouldStop {
+                room = newRoom
+                if let session = configuration.session,
+                   configuration.identity.hasSuffix("-replaykit") {
+                    let device = String(configuration.identity.dropLast("-replaykit".count))
+                    meeting = (session, configuration.url, device)
+                }
+            }
             lock.unlock()
 
             guard !shouldStop else {

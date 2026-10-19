@@ -22,6 +22,7 @@ targets:
     platform: iOS
     sources:
       - Broadcast
+      - Shared
     dependencies:
       # 扩展独立连入会议室;identity 与主 App 的麦克风参与者分开。
       - package: LiveKit
@@ -71,6 +72,7 @@ targets:
     platform: iOS
     sources:
       - Sources
+      - Shared
       - Assets.xcassets        # 主屏图标(2026-10-15 加):以前包里根本没有图标,装到主屏是空白的
     dependencies:
       - package: LiveKit

@@ -49,7 +49,8 @@ final class VoiceRoom: NSObject {
     }
 
     @discardableResult
-    func connect(url: String, token: String, identity: String) async throws -> Room {
+    func connect(url: String, token: String, identity: String,
+                 publishMic: Bool = true) async throws -> Room {
         // token 由主 App 向家里现取(LiveKitConfig.requestToken),这里只管连
         let newRoom = Room()
         newRoom.add(delegate: self)
@@ -57,14 +58,16 @@ final class VoiceRoom: NSObject {
         onNote?("发起连接 \(url) 身份=\(identity)")
         do {
             try await newRoom.connect(url: url, token: token)
-            try await newRoom.localParticipant.setMicrophone(enabled: true)
+            if publishMic {
+                try await newRoom.localParticipant.setMicrophone(enabled: true)
+            }
         } catch {
             // 连上一半失败(例如开麦被拒)也要把这条连接收干净:不留同身份影子
             await newRoom.disconnect()
             if room === newRoom { room = nil }
             throw error
         }
-        onState?("已连上房间,麦克风已开")
+        onState?(publishMic ? "已连上房间,麦克风已开" : "已连上房间,只接收")
         onNote?("已连接房间=\(newRoom.name) 参与者=\(newRoom.remoteParticipants.count)")
         return newRoom
     }

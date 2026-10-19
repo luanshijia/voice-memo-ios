@@ -80,6 +80,9 @@ final class SessionModel: ObservableObject {
         let text: String
     }
     @Published var summaries: [SummaryItem] = []
+    @Published private(set) var finalReportText = ""
+    @Published private(set) var finalReportMeetingID = ""
+    private var lastArtifactRevision = -1
     @Published var sumMode = "auto"                // auto=自动 5 分钟 / manual=手动 10 分钟
     @Published var sumState = "等待提要…"           // 状态区文案:由家里推来的 sumstatus 驱动
     @Published var sumCode = "wait_period"         // 家里给的判定码:no_session/short/quality/busy_*/go
@@ -89,6 +92,21 @@ final class SessionModel: ObservableObject {
             cfg.url = newValue
             cfg.save()
             syncConfigStatus()
+        }
+    }
+    var deviceID: String {
+        get { cfg.device }
+        set { cfg.device = newValue; cfg.save(); objectWillChange.send() }
+    }
+    var userID: String {
+        get { cfg.userID }
+        set { cfg.userID = newValue; cfg.save(); objectWillChange.send() }
+    }
+    var deviceToken: String {
+        get { MeetingControlClient.sharedDefaults()?.string(forKey: "vm.deviceToken") ?? "" }
+        set {
+            MeetingControlClient.sharedDefaults()?.set(newValue, forKey: "vm.deviceToken")
+            objectWillChange.send()
         }
     }
     var identity: String { cfg.identity }
@@ -143,7 +161,8 @@ final class SessionModel: ObservableObject {
     var notesText: String { notes.joined(separator: "\n") }
 
     func resetToDefaults() {
-        cfg = LiveKitConfig(url: LiveKitConfig.defaultURL, device: LiveKitConfig.defaultDevice)
+        cfg = LiveKitConfig(url: LiveKitConfig.defaultURL, device: LiveKitConfig.defaultDevice,
+                            userID: MeetingControlClient.defaultUserID)
         cfg.save()
         objectWillChange.send()
     }
@@ -180,6 +199,8 @@ final class SessionModel: ObservableObject {
     /// 广播卡取卡失败提示的节流时间(免得离线时每 3 秒刷一条状态)
     private var lastBroadcastNote = Date.distantPast
     private let room = VoiceRoom()
+    private let observerRoom = VoiceRoom()
+    private var observerConnection: Room?
     private var timer: Timer?
     /// 上一次「停止」的断开动作。实测踩过:点停止后立刻再点开始,新旧两条连接同身份并存,
     /// 服务端按 DUPLICATE_IDENTITY 把旧的那条踢掉(01:44:33 就是这么发生的)。
@@ -278,13 +299,131 @@ final class SessionModel: ObservableObject {
                 self.syncProtocolStatus()
             }
         }
+        observerRoom.onTranscript = room.onTranscript
+        observerRoom.onNote = { [weak self] s in self?.note(s) }
+        observerRoom.onState = { [weak self] _ in self?.syncBoard() }
+        observerRoom.onEnded = { [weak self] s in
+            self?.observerConnection = nil
+            self?.note("会议查看连接结束:\(s)")
+            self?.syncBoard()
+        }
+        observerRoom.onProtocolIssue = { [weak self] kind in self?.noteProtocolIssue(kind) }
         // 从 Bundle 读真实版本(以前写死成 v0.2.0(build 11),截图里会误导人)
         let ver = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
         note("App 启动,v\(ver)(build \(build), LiveKit)")
         syncConfigStatus()
         syncProtocolStatus()
+        cfg.save() // 扩展独立启动时也能从 App Group 读取登记信息
+        loadSavedReport()
+        Task { [weak self] in await self?.observeDesktop() }
         _ = prepareBroadcast() // 预先刷新短期 token，保证系统原生选择器可直接启动扩展
+    }
+
+    private func observeDesktop() async {
+        while !Task.isCancelled {
+            if !isRecording {
+                do {
+                    let state = try await MeetingControlClient.deviceView(
+                        serverURL: cfg.url, deviceID: cfg.device)
+                    if !isRecording {
+                        let systemActive = state.meeting?.channels["system_audio"]?.status == "active"
+                        if systemActive, let receiver = state.view,
+                           receiver.meetingID == state.meeting?.meetingID {
+                            if observerConnection == nil || sessionID != receiver.meetingID {
+                                if let old = observerConnection { await observerRoom.disconnect(old) }
+                                sessionID = receiver.meetingID
+                                observerConnection = try await observerRoom.connect(
+                                    url: receiver.url, token: receiver.token,
+                                    identity: receiver.identity, publishMic: false)
+                                syncBoard()
+                            }
+                        } else if let old = observerConnection {
+                            observerConnection = nil
+                            await observerRoom.disconnect(old)
+                            if !isRecording { sessionID = "" }
+                            syncBoard()
+                        }
+                        if let meeting = state.meeting, meeting.status == "sealed",
+                           state.stateRevision != lastArtifactRevision {
+                            do {
+                                let artifact = try await MeetingControlClient.fetchArtifact(
+                                    serverURL: cfg.url, meetingID: meeting.meetingID,
+                                    deviceID: cfg.device)
+                                try storeReport(artifact.data, meetingID: meeting.meetingID)
+                                try await MeetingControlClient.acknowledgeArtifact(
+                                    serverURL: cfg.url, meetingID: meeting.meetingID,
+                                    deviceID: cfg.device, sha256: artifact.sha256)
+                                lastArtifactRevision = state.stateRevision
+                                note("会后报告已保存并回执电脑端")
+                            } catch {
+                                // Report generation may still be running; retry on the next poll.
+                            }
+                        }
+                    }
+                } catch {
+                    // Keep the last known meeting visible during a temporary network loss.
+                }
+            }
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+        }
+    }
+
+    private func loadSavedReport() {
+        let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        guard let files = try? FileManager.default.contentsOfDirectory(
+            at: documents, includingPropertiesForKeys: [.contentModificationDateKey]) else { return }
+        let latest = files.filter { $0.lastPathComponent.hasPrefix("meeting-") &&
+            $0.lastPathComponent.hasSuffix("-report.json") }.max { first, second in
+            let a = (try? first.resourceValues(forKeys: [.contentModificationDateKey]))?
+                .contentModificationDate ?? .distantPast
+            let b = (try? second.resourceValues(forKeys: [.contentModificationDateKey]))?
+                .contentModificationDate ?? .distantPast
+            return a < b
+        }
+        guard let latest, let data = try? Data(contentsOf: latest) else { return }
+        let name = latest.lastPathComponent
+        let meetingID = String(name.dropFirst("meeting-".count).dropLast("-report.json".count))
+        guard UUID(uuidString: meetingID) != nil else { return }
+        try? storeReport(data, meetingID: meetingID, persist: false)
+    }
+
+    private func storeReport(_ data: Data, meetingID: String, persist: Bool = true) throws {
+        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              object["meeting_id"] as? String == meetingID,
+              let report = object["report"] as? [String: Any],
+              let meta = report["meta"] as? [String: Any],
+              let summary = report["summary"] as? [String: Any],
+              let segments = report["segments"] as? [[String: Any]] else {
+            throw NSError(domain: "VoiceMemo.Report", code: 1)
+        }
+        let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let target = documents.appendingPathComponent("meeting-\(meetingID)-report.json")
+        if persist { try data.write(to: target, options: .atomic) }
+        var lines: [String] = [summary["title"] as? String ?? "会后纪要"]
+        if meta["summary_status"] as? String == "failed" {
+            lines += ["纪要生成待补；以下逐字稿已保存。"]
+        }
+        for (heading, key) in [("已定事项", "decisions"), ("待沟通", "open_questions"),
+                               ("其它", "notes"), ("待核实", "unverified")] {
+            let items = summary[key] as? [String] ?? []
+            if !items.isEmpty {
+                lines += ["", heading] + items.map { "• " + $0 }
+            }
+        }
+        if let todos = summary["todos"] as? [[String: Any]], !todos.isEmpty {
+            lines += ["", "待办"]
+            lines += todos.map { item in
+                "• \(item["task"] as? String ?? "")  负责人：\(item["owner"] as? String ?? "—")"
+            }
+        }
+        lines += ["", "精转逐字稿"]
+        lines += segments.compactMap { item in
+            guard let text = item["text"] as? String else { return nil }
+            return "\(item["clock"] as? String ?? "") \(item["speaker"] as? String ?? "")  \(text)"
+        }
+        finalReportText = lines.joined(separator: "\n")
+        finalReportMeetingID = meetingID
     }
 
     func toggle() { isRecording ? stop() : start() }
@@ -320,7 +459,7 @@ final class SessionModel: ObservableObject {
         sumCode = "wait_period"
         isRecording = true
         intent = .wanted
-        sessionID = UUID().uuidString.lowercased()   // 新一场:场次号换新
+        sessionID = ""                               // 会议号由电脑总管创建并在授权回包中返回
         livekEndReason = nil           // 新一代:上一代"被动结束"的原因作废
         noteSignatures = []
         syncBoard()
@@ -332,20 +471,36 @@ final class SessionModel: ObservableObject {
             let prev = pendingDisconnect
             pendingDisconnect = nil
             if let prev { await prev.value }
+            if let observing = observerConnection {
+                observerConnection = nil
+                await observerRoom.disconnect(observing)
+            }
+            var grantedMeetingID: String?
             do {
-                let card = try await cfg.requestToken(identity: cfg.identity,
-                                                      session: self.sessionID.isEmpty ? nil : self.sessionID)
+                let card = try await cfg.requestToken(identity: cfg.identity, channel: "mic")
+                grantedMeetingID = card.meetingID
                 let live = try await room.connect(url: card.url, token: card.token, identity: cfg.identity)
                 guard generation == self.connectionGeneration else {   // 这一轮已被停止/重开取代
                     await self.room.disconnect(live)                   // 只断自己这条,不碰新会话
+                    try? await MeetingControlClient.stopChannel(serverURL: cfg.url,
+                                                                 meetingID: card.meetingID,
+                                                                 deviceID: cfg.device,
+                                                                 channel: "mic")
                     return
                 }
+                self.sessionID = card.meetingID
                 self.connection = live
                 await room.send(self.summodePayload(self.sumMode))   // 让家里跟上本机档位
                 self.startTimer()
                 self.syncBoard()
             } catch {
                 // VoiceRoom.connect 失败时已自行断开这条连接,这里只回写 UI
+                if let grantedMeetingID {
+                    try? await MeetingControlClient.stopChannel(serverURL: cfg.url,
+                                                                 meetingID: grantedMeetingID,
+                                                                 deviceID: cfg.device,
+                                                                 channel: "mic")
+                }
                 guard generation == self.connectionGeneration else { return }
                 self.note("连接异常:\(error.localizedDescription)")
                 self.note("连接失败:\(error.localizedDescription)")
@@ -356,11 +511,25 @@ final class SessionModel: ObservableObject {
     }
 
     private func stop() {
+        let stoppedMeetingID = sessionID
+        let stopConfig = cfg
         connectionGeneration += 1     // 在飞的连接尝试作废,不许它稍后回写状态
         stopTimer()
         isRecording = false
         intent = .notWanted             // 只有用户按停止才清期望
         sessionID = ""                  // 契约:停止即换场,下一场重新生成
+        if !stoppedMeetingID.isEmpty {
+            Task {
+                do {
+                    try await MeetingControlClient.stopChannel(serverURL: stopConfig.url,
+                                                               meetingID: stoppedMeetingID,
+                                                               deviceID: stopConfig.device,
+                                                               channel: "mic")
+                } catch {
+                    self.note("电脑端会议停止状态同步失败: \(error.localizedDescription)")
+                }
+            }
+        }
         partials = []                 // 在飞的部分字幕属于上一场,停止后不该再挂在屏幕上
         syncBoard()
         note("用户停止:推流 \(Int(recordedSeconds))s / 家里识别 \(Int(serverSeconds))s")
@@ -410,7 +579,7 @@ final class SessionModel: ObservableObject {
     func syncBoard() {
         let generation = connectionGeneration
         var observed: LinkObserved = .notStarted
-        if let state = room.connectionState {
+        if let state = (isRecording ? room.connectionState : observerRoom.connectionState) {
             switch state {
             case .connected: observed = .connected
             case .connecting: observed = .connecting
@@ -424,7 +593,8 @@ final class SessionModel: ObservableObject {
             observed = .connecting
         }
         let reason: LinkReason? = (observed == .disconnected) ? (livekEndReason ?? .disconnected) : nil
-        board.livekit = Status(desired: intent, observed: observed, reason: reason,
+        let receiveIntent: LinkDesired = observerConnection == nil ? intent : .wanted
+        board.livekit = Status(desired: receiveIntent, observed: observed, reason: reason,
                                lastSeen: Date(), generation: generation)
 
         let groupOK = BroadcastProbe.containerURL() != nil
