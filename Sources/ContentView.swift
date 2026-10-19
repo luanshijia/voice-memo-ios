@@ -110,7 +110,8 @@ struct ContentView: View {
             // 系统图标因此完全不出现,也不用依赖 alpha 阈值能不能命中。
             BroadcastPickerView()
                 .frame(width: 44, height: 44)
-                .opacity(0.01)
+                .opacity(0)                     // 全透明:点击由上面的按钮调 open() 触发,它不必可命中,
+                                                // 也就不会像 1% 时那样在灰底上留下自己的背景轮廓
                 .accessibilityHidden(true)
             Button {
                 BroadcastPickerTrigger.open()
