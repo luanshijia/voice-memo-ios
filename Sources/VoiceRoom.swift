@@ -175,9 +175,15 @@ extension VoiceRoom: RoomDelegate {
         return d.isFinite ? d : nil
     }
 
-    /// 严格整数:schema_version 只认整数字面值 —— 2.5 不能被 intValue 截成 2,true 不能读成 1。
+    /// 严格整数:schema_version 只认整数字面值。
+    /// 与电脑端 `contracts.py` 的 `type(v) is not int` 对齐:2.5 不能被 intValue 截成 2、
+    /// 2.0 虽然数学上是整数但字面值是浮点,同样不算 integer、true 不能读成 1。
     static func strictInteger(_ v: Any?) -> Int? {
-        guard let d = number(v), d == d.rounded(), abs(d) < 1_000_000 else { return nil }
+        guard let n = v as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID() else { return nil }
+        let t = String(cString: n.objCType)
+        guard t != "d", t != "f" else { return nil }        // JSON 里的 2.0 / 2.5 落成 double
+        let d = n.doubleValue
+        guard d.isFinite, d == d.rounded(), abs(d) < 1_000_000 else { return nil }
         return Int(d)
     }
 
@@ -205,17 +211,52 @@ extension VoiceRoom: RoomDelegate {
             if let v = obj[k], v is NSNull { return nil }
             return number(obj[k]) != nil ? nil : "invalid_field:\(k)"
         }
+        // 非负 / 正数:与 contracts.py 的 `value[...] < 0` 检查一一对应
+        func isNull(_ k: String) -> Bool { if let v = obj[k] { return v is NSNull }; return false }
+        func nonNeg(_ k: String) -> String? {
+            if let m = missing(k) { return m }
+            guard let d = number(obj[k]) else { return "invalid_field:\(k)" }
+            return d >= 0 ? nil : "invalid_field:\(k)"
+        }
+        func positive(_ k: String) -> String? {
+            if let m = missing(k) { return m }
+            guard let d = number(obj[k]) else { return "invalid_field:\(k)" }
+            return d > 0 ? nil : "invalid_field:\(k)"
+        }
+        func oneOf(_ k: String, _ allowed: Set<String>) -> String? {
+            if let m = missing(k) { return m }
+            guard let s = obj[k] as? String else { return "invalid_field:\(k)" }
+            return allowed.contains(s) ? nil : "invalid_field:\(k)"
+        }
+        // HH:mm,且 00–23 : 00–59(契约 §3.3;电脑端 contracts.py 同口径)
+        func clockHM(_ k: String) -> String? {
+            if let m = missing(k) { return m }
+            guard let s = obj[k] as? String else { return "invalid_field:\(k)" }
+            let parts = s.split(separator: ":", omittingEmptySubsequences: false)
+            guard parts.count == 2, parts[0].count == 2, parts[1].count == 2,
+                  let h = Int(parts[0]), let m = Int(parts[1]),
+                  h >= 0, h <= 23, m >= 0, m <= 59 else { return "invalid_field:\(k)" }
+            return nil
+        }
         switch type {
         case "partial":
             return str("who") ?? str("source") ?? str("text") ?? num("audio_s") ?? num("ts")
+                ?? nonNeg("audio_s") ?? positive("ts")
         case "final":
             return str("who") ?? str("source") ?? str("text") ?? num("audio_s")
                 ?? numOrNull("gap_s") ?? num("ts")
+                ?? nonNeg("audio_s") ?? positive("ts")
+                ?? (isNull("gap_s") ? nil : nonNeg("gap_s"))
         case "summary":
+            // 注意:刻意不校验 code —— 电脑端在 build_message 里做白名单,
+            // 注释写明是为了让 App 收包端保持前向兼容。本端遇到新码按未知处理、照常显示。
             return str("text") ?? str("clock") ?? num("ts") ?? int("unsupported")
+                ?? clockHM("clock") ?? nonNeg("unsupported") ?? positive("ts")
         case "sumstatus":
             return str("mode") ?? str("code") ?? str("text") ?? int("chars")
                 ?? numOrNull("next_in") ?? num("ts")
+                ?? oneOf("mode", ["auto", "manual"]) ?? nonNeg("chars") ?? positive("ts")
+                ?? (isNull("next_in") ? nil : nonNeg("next_in"))
         default:
             return nil       // 未知 type 交给上层(记未知类型),这里不重复判
         }
