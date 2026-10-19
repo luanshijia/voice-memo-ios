@@ -15,12 +15,12 @@
 | 文件 | 作用 |
 |---|---|
 | `project.yml` | XcodeGen 工程定义。**版本号四处全在这一个文件**:两个 target 各自的 `CFBundleShortVersionString` / `CFBundleVersion` |
-| `Sources/ContentView.swift` | 主界面:顶部 5 个按钮(纯文字、5 等分、块高 24、圆角 6);三块固定版式(上 1/10 第一遍 / 中 1/2 第二遍定稿 / 下 4/10 会中提要);贴底状态栏 |
-| `Sources/SessionModel.swift` | 会话与状态机:连接、计时、上行切档、服务端消息分发(`final` / `summary` / `sumstatus` / `partial`) |
-| `Sources/VoiceRoom.swift` | LiveKit 封装:连接、麦克风、数据通道收发(delegate 把整条 JSON 透传给上层) |
-| `Sources/LiveKitConfig.swift` | 连接参数与本地铸 token(HS256);默认值与家里 `livekit-server --dev` 的 devkey/secret 一致 |
-| `Sources/BroadcastExtension/` | ReplayKit 广播扩展(线上会议采"对方声音";面对面/只有自己说话时不用) |
-| `Sources/NetProbe.swift`、`Sources/RoomsProbe.swift` | 排错探针 |
+| `Sources/ContentView.swift` | 当前主界面:顶部 5 个按钮、第一遍/定稿字幕、会中提要面板与贴底状态栏 |
+| `Sources/SessionModel.swift` | 会话与状态模型:连接、计时、`summode` 上行、服务端消息分发与字段诊断 |
+| `Sources/VoiceRoom.swift` | LiveKit 连接与数据通道;收包按契约校验版本、必填字段、类型及范围,错误消息记诊断后丢弃 |
+| `Sources/LiveKitConfig.swift` | 连接参数与短期 token 请求;App 不持有 LiveKit 长期 key/secret,请求包含 identity、ttl,录音时包含 session UUID |
+| `Broadcast/` | ReplayKit 广播扩展,与主 App 使用同一个场次 UUID 取卡并发布系统播放音频 |
+| `Sources/NetProbe.swift`、`Sources/BroadcastProbe.swift` | 网络、App Group 与广播扩展状态探针 |
 
 ## 怎么出包(唯一路径:CI)
 
@@ -39,8 +39,8 @@ bash ../tools/ops/vm-watch-ci37.sh <run-id> <标签> <桌面文件名>
 
 - **不做识别、不做纪要**:App 只负责采集、推流、显示。
 - **主链路(推流 / 字幕 / 断线重连 / 数据协议)的改动要先给方案、经批准再动手**;改完必须真机验证,CI 通过 ≠ 能用。
-- **不要把真密钥写进源码**:当前默认值是与家里 `--dev` 配套的**公开**默认值(仅开发用);
-  未来改成"向家里请求 token"之后,App 不应再持有任何密钥。
+- **不要把真密钥写进源码**:App 通过 TLS 代理 `/token` 请求短期票据;服务端长期凭据只存在 `secrets/livekit.json`。
+- **共同契约**:`../notes/契约-App与电脑端.md` 是网线协议正本。当前协议为 v2;整数范围、ASCII `clock`、每种消息必填字段必须与电脑端 `agent/vmcore/contracts.py` 对齐。`sumstatus.code` 刻意由 App 前向兼容,未知码不能整条丢弃。
 - **界面几何保持一致**:同一排按钮等高同圆角;改文案不要连带改版式。
 - 版本号只改 `project.yml`,不要手改生成出来的 `.xcodeproj`。
 
