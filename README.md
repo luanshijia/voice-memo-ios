@@ -7,10 +7,8 @@ VoiceMemo iOS 是会议录音客户端。主 App 采集麦克风音频；用户�
 ## 当前代码基线
 
 - 当前源码版本：`0.9.18 / build 86`，收发两端均由电脑端 `contracts/wire-v2.json` 生成的 `WireContract.generated.swift` 校验；最终 CI/IPA 结果以对应 GitHub Actions 运行为准。
-- 最近一个已核验 IPA：build 84，仓库工作区 `dist/ci-build84/VoiceMemo-v0.9.16-build84-unified-status.ipa`；SHA-256：`573493E45BBA6FA83186D526E198A6FFAF3B65F97703D8DEB9BC5CF271EE3B34`。它不包含 build 86 的机器契约校验改动。
-- 当前主界面：五个顶部控制按钮、第一遍/定稿字幕、会中提要面板（档位、状态和要点）及底部状态栏。
-- 字段、方向、版本和类型范围以电脑端机器正本生成 App 校验器；本轮待 CI 编译确认，未做真机验收。
-- tag、CI 编译成功都不能代替真机运行验收。当前包和 CI 状态以 GitHub Actions 实际结果为准。
+- 最近一个已核验 IPA：build 86，GitHub Actions `39196411913`，源码提交 `7237250`；产物 `dist/ci-build86-wire-contract/VoiceMemo-unsigned-ipa/VoiceMemo-unsigned.ipa`，SHA-256：`A061201E93EE1E30809ED7C5FCC3FEA0682F7C413429F7C1A00480CBEC8A1494`。主 App 与 ReplayKit 扩展均为 `0.9.18 / 86`。这是编译与打包验证，不是设备安装或真机验收。
+- 字段、方向、版本和类型范围以电脑端机器正本生成 App 校验器；build86 已通过 CI 编译与打包，尚未做真机验收。
 - 当前主界面：五个顶部控制按钮、第一遍/定稿字幕、会中提要面板（档位、状态和要点）及底部状态栏。
 - 收包端按消息类型校验必填字段和类型；schema 整数采用跨端安全范围，`summary.clock` 只接受 ASCII `HH:mm`。
 - tag 或 CI 编译成功都不能代替真机运行验收。当前包和 CI 状态以 GitHub Actions 实际结果为准。
