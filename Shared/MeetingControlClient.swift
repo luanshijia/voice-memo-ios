@@ -50,6 +50,13 @@ struct DeviceMeetingView: Decodable {
 }
 
 enum MeetingControlClient {
+    private struct PendingStart: Codable {
+        let serverURL: String
+        let userID: String
+        let deviceID: String
+        let channel: String
+        let requestID: String
+    }
     private struct PendingStop: Codable {
         let serverURL: String
         let meetingID: String
@@ -60,6 +67,8 @@ enum MeetingControlClient {
     }
     private static let pendingStopKey = "vm.pendingSystemAudioStop"
     private static let pendingMicStopKey = "vm.pendingMicStop"
+    private static let pendingBroadcastStartKey = "vm.pendingSystemAudioStart"
+    private static let pendingMicStartKey = "vm.pendingMicStart"
     static let appGroupID = "group.com.luanshijia.voicememo"
     static let appGroupCandidates = [appGroupID, "group.com.luanshijia.voicememo.458RP2552K"]
     static let defaultServerURL = "wss://100.64.0.2:7443"
@@ -96,7 +105,12 @@ enum MeetingControlClient {
         guard let endpoint = components.url else {
             throw failure(2, "会议申请地址无效")
         }
-        let payload: [String: Any] = ["request_id": UUID().uuidString.lowercased(),
+        // Keep the same idempotency key across a lost HTTP response or process
+        // death. It is cleared only after publication is reported or a stop is
+        // durably queued; returning a grant is not proof that the caller saved it.
+        let requestID = try pendingStartID(serverURL: serverURL, userID: userID,
+                                           deviceID: deviceID, channel: channel)
+        let payload: [String: Any] = ["request_id": requestID,
                                       "user_id": userID,
                                       "device_id": deviceID,
                                       "channel": channel]
@@ -158,6 +172,9 @@ enum MeetingControlClient {
         let (_, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
             throw failure(14, "电脑端未确认采集状态")
+        }
+        if observed == "publishing" {
+            clearPendingStart(channel: channel, deviceID: deviceID)
         }
     }
 
@@ -323,6 +340,7 @@ enum MeetingControlClient {
            let existing = try? JSONDecoder().decode(PendingStop.self, from: data),
            existing.meetingID == meetingID && existing.deviceID == deviceID &&
            existing.channel == channel && existing.generation == generation {
+            clearPendingStart(channel: channel, deviceID: deviceID)
             return // Keep the idempotency key across retries and extension shutdown races.
         }
         let pending = PendingStop(serverURL: serverURL, meetingID: meetingID,
@@ -331,6 +349,45 @@ enum MeetingControlClient {
                                   generation: generation)
         defaults.set(try JSONEncoder().encode(pending), forKey: key)
         defaults.synchronize()
+        clearPendingStart(channel: channel, deviceID: deviceID)
+    }
+
+    private static func pendingStartKey(_ channel: String) throws -> String {
+        switch channel {
+        case SessionControlContract.mic: return pendingMicStartKey
+        case SessionControlContract.systemAudio: return pendingBroadcastStartKey
+        default: throw failure(7, "采集通道无效")
+        }
+    }
+
+    private static func pendingStartID(serverURL: String, userID: String,
+                                       deviceID: String, channel: String) throws -> String {
+        guard let defaults = sharedDefaults() else {
+            throw failure(13, "App Group 不可用，无法保存会议申请")
+        }
+        let key = try pendingStartKey(channel)
+        if let data = defaults.data(forKey: key) {
+            let pending = try JSONDecoder().decode(PendingStart.self, from: data)
+            guard pending.serverURL == serverURL, pending.userID == userID,
+                  pending.deviceID == deviceID, pending.channel == channel else {
+                throw failure(15, "存在待恢复的旧会议申请，请先恢复原设备登记")
+            }
+            return pending.requestID
+        }
+        let pending = PendingStart(serverURL: serverURL, userID: userID,
+                                   deviceID: deviceID, channel: channel,
+                                   requestID: UUID().uuidString.lowercased())
+        defaults.set(try JSONEncoder().encode(pending), forKey: key)
+        defaults.synchronize()
+        return pending.requestID
+    }
+
+    private static func clearPendingStart(channel: String, deviceID: String) {
+        guard let key = try? pendingStartKey(channel),
+              let defaults = sharedDefaults(), let data = defaults.data(forKey: key),
+              let pending = try? JSONDecoder().decode(PendingStart.self, from: data),
+              pending.deviceID == deviceID else { return }
+        defaults.removeObject(forKey: key)
     }
 
     static func flushPendingBroadcastStop() async throws {
