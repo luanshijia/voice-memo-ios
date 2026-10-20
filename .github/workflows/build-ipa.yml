@@ -12,7 +12,10 @@ on:
 
 jobs:
   build:
-    runs-on: macos-15
+    # x64 的 macos-15 池连续两次排队 15 分钟拿不到机器(job 从未启动):
+    # 换 arm64 池,它默认 Xcode 16.4,满足 SPM 包要求的 16.3+。
+    # 产物仍是 arm64 设备的 ipa,与 runner 架构无关。
+    runs-on: macos-15-arm64
     timeout-minutes: 30
 
     steps:
