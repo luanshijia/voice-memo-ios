@@ -27,9 +27,12 @@
 
 ```bash
 # 1) 改版本号:project.yml 里四处(两个 target 各两处)
-# 2) 提交并推送 → GitHub Actions 自动 xcodegen + xcodebuild archive → 未签名 IPA
-git add -A && git commit -m "..." && git push
-# 3) 盯 CI 并把包取到桌面(脚本在服务端仓库)
+# 2) 按本轮实际改动列出显式路径提交；只有用户授权本次出包时才推送
+git add -- project.yml Sources/SessionModel.swift Shared/MeetingControlClient.swift
+git commit -m "..."
+# 3) 获出包授权后推送，再由 GitHub Actions xcodegen + xcodebuild archive → 未签名 IPA
+git push
+# 4) 盯 CI 并把包取到桌面(脚本在服务端仓库)
 bash ../tools/ops/vm-watch-ci37.sh <run-id> <标签> <桌面文件名>
 ```
 
