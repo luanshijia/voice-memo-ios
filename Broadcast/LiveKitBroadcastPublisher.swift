@@ -130,9 +130,15 @@ final class LiveKitBroadcastPublisher: NSObject, RoomDelegate {
             self.ready = false
             self.pending.removeAll(keepingCapacity: false)
         }
-        Task { await currentRoom?.disconnect() }
-        if let currentMeeting {
-            queueAndFlushStop(currentMeeting)
+        // 先持久化停止意图，扩展即使立即退出，主 App 仍可补发。
+        let queued = currentMeeting.map(queueStop) ?? false
+        Task {
+            await currentRoom?.disconnect()
+            // 媒体连接结束后再通知电脑端封住系统声音通道。
+            if queued {
+                do { try await MeetingControlClient.flushPendingBroadcastStop() }
+                catch { self.log("系统声音停止状态同步失败: \(error.localizedDescription)") }
+            }
         }
     }
 
@@ -141,18 +147,23 @@ final class LiveKitBroadcastPublisher: NSObject, RoomDelegate {
         let current = known ?? meeting
         lock.unlock()
         guard let current else { return }
+        guard queueStop(current) else { return }
+        Task {
+            do { try await MeetingControlClient.flushPendingBroadcastStop() }
+            catch { self.log("系统声音停止状态同步失败: \(error.localizedDescription)") }
+        }
+    }
+
+    private func queueStop(_ current: (id: String, url: String, device: String)) -> Bool {
         do {
             try MeetingControlClient.queueBroadcastStop(serverURL: current.url,
                                                         meetingID: current.id,
                                                         deviceID: current.device)
         } catch {
             log("系统声音停止请求保存失败: \(error.localizedDescription)")
-            return
+            return false
         }
-        Task {
-            do { try await MeetingControlClient.flushPendingBroadcastStop() }
-            catch { self.log("系统声音停止状态同步失败: \(error.localizedDescription)") }
-        }
+        return true
     }
 
     private func connect(_ configuration: Configuration) async -> Bool {

@@ -491,18 +491,6 @@ final class SessionModel: ObservableObject {
         isRecording = false
         intent = .notWanted             // 只有用户按停止才清期望
         sessionID = ""                  // 契约:停止即换场,下一场重新生成
-        if !stoppedMeetingID.isEmpty {
-            Task {
-                do {
-                    try await MeetingControlClient.stopChannel(serverURL: stopConfig.url,
-                                                               meetingID: stoppedMeetingID,
-                                                               deviceID: stopConfig.device,
-                                                               channel: "mic")
-                } catch {
-                    self.note("电脑端会议停止状态同步失败: \(error.localizedDescription)")
-                }
-            }
-        }
         partials = []                 // 在飞的部分字幕属于上一场,停止后不该再挂在屏幕上
         syncBoard()
         note("用户停止:推流 \(Int(recordedSeconds))s / 家里识别 \(Int(serverSeconds))s")
@@ -512,9 +500,19 @@ final class SessionModel: ObservableObject {
         let inflight = connecting          // 还没连成的那一次:它自己有世代校验,连成后会作废并断开
         connecting = nil
         pendingDisconnect = Task { [weak self] in
-            guard let self else { return }
             await inflight?.value          // 等它彻底收尾,否则同身份双连会把新会话挤掉
-            if let live { await self.room.disconnect(live) }
+            if let live { await self?.room.disconnect(live) }
+            // 先结束媒体传输，再让电脑端封住该通道；否则 stop 请求可能先到，截掉尾部音频。
+            if !stoppedMeetingID.isEmpty {
+                do {
+                    try await MeetingControlClient.stopChannel(serverURL: stopConfig.url,
+                                                               meetingID: stoppedMeetingID,
+                                                               deviceID: stopConfig.device,
+                                                               channel: "mic")
+                } catch {
+                    self?.note("电脑端会议停止状态同步失败: \(error.localizedDescription)")
+                }
+            }
         }
     }
 
