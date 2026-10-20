@@ -16,6 +16,13 @@ struct MeetingGrant: Decodable {
 }
 
 struct DeviceMeetingView: Decodable {
+    struct PendingReport: Decodable {
+        let meetingID: String
+        let sha256: String
+        enum CodingKeys: String, CodingKey {
+            case meetingID = "meeting_id", sha256
+        }
+    }
     struct Meeting: Decodable {
         struct Channel: Decodable { let status: String }
         let meetingID: String
@@ -33,18 +40,27 @@ struct DeviceMeetingView: Decodable {
     let stateRevision: Int
     let meeting: Meeting?
     let view: Receiver?
+    let pendingReports: [PendingReport]
     enum CodingKeys: String, CodingKey {
         case stateRevision = "state_revision", meeting, view
+        case pendingReports = "pending_reports"
     }
 }
 
 enum MeetingControlClient {
+    private struct PendingStop: Codable {
+        let serverURL: String
+        let meetingID: String
+        let deviceID: String
+        let channel: String
+        let requestID: String
+    }
+    private static let pendingStopKey = "vm.pendingSystemAudioStop"
     static let appGroupID = "group.com.luanshijia.voicememo"
     static let appGroupCandidates = [appGroupID, "group.com.luanshijia.voicememo.458RP2552K"]
     static let defaultServerURL = "wss://100.64.0.2:7443"
     static let defaultDeviceID = "iphone"
     static let defaultUserID = "owner"
-    static let broadcastFile = "broadcast-livekit.json"
 
     static func sharedDefaults() -> UserDefaults? {
         for group in appGroupCandidates where
@@ -192,6 +208,9 @@ enum MeetingControlClient {
     }
 
     static func requestBroadcastGrant() async throws -> MeetingGrant {
+        // A previous ReplayKit process may have been killed before its stop HTTP request finished.
+        // Resolve that stop before starting a new generation of the same channel.
+        try await flushPendingBroadcastStop()
         let registration = try sharedRegistration()
         let identity = registration.deviceID + "-replaykit"
         let grant = try await requestGrant(serverURL: registration.serverURL,
@@ -203,7 +222,8 @@ enum MeetingControlClient {
     }
 
     static func stopChannel(serverURL: String, meetingID: String,
-                            deviceID: String, channel: String) async throws {
+                            deviceID: String, channel: String,
+                            requestID: String = UUID().uuidString.lowercased()) async throws {
         guard UUID(uuidString: meetingID) != nil,
               var components = URLComponents(string: serverURL) else {
             throw failure(7, "停止会议参数无效")
@@ -221,7 +241,7 @@ enum MeetingControlClient {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.setValue(try credential(), forHTTPHeaderField: "X-VM-Device-Token")
             request.httpBody = try JSONSerialization.data(withJSONObject: [
-                "request_id": UUID().uuidString.lowercased(),
+                "request_id": requestID,
                 "device_id": deviceID,
                 "channel": channel
             ])
@@ -233,20 +253,34 @@ enum MeetingControlClient {
         }
     }
 
-    static func storeBroadcastGrant(_ grant: MeetingGrant) throws {
-        guard let container = appGroupCandidates.compactMap({
-            FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: $0)
-        }).first else {
-            throw failure(6, "App Group 不可用，无法交接广播授权")
+    static func queueBroadcastStop(serverURL: String, meetingID: String, deviceID: String) throws {
+        guard let defaults = sharedDefaults() else {
+            throw failure(13, "App Group 不可用，无法保存系统声音停止请求")
         }
-        let payload: [String: Any] = ["url": grant.url,
-                                      "identity": grant.identity,
-                                      "token": grant.token,
-                                      "fetchedAt": Date().timeIntervalSince1970,
-                                      "ttl": grant.ttl,
-                                      "session": grant.meetingID]
-        let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
-        try data.write(to: container.appendingPathComponent(broadcastFile), options: .atomic)
+        if let data = defaults.data(forKey: pendingStopKey),
+           let existing = try? JSONDecoder().decode(PendingStop.self, from: data),
+           existing.meetingID == meetingID && existing.deviceID == deviceID &&
+           existing.channel == "system_audio" {
+            return // Keep the idempotency key across retries and extension shutdown races.
+        }
+        let pending = PendingStop(serverURL: serverURL, meetingID: meetingID,
+                                  deviceID: deviceID, channel: "system_audio",
+                                  requestID: UUID().uuidString.lowercased())
+        defaults.set(try JSONEncoder().encode(pending), forKey: pendingStopKey)
+        defaults.synchronize()
+    }
+
+    static func flushPendingBroadcastStop() async throws {
+        guard let defaults = sharedDefaults(),
+              let data = defaults.data(forKey: pendingStopKey) else { return }
+        let pending = try JSONDecoder().decode(PendingStop.self, from: data)
+        try await stopChannel(serverURL: pending.serverURL, meetingID: pending.meetingID,
+                              deviceID: pending.deviceID, channel: pending.channel,
+                              requestID: pending.requestID)
+        // Another process may have replaced the record while this request was in flight.
+        if defaults.data(forKey: pendingStopKey) == data {
+            defaults.removeObject(forKey: pendingStopKey)
+        }
     }
 
     private static func failure(_ code: Int, _ message: String) -> NSError {

@@ -82,7 +82,6 @@ final class SessionModel: ObservableObject {
     @Published var summaries: [SummaryItem] = []
     @Published private(set) var finalReportText = ""
     @Published private(set) var finalReportMeetingID = ""
-    private var lastArtifactRevision = -1
     @Published var sumMode = "auto"                // auto=自动 5 分钟 / manual=手动 10 分钟
     @Published var sumState = "等待提要…"           // 状态区文案:由家里推来的 sumstatus 驱动
     @Published var sumCode = "wait_period"         // 家里给的判定码:no_session/short/quality/busy_*/go
@@ -167,37 +166,7 @@ final class SessionModel: ObservableObject {
         objectWillChange.send()
     }
 
-    @discardableResult
-    func prepareBroadcast() -> Bool {
-        // 扩展到点就把 token 文件读走删掉,所以这里要反复补;取卡本身有 12 分钟节流。
-        // 但刷新循环是 3 秒一轮、取卡超时 8 秒 ⇒ 上一轮还没回来就会再叠一个 Task:
-        // 并发向家里签多张卡、并发覆盖写同一个 broadcast 文件(先发后到的旧卡可能最后落盘)。
-        // 用 in-flight 去重(2026-10-18 审计)。
-        if broadcastTokenTask != nil { return true }
-        broadcastTokenTask = Task { [weak self] in
-            guard let self else { return }
-            defer { self.broadcastTokenTask = nil }
-            do {
-                if try await self.cfg.prepareBroadcastToken(session: self.sessionID.isEmpty ? nil : self.sessionID) {
-                    self.note("已为 \(self.cfg.broadcastIdentity) 取到发布用门禁卡")
-                }
-            } catch {
-                let now = Date()
-                if now.timeIntervalSince(self.lastBroadcastNote) > 60 {   // 网络断了别每 3 秒刷一条
-                    self.lastBroadcastNote = now
-                    self.note("广播 token 预取失败:\(error.localizedDescription)")
-                }
-            }
-            self.syncTokenStatus()
-        }
-        return true
-    }
-
-    private var broadcastTokenTask: Task<Void, Never>?
-
     private var cfg = LiveKitConfig.load()
-    /// 广播卡取卡失败提示的节流时间(免得离线时每 3 秒刷一条状态)
-    private var lastBroadcastNote = Date.distantPast
     private let room = VoiceRoom()
     private let observerRoom = VoiceRoom()
     private var observerConnection: Room?
@@ -317,11 +286,12 @@ final class SessionModel: ObservableObject {
         cfg.save() // 扩展独立启动时也能从 App Group 读取登记信息
         loadSavedReport()
         Task { [weak self] in await self?.observeDesktop() }
-        _ = prepareBroadcast() // 预先刷新短期 token，保证系统原生选择器可直接启动扩展
     }
 
     private func observeDesktop() async {
         while !Task.isCancelled {
+            // ReplayKit may have exited before its stop request completed.
+            try? await MeetingControlClient.flushPendingBroadcastStop()
             if !isRecording {
                 do {
                     let state = try await MeetingControlClient.deviceView(
@@ -333,9 +303,13 @@ final class SessionModel: ObservableObject {
                             if observerConnection == nil || sessionID != receiver.meetingID {
                                 if let old = observerConnection { await observerRoom.disconnect(old) }
                                 sessionID = receiver.meetingID
-                                observerConnection = try await observerRoom.connect(
-                                    url: receiver.url, token: receiver.token,
-                                    identity: receiver.identity, publishMic: false)
+                                do {
+                                    observerConnection = try await observerRoom.connect(
+                                        url: receiver.url, token: receiver.token,
+                                        identity: receiver.identity, publishMic: false)
+                                } catch {
+                                    note("会议查看连接失败: \(error.localizedDescription)")
+                                }
                                 syncBoard()
                             }
                         } else if let old = observerConnection {
@@ -344,17 +318,16 @@ final class SessionModel: ObservableObject {
                             if !isRecording { sessionID = "" }
                             syncBoard()
                         }
-                        if let meeting = state.meeting, meeting.status == "sealed",
-                           state.stateRevision != lastArtifactRevision {
+                        for pending in state.pendingReports {
                             do {
                                 let artifact = try await MeetingControlClient.fetchArtifact(
-                                    serverURL: cfg.url, meetingID: meeting.meetingID,
+                                    serverURL: cfg.url, meetingID: pending.meetingID,
                                     deviceID: cfg.device)
-                                try storeReport(artifact.data, meetingID: meeting.meetingID)
+                                guard artifact.sha256 == pending.sha256 else { continue }
+                                try storeReport(artifact.data, meetingID: pending.meetingID)
                                 try await MeetingControlClient.acknowledgeArtifact(
-                                    serverURL: cfg.url, meetingID: meeting.meetingID,
+                                    serverURL: cfg.url, meetingID: pending.meetingID,
                                     deviceID: cfg.device, sha256: artifact.sha256)
-                                lastArtifactRevision = state.stateRevision
                                 note("会后报告已保存并回执电脑端")
                             } catch {
                                 // Report generation may still be running; retry on the next poll.
@@ -656,36 +629,6 @@ final class SessionModel: ObservableObject {
         let signature = "\(item)|\(condition.debugName)|派生"
         guard noteSignatures.insert(signature).inserted else { return }
         note("[派生] \(item) \(condition.debugName) · \(detail())")
-    }
-
-    /// 广播卡时效四态:没有卡 / 读不到 / 有效 / 临期 / 过期。
-    /// 剩余时间按卡里记的**服务端 ttl** 算(老卡缺 ttl 才退回 900 秒);"读不到"不再是"已过期"。
-    func syncTokenStatus() {
-        var observed = TtlValue(remaining: 0, present: false)
-        var reason: TtlReason? = nil
-        var detail = ""
-        switch cfg.broadcastCardState() {
-        case .missing:
-            reason = .fetchFailed
-            detail = "还没有卡"
-        case .unreadable:
-            reason = .fetchFailed
-            detail = "卡文件读不出来"
-        case .valid(let remaining):
-            observed = TtlValue(remaining: remaining, present: true)
-            if remaining <= 0 {
-                reason = .expired
-                detail = "卡已过期"
-            } else if remaining <= StatusBoard.broadcastTokenRefreshAt {
-                reason = .expiring
-                detail = "临期,剩余\(Int(remaining))秒"
-            } else {
-                detail = "剩余\(Int(remaining))秒"
-            }
-        }
-        board.broadcastToken = Status(desired: LinkDesired.wanted, observed: observed,
-                                      reason: reason, lastSeen: Date(), generation: connectionGeneration)
-        conditionNote("Ttl.BroadcastToken", board.ttlCondition(), detail: detail)
     }
 
     /// 配置是否可用(能力项 `Cap.Config`):URL 能解析、端口在合法范围。

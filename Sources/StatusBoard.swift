@@ -5,7 +5,7 @@ import Foundation
 ///
 /// 覆盖范围(站 1–4 已全部落地,2026-10-19 核对):`Cap.AppGroup`、`Link.Probe`、`Link.LiveKit`、
 /// `Link.ReplayKit`、`Cap.MicPermission`、`Cap.MicMode`、`Cap.ExtensionEmbedded`、
-/// `Metric.Recorded`/`Received`/`Progress`/`Summary(+Fresh/Round)`、`Ttl.BroadcastToken`、`Cap.Config`、`Cap.Protocol`。
+/// `Metric.Recorded`/`Received`/`Progress`/`Summary(+Fresh/Round)`、`Cap.Config`、`Cap.Protocol`。
 /// 旧注释曾写“只完成站 1”,已过期 —— 站 5(界面全量改读本文件的结论、删旧 `status` 字段)尚未完成。
 
 // MARK: - 值域
@@ -27,13 +27,6 @@ enum MicModeObserved: Equatable { case wide, other, unknownState }
 struct MetricValue: Equatable {
     var value: Double
     var unit: String
-}
-
-/// 时效实况:还能用多久(秒)+ 到底有没有观测到卡。
-/// `present = false` = 没有卡或读不到 —— 这是"观测不到",不是"已过期"。
-struct TtlValue: Equatable {
-    var remaining: TimeInterval
-    var present: Bool
 }
 
 // MARK: - 原因码(只发码,句子在显示层)
@@ -72,14 +65,6 @@ enum MetricReason: String, StatusReason {
     var code: String { rawValue }
 }
 
-enum TtlReason: String, StatusReason {
-    case expiring = "Ttl.Expiring"
-    case expired = "Ttl.Expired"
-    case fetchFailed = "Ttl.FetchFailed"
-
-    var code: String { rawValue }
-}
-
 // MARK: - 面板(每一项一列,五列齐全)
 
 struct StatusBoard {
@@ -100,15 +85,13 @@ struct StatusBoard {
     var extensionEmbedded = Status<LinkDesired, CapObserved, CapReason>(
         desired: .wanted, observed: .unknownState)
 
-    // ---- 站 3:数值三项(录 / 收 / 提要)+ 广播卡时效 ----
+    // ---- 站 3:数值三项(录 / 收 / 提要) ----
     var recorded = Status<LinkDesired, MetricValue, MetricReason>(
         desired: .wanted, observed: MetricValue(value: 0, unit: "秒"))
     var received = Status<LinkDesired, MetricValue, MetricReason>(
         desired: .wanted, observed: MetricValue(value: 0, unit: "秒"))
     var summary = Status<LinkDesired, MetricValue, MetricReason>(
         desired: .wanted, observed: MetricValue(value: 0, unit: "轮"))
-    var broadcastToken = Status<LinkDesired, TtlValue, TtlReason>(
-        desired: .wanted, observed: TtlValue(remaining: 0, present: false))
 
     // ---- 站 4:两个"输入侧"能力 —— 配置是否可用、协议是否落后 ----
     var config = Status<LinkDesired, CapObserved, CapReason>(
@@ -216,11 +199,6 @@ extension StatusBoard {
     static let receivedStaleAfter: TimeInterval = 10
     /// 项定义表 `Metric.Summary`:家里每 60 秒推一次 sumstatus(哪怕这轮不出提要)。
     static let summaryStaleAfter: TimeInterval = 60
-    /// 项定义表 `Ttl.BroadcastToken`:卡 900 秒有效,App 每 720 秒补写一次
-    /// ⇒ 剩余 ≤180 秒算"该刷新了"(unknown),≤0 算"没有可用卡"(failed)。
-    static let broadcastTokenTtl: TimeInterval = 900
-    static let broadcastTokenRefreshAt: TimeInterval = 180
-
     /// 数值类派生:只看新鲜度。数值本身不判好坏 —— 判好坏是显示层的事。
     func metricCondition(_ status: Status<LinkDesired, MetricValue, MetricReason>,
                          staleAfter: TimeInterval, now: Date = Date()) -> Condition {
@@ -247,16 +225,6 @@ extension StatusBoard {
         case .noProgress:   return .unknown
         case .noSession, .insufficient, .quality: return .ok   // 正常业务结论
         }
-    }
-
-    /// 时效类派生(四态):没有卡/读不到 = 观测不到(unknown);有卡但剩余 0 = 已过期(failed);
-    /// 进入刷新窗 = 临期(unknown);否则 ok。
-    func ttlCondition(now: Date = Date()) -> Condition {
-        guard broadcastToken.observed.present else { return .unknown }
-        let remaining = broadcastToken.observed.remaining
-        if remaining <= 0 { return .failed }
-        if remaining <= Self.broadcastTokenRefreshAt { return .unknown }
-        return .ok
     }
 
     // MARK: 站 4 的派生(能力类,判据同 cap)

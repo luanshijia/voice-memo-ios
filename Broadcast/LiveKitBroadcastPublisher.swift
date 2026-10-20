@@ -14,11 +14,6 @@ final class LiveKitBroadcastPublisher: NSObject, RoomDelegate {
         let session: String?
     }
 
-    private static let groupCandidates = [
-        "group.com.luanshijia.voicememo",
-        "group.com.luanshijia.voicememo.458RP2552K",
-    ]
-
     private let log: (String) -> Void
     private let workQueue = DispatchQueue(label: "voicememo.broadcast.audio")
     private let lock = NSLock()
@@ -59,49 +54,45 @@ final class LiveKitBroadcastPublisher: NSObject, RoomDelegate {
     }
 
     func start() {
-        // 主 App 的卡是 12 分钟一张,扩展读到即删(consume once);扩展可能在 App 还没写之前就起来了,
-        // 或者刚好处在两张卡之间。原来一次读不到就 log + return,用户只能停掉重开 —— 改成最多等 10 秒。
+        // A grant creates a desktop channel, so only request it after ReplayKit starts.
         connectionTask = Task { [weak self] in
             guard let self else { return }
-            var configuration = Self.readConfiguration()
-            var waited = 0
-            while configuration == nil && waited < 25 && !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 400_000_000)
-                waited += 1
-                configuration = Self.readConfiguration()
-            }
-            if configuration == nil && !Task.isCancelled {
-                do {
-                    let grant = try await MeetingControlClient.requestBroadcastGrant()
-                    configuration = Configuration(url: grant.url, identity: grant.identity,
-                                                   token: grant.token, session: grant.meetingID)
-                } catch {
-                    self.log("ReplayKit 独立申请会议授权失败: \(error.localizedDescription)")
+            let configuration: Configuration
+            do {
+                let grant = try await MeetingControlClient.requestBroadcastGrant()
+                configuration = Configuration(url: grant.url, identity: grant.identity,
+                                               token: grant.token, session: grant.meetingID)
+                self.lock.lock()
+                let alreadyStopped = self.stopped
+                self.meeting = (grant.meetingID, grant.url,
+                                String(grant.identity.dropLast("-replaykit".count)))
+                self.lock.unlock()
+                if alreadyStopped {
+                    self.queueAndFlushStop()
+                    return
                 }
-            }
-            guard let configuration else {
-                self.log("LiveKit 配置缺失或无效；请从主 App 重新启动广播")
+            } catch {
+                self.log("ReplayKit 独立申请会议授权失败: \(error.localizedDescription)")
                 return
             }
             guard configuration.identity.hasSuffix("-replaykit") else {
                 self.log("LiveKit 配置身份不符合 -replaykit 约定")
+                self.queueAndFlushStop()
                 return
             }
             self.log("LiveKit 正在连接 identity=\(configuration.identity)")
-            // 连接失败不再一次性放弃:App 那边会一直补写新卡,但扩展只在 start() 读一次 ——
-            // 失败就再读一次(读到即删,所以能吃到刚写进来的那张),最多 3 次、间隔 5 秒。
-            var cfg: Configuration? = configuration
+            // Retry this grant briefly; the coordinator channel is closed if all attempts fail.
             var attempt = 0
-            while let current = cfg, attempt < 3, !Task.isCancelled {
+            while attempt < 3, !Task.isCancelled {
                 attempt += 1
-                if await self.connect(current) { return }
+                if await self.connect(configuration) { return }
                 if attempt < 3 {
                     self.log("LiveKit 连接失败,5 秒后重试(第 \(attempt + 1)/3 次)")
                     try? await Task.sleep(nanoseconds: 5_000_000_000)
-                    cfg = Self.readConfiguration()
                 }
             }
             self.log("LiveKit 连接重试 3 次仍失败:本场系统声不会送到家里")
+            self.queueAndFlushStop()
         }
     }
 
@@ -141,16 +132,26 @@ final class LiveKitBroadcastPublisher: NSObject, RoomDelegate {
         }
         Task { await currentRoom?.disconnect() }
         if let currentMeeting {
-            Task {
-                do {
-                    try await MeetingControlClient.stopChannel(serverURL: currentMeeting.url,
-                                                              meetingID: currentMeeting.id,
-                                                              deviceID: currentMeeting.device,
-                                                              channel: "system_audio")
-                } catch {
-                    self.log("系统声音停止状态同步失败: \(error.localizedDescription)")
-                }
-            }
+            queueAndFlushStop(currentMeeting)
+        }
+    }
+
+    private func queueAndFlushStop(_ known: (id: String, url: String, device: String)? = nil) {
+        lock.lock()
+        let current = known ?? meeting
+        lock.unlock()
+        guard let current else { return }
+        do {
+            try MeetingControlClient.queueBroadcastStop(serverURL: current.url,
+                                                        meetingID: current.id,
+                                                        deviceID: current.device)
+        } catch {
+            log("系统声音停止请求保存失败: \(error.localizedDescription)")
+            return
+        }
+        Task {
+            do { try await MeetingControlClient.flushPendingBroadcastStop() }
+            catch { self.log("系统声音停止状态同步失败: \(error.localizedDescription)") }
         }
     }
 
@@ -197,23 +198,6 @@ final class LiveKitBroadcastPublisher: NSObject, RoomDelegate {
             await newRoom.disconnect()
             return false
         }
-    }
-
-    private static func readConfiguration() -> Configuration? {
-        for group in groupCandidates {
-            guard let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: group) else {
-                continue
-            }
-            let url = container.appendingPathComponent("broadcast-livekit.json")
-            guard let data = try? Data(contentsOf: url),
-                  let configuration = try? JSONDecoder().decode(Configuration.self, from: data),
-                  !configuration.url.isEmpty, !configuration.token.isEmpty,
-                  !configuration.identity.isEmpty else { continue }
-            // The short-lived, identity-scoped JWT is consumed once; the API secret never enters the extension.
-            try? FileManager.default.removeItem(at: url)
-            return configuration
-        }
-        return nil
     }
 
     private func publish(_ sampleBuffer: CMSampleBuffer) {
