@@ -24,6 +24,11 @@ struct TranscriptPartial: Identifiable {
 @MainActor
 final class SessionModel: ObservableObject {
     @Published var lines: [TranscriptLine] = []
+    // 补取游标:本场已收到的最大定稿 seq。断线/回前台时按它向电脑端补齐,
+    // 大于它的句子才上屏,所以补取不会与实时消息重复。
+    private var lastFinalSeq = 0
+    private var lastCatchUpAt = Date.distantPast
+    private var catchUpRunning = false
     /// 每个音源各自保留第一遍流式字幕，避免一路定稿清空另一路内容。
     @Published var partials: [TranscriptPartial] = []
     @Published var isRecording = false
@@ -252,6 +257,9 @@ final class SessionModel: ObservableObject {
                     self.note("已补发当前档位 \(self.sumMode)(本场首条定稿后)")
                 }
                 if !text.isEmpty {
+                    if let seq = raw["seq"] as? Int, seq > self.lastFinalSeq {
+                        self.lastFinalSeq = seq
+                    }
                     self.lines.append(TranscriptLine(who: who, source: raw["source"] as? String ?? "",
                                                      text: text, gap: gap, ts: ts))
                     if self.lines.count > 4000 { self.lines.removeFirst(self.lines.count - 4000) }
@@ -420,6 +428,8 @@ final class SessionModel: ObservableObject {
         let generation = connectionGeneration
         lines = []
         partials = []
+        lastFinalSeq = 0                 // 新一场:补取游标归零,首轮补取会立刻拉一次
+        lastCatchUpAt = Date.distantPast
         recordedSeconds = 0
         serverSeconds = 0
         serverBySource = [:]
@@ -551,6 +561,40 @@ final class SessionModel: ObservableObject {
         }
     }
 
+    /// 补取本场已确认、但没收到(或断线期间漏掉)的定稿。
+    /// 按 seq 去重:只有大于游标的句子才上屏,所以与实时消息不会重复。
+    func catchUpNow() async {
+        guard isRecording, !sessionID.isEmpty, !catchUpRunning else { return }
+        catchUpRunning = true
+        defer { catchUpRunning = false }
+        let meeting = sessionID
+        let cursor = lastFinalSeq
+        do {
+            let page = try await MeetingControlClient.fetchTranscript(
+                serverURL: cfg.url, meetingID: meeting, deviceID: cfg.device, after: cursor)
+            guard meeting == sessionID else { return }      // 期间换场:这一页作废
+            if page.truncated == true {
+                note("补取:电脑端只保留了最近若干句,seq \(cursor) 之后可能有缺口")
+            }
+            var added = 0
+            for item in page.items.sorted(by: { $0.seq < $1.seq }) where item.seq > lastFinalSeq {
+                lines.append(TranscriptLine(who: item.who, source: item.source,
+                                            text: item.text, gap: item.gapS, ts: item.ts))
+                lastFinalSeq = item.seq
+                added += 1
+            }
+            if lines.count > 4000 { lines.removeFirst(lines.count - 4000) }
+            lastCatchUpAt = Date()
+            if added > 0 {
+                note("补取 \(added) 句(seq \(cursor) → \(lastFinalSeq))")
+            }
+        } catch {
+            // 断线、家里重启失败都是常态:一行记录即可,不刷屏、不影响推流
+            lastCatchUpAt = Date()
+            note("补取失败:\(error.localizedDescription)")
+        }
+    }
+
     private func startTimer() {
         stopTimer()
         recordedSeconds = 0
@@ -568,6 +612,10 @@ final class SessionModel: ObservableObject {
                 self.conditionNote("Metric.Progress",
                                    self.board.receivedCondition(currentGeneration: self.connectionGeneration),
                                    detail: "收=\(Int(self.serverSeconds))秒")
+                // 每 10 秒补一次:实时消息漏掉的那些(断线、切后台、家里推送失败)在这里补齐。
+                if Date().timeIntervalSince(self.lastCatchUpAt) >= 10 {
+                    Task { await self.catchUpNow() }
+                }
             }
         }
         RunLoop.main.add(t, forMode: .common)

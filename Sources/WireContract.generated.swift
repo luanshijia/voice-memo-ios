@@ -8,6 +8,7 @@ struct WireFieldRule {
     let name: String
     let kind: WireValueKind
     let nullable: Bool
+    let optional: Bool
     let minimum: Double?
     let exclusiveMinimum: Double?
     let allowed: Set<String>?
@@ -24,41 +25,45 @@ enum WireContract {
     static let outboundTypes: Set<String> = [ "summode" ]
     static let knownFields: [String: Set<String>] = [
         "partial": Set<String>(["type", "schema_version", "session_id", "who", "source", "text", "audio_s", "ts"]),
-        "final": Set<String>(["type", "schema_version", "session_id", "who", "source", "text", "audio_s", "gap_s", "ts"]),
+        "final": Set<String>(["type", "schema_version", "session_id", "who", "source", "text", "audio_s", "gap_s", "seq", "ts"]),
         "summary": Set<String>(["type", "schema_version", "session_id", "text", "clock", "ts", "unsupported"]),
         "sumstatus": Set<String>(["type", "schema_version", "session_id", "mode", "code", "text", "chars", "next_in", "ts"]),
         "summode": Set<String>(["type", "schema_version", "session_id", "mode"]),
     ]
     static let sumstatusCodes: Set<String> = [ "no_session", "wait_period", "short", "quality", "busy_prev", "busy_refine", "busy_vram", "busy_cpu", "go" ]
     static let fields: [String: [WireFieldRule]] = [
-        "partial": [WireFieldRule(name: "who", kind: .string, nullable: false, minimum: nil, exclusiveMinimum: nil, allowed: nil),
-            WireFieldRule(name: "source", kind: .string, nullable: false, minimum: nil, exclusiveMinimum: nil, allowed: nil),
-            WireFieldRule(name: "text", kind: .string, nullable: false, minimum: nil, exclusiveMinimum: nil, allowed: nil),
-            WireFieldRule(name: "audio_s", kind: .number, nullable: false, minimum: 0.0, exclusiveMinimum: nil, allowed: nil),
-            WireFieldRule(name: "ts", kind: .number, nullable: false, minimum: nil, exclusiveMinimum: 0.0, allowed: nil)],
-        "final": [WireFieldRule(name: "who", kind: .string, nullable: false, minimum: nil, exclusiveMinimum: nil, allowed: nil),
-            WireFieldRule(name: "source", kind: .string, nullable: false, minimum: nil, exclusiveMinimum: nil, allowed: nil),
-            WireFieldRule(name: "text", kind: .string, nullable: false, minimum: nil, exclusiveMinimum: nil, allowed: nil),
-            WireFieldRule(name: "audio_s", kind: .number, nullable: false, minimum: 0.0, exclusiveMinimum: nil, allowed: nil),
-            WireFieldRule(name: "gap_s", kind: .number, nullable: true, minimum: 0.0, exclusiveMinimum: nil, allowed: nil),
-            WireFieldRule(name: "ts", kind: .number, nullable: false, minimum: nil, exclusiveMinimum: 0.0, allowed: nil)],
-        "summary": [WireFieldRule(name: "text", kind: .string, nullable: false, minimum: nil, exclusiveMinimum: nil, allowed: nil),
-            WireFieldRule(name: "clock", kind: .clock_hm, nullable: false, minimum: nil, exclusiveMinimum: nil, allowed: nil),
-            WireFieldRule(name: "ts", kind: .number, nullable: false, minimum: nil, exclusiveMinimum: 0.0, allowed: nil),
-            WireFieldRule(name: "unsupported", kind: .integer, nullable: false, minimum: 0.0, exclusiveMinimum: nil, allowed: nil)],
-        "sumstatus": [WireFieldRule(name: "mode", kind: .string, nullable: false, minimum: nil, exclusiveMinimum: nil, allowed: ["auto", "manual"]),
-            WireFieldRule(name: "code", kind: .string, nullable: false, minimum: nil, exclusiveMinimum: nil, allowed: nil),
-            WireFieldRule(name: "text", kind: .string, nullable: false, minimum: nil, exclusiveMinimum: nil, allowed: nil),
-            WireFieldRule(name: "chars", kind: .integer, nullable: false, minimum: 0.0, exclusiveMinimum: nil, allowed: nil),
-            WireFieldRule(name: "next_in", kind: .number, nullable: true, minimum: 0.0, exclusiveMinimum: nil, allowed: nil),
-            WireFieldRule(name: "ts", kind: .number, nullable: false, minimum: nil, exclusiveMinimum: 0.0, allowed: nil)],
-        "summode": [WireFieldRule(name: "mode", kind: .string, nullable: false, minimum: nil, exclusiveMinimum: nil, allowed: ["auto", "manual"])],
+        "partial": [WireFieldRule(name: "who", kind: .string, nullable: false, optional: false, minimum: nil, exclusiveMinimum: nil, allowed: nil),
+            WireFieldRule(name: "source", kind: .string, nullable: false, optional: false, minimum: nil, exclusiveMinimum: nil, allowed: nil),
+            WireFieldRule(name: "text", kind: .string, nullable: false, optional: false, minimum: nil, exclusiveMinimum: nil, allowed: nil),
+            WireFieldRule(name: "audio_s", kind: .number, nullable: false, optional: false, minimum: 0.0, exclusiveMinimum: nil, allowed: nil),
+            WireFieldRule(name: "ts", kind: .number, nullable: false, optional: false, minimum: nil, exclusiveMinimum: 0.0, allowed: nil)],
+        "final": [WireFieldRule(name: "who", kind: .string, nullable: false, optional: false, minimum: nil, exclusiveMinimum: nil, allowed: nil),
+            WireFieldRule(name: "source", kind: .string, nullable: false, optional: false, minimum: nil, exclusiveMinimum: nil, allowed: nil),
+            WireFieldRule(name: "text", kind: .string, nullable: false, optional: false, minimum: nil, exclusiveMinimum: nil, allowed: nil),
+            WireFieldRule(name: "audio_s", kind: .number, nullable: false, optional: false, minimum: 0.0, exclusiveMinimum: nil, allowed: nil),
+            WireFieldRule(name: "gap_s", kind: .number, nullable: true, optional: false, minimum: 0.0, exclusiveMinimum: nil, allowed: nil),
+            WireFieldRule(name: "seq", kind: .integer, nullable: false, optional: true, minimum: 1.0, exclusiveMinimum: nil, allowed: nil),
+            WireFieldRule(name: "ts", kind: .number, nullable: false, optional: false, minimum: nil, exclusiveMinimum: 0.0, allowed: nil)],
+        "summary": [WireFieldRule(name: "text", kind: .string, nullable: false, optional: false, minimum: nil, exclusiveMinimum: nil, allowed: nil),
+            WireFieldRule(name: "clock", kind: .clock_hm, nullable: false, optional: false, minimum: nil, exclusiveMinimum: nil, allowed: nil),
+            WireFieldRule(name: "ts", kind: .number, nullable: false, optional: false, minimum: nil, exclusiveMinimum: 0.0, allowed: nil),
+            WireFieldRule(name: "unsupported", kind: .integer, nullable: false, optional: false, minimum: 0.0, exclusiveMinimum: nil, allowed: nil)],
+        "sumstatus": [WireFieldRule(name: "mode", kind: .string, nullable: false, optional: false, minimum: nil, exclusiveMinimum: nil, allowed: ["auto", "manual"]),
+            WireFieldRule(name: "code", kind: .string, nullable: false, optional: false, minimum: nil, exclusiveMinimum: nil, allowed: nil),
+            WireFieldRule(name: "text", kind: .string, nullable: false, optional: false, minimum: nil, exclusiveMinimum: nil, allowed: nil),
+            WireFieldRule(name: "chars", kind: .integer, nullable: false, optional: false, minimum: 0.0, exclusiveMinimum: nil, allowed: nil),
+            WireFieldRule(name: "next_in", kind: .number, nullable: true, optional: false, minimum: 0.0, exclusiveMinimum: nil, allowed: nil),
+            WireFieldRule(name: "ts", kind: .number, nullable: false, optional: false, minimum: nil, exclusiveMinimum: 0.0, allowed: nil)],
+        "summode": [WireFieldRule(name: "mode", kind: .string, nullable: false, optional: false, minimum: nil, exclusiveMinimum: nil, allowed: ["auto", "manual"])],
     ]
 
     static func fieldProblem(type: String, object: [String: Any]) -> String? {
         guard let rules = fields[type] else { return nil }
         for rule in rules {
-            guard let value = object[rule.name] else { return "missing_field:\(rule.name)" }
+            guard let value = object[rule.name] else {
+                if rule.optional { continue }
+                return "missing_field:\(rule.name)"
+            }
             if value is NSNull {
                 if rule.nullable { continue }
                 return "invalid_field:\(rule.name)"

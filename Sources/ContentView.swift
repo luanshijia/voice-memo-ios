@@ -46,6 +46,8 @@ struct ContentView: View {
                 Task {
                     await model.refreshExt()
                     await model.refreshNet()
+                    // 回前台立刻补一次:后台期间漏掉的定稿在这一步补齐(seq 去重,不会重复上屏)
+                    await model.catchUpNow()
                 }
             }
         }

@@ -49,6 +49,27 @@ struct DeviceMeetingView: Decodable {
     }
 }
 
+/// 已确认定稿的补取页:断线或回前台后按 seq 补齐,线上只发实时 final。
+struct TranscriptPage: Decodable {
+    struct Item: Decodable {
+        let seq: Int
+        let who: String
+        let source: String
+        let text: String
+        let audioS: Double
+        let gapS: Double?
+        let ts: Double
+        enum CodingKeys: String, CodingKey {
+            case seq, who, source, text, ts
+            case audioS = "audio_s", gapS = "gap_s"
+        }
+    }
+    let items: [Item]
+    let latest: Int
+    let oldest: Int
+    let truncated: Bool?
+}
+
 enum MeetingControlClient {
     private struct PendingStart: Codable {
         let serverURL: String
@@ -207,6 +228,32 @@ enum MeetingControlClient {
             throw failure(9, "电脑端会议查询失败")
         }
         return try JSONDecoder().decode(DeviceMeetingView.self, from: data)
+    }
+
+    static func fetchTranscript(serverURL: String, meetingID: String, deviceID: String,
+                                after: Int) async throws -> TranscriptPage {
+        guard UUID(uuidString: meetingID) != nil,
+              var components = URLComponents(string: serverURL) else {
+            throw failure(12, "补取地址无效")
+        }
+        components.scheme = components.scheme == "wss" ? "https" : "http"
+        components.path = SessionControlContract.meetingPath(
+            SessionControlContract.transcriptPathTemplate, meetingID)
+        components.queryItems = [URLQueryItem(name: "device_id", value: deviceID),
+                                 URLQueryItem(name: "after", value: String(max(0, after)))]
+        guard let endpoint = components.url else { throw failure(12, "补取地址无效") }
+        var request = URLRequest(url: endpoint)
+        request.setValue(try credential(), forHTTPHeaderField: "X-VM-Device-Token")
+        request.timeoutInterval = 8
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            throw failure(12, "电脑端补取失败")
+        }
+        let page = try JSONDecoder().decode(TranscriptPage.self, from: data)
+        // latest < oldest 只可能来自坏回包;宁可这一轮不补,也不把乱序的字塞进屏幕。
+        guard page.latest >= page.oldest else { throw failure(12, "补取回包不自洽") }
+        return page
     }
 
     static func fetchArtifact(serverURL: String, meetingID: String,
