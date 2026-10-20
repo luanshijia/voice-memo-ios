@@ -12,6 +12,7 @@ final class LiveKitBroadcastPublisher: NSObject, RoomDelegate {
         let identity: String
         let token: String
         let session: String?
+        let generation: Int
     }
 
     private let log: (String) -> Void
@@ -20,7 +21,7 @@ final class LiveKitBroadcastPublisher: NSObject, RoomDelegate {
     private let outputFormat = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1)!
 
     private var room: Room?
-    private var meeting: (id: String, url: String, device: String)?
+    private var meeting: (id: String, url: String, device: String, generation: Int)?
     private var connectionTask: Task<Void, Never>?
     private var stopped = false
     private var ready = false                         // workQueue only
@@ -61,11 +62,13 @@ final class LiveKitBroadcastPublisher: NSObject, RoomDelegate {
             do {
                 let grant = try await MeetingControlClient.requestBroadcastGrant()
                 configuration = Configuration(url: grant.url, identity: grant.identity,
-                                               token: grant.token, session: grant.meetingID)
+                                               token: grant.token, session: grant.meetingID,
+                                               generation: grant.generation)
                 self.lock.lock()
                 let alreadyStopped = self.stopped
                 self.meeting = (grant.meetingID, grant.url,
-                                String(grant.identity.dropLast("-replaykit".count)))
+                                String(grant.identity.dropLast("-replaykit".count)),
+                                grant.generation)
                 self.lock.unlock()
                 if alreadyStopped {
                     self.queueAndFlushStop()
@@ -142,7 +145,8 @@ final class LiveKitBroadcastPublisher: NSObject, RoomDelegate {
         }
     }
 
-    private func queueAndFlushStop(_ known: (id: String, url: String, device: String)? = nil) {
+    private func queueAndFlushStop(_ known: (id: String, url: String, device: String,
+                                             generation: Int)? = nil) {
         lock.lock()
         let current = known ?? meeting
         lock.unlock()
@@ -154,11 +158,13 @@ final class LiveKitBroadcastPublisher: NSObject, RoomDelegate {
         }
     }
 
-    private func queueStop(_ current: (id: String, url: String, device: String)) -> Bool {
+    private func queueStop(_ current: (id: String, url: String, device: String,
+                                        generation: Int)) -> Bool {
         do {
             try MeetingControlClient.queueBroadcastStop(serverURL: current.url,
                                                         meetingID: current.id,
-                                                        deviceID: current.device)
+                                                        deviceID: current.device,
+                                                        generation: current.generation)
         } catch {
             log("系统声音停止请求保存失败: \(error.localizedDescription)")
             return false
@@ -185,7 +191,7 @@ final class LiveKitBroadcastPublisher: NSObject, RoomDelegate {
                 if let session = configuration.session,
                    configuration.identity.hasSuffix("-replaykit") {
                     let device = String(configuration.identity.dropLast("-replaykit".count))
-                    meeting = (session, configuration.url, device)
+                    meeting = (session, configuration.url, device, configuration.generation)
                 }
             }
             lock.unlock()
@@ -196,6 +202,17 @@ final class LiveKitBroadcastPublisher: NSObject, RoomDelegate {
             }
 
             log("LiveKit 已连接并发布音频轨 identity=\(configuration.identity)")
+            if let session = configuration.session {
+                let device = String(configuration.identity.dropLast("-replaykit".count))
+                do {
+                    try await MeetingControlClient.reportObservation(
+                        serverURL: configuration.url, meetingID: session,
+                        deviceID: device, channel: SessionControlContract.systemAudio,
+                        generation: configuration.generation, observed: "publishing")
+                } catch {
+                    log("系统声音采集状态待同步: \(error.localizedDescription)")
+                }
+            }
             workQueue.async {
                 self.ready = true
                 self.overflowLogged = false

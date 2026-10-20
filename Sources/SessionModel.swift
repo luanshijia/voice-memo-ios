@@ -178,6 +178,7 @@ final class SessionModel: ObservableObject {
     /// 连接世代号:每次 start/stop 都 +1。在飞的连接 Task 完成前先核对自己是不是最新一代,
     /// 不是就自己断开、不回写任何 UI —— 否则"连接中点停止再点开始"会让旧 Task 把状态翻回失败。
     private var connectionGeneration = 0
+    private var serverGeneration = 0
     /// 这一代真正连上的 Room 实例。断开时只断它 —— 旧任务迟到完成不许碰新会话。
     private var connection: Room?
     /// 正在取卡/连接的那一次(此时 connection 还是 nil)。stop() 必须等它收尾,
@@ -292,6 +293,7 @@ final class SessionModel: ObservableObject {
         while !Task.isCancelled {
             // ReplayKit may have exited before its stop request completed.
             try? await MeetingControlClient.flushPendingBroadcastStop()
+            try? await MeetingControlClient.flushPendingMicStop()
             if !isRecording {
                 do {
                     let state = try await MeetingControlClient.deviceView(
@@ -433,6 +435,7 @@ final class SessionModel: ObservableObject {
         isRecording = true
         intent = .wanted
         sessionID = ""                               // 会议号由电脑总管创建并在授权回包中返回
+        serverGeneration = 0
         livekEndReason = nil           // 新一代:上一代"被动结束"的原因作废
         noteSignatures = []
         syncBoard()
@@ -449,20 +452,34 @@ final class SessionModel: ObservableObject {
                 await observerRoom.disconnect(observing)
             }
             var grantedMeetingID: String?
+            var grantedServerGeneration = 0
             do {
-                let card = try await cfg.requestToken(identity: cfg.identity, channel: "mic")
+                try await MeetingControlClient.flushPendingMicStop()
+                let card = try await cfg.requestToken(identity: cfg.identity,
+                                                      channel: SessionControlContract.mic)
                 grantedMeetingID = card.meetingID
+                grantedServerGeneration = card.generation
                 let live = try await room.connect(url: card.url, token: card.token, identity: cfg.identity)
                 guard generation == self.connectionGeneration else {   // 这一轮已被停止/重开取代
                     await self.room.disconnect(live)                   // 只断自己这条,不碰新会话
                     try? await MeetingControlClient.stopChannel(serverURL: cfg.url,
                                                                  meetingID: card.meetingID,
                                                                  deviceID: cfg.device,
-                                                                 channel: "mic")
+                                                                 channel: SessionControlContract.mic,
+                                                                 generation: card.generation)
                     return
                 }
                 self.sessionID = card.meetingID
+                self.serverGeneration = card.generation
                 self.connection = live
+                do {
+                    try await MeetingControlClient.reportObservation(
+                        serverURL: cfg.url, meetingID: card.meetingID,
+                        deviceID: cfg.device, channel: SessionControlContract.mic,
+                        generation: card.generation, observed: "publishing")
+                } catch {
+                    self.note("手机采集状态待同步: \(error.localizedDescription)")
+                }
                 await room.send(self.summodePayload(self.sumMode))   // 让家里跟上本机档位
                 self.startTimer()
                 self.syncBoard()
@@ -472,7 +489,8 @@ final class SessionModel: ObservableObject {
                     try? await MeetingControlClient.stopChannel(serverURL: cfg.url,
                                                                  meetingID: grantedMeetingID,
                                                                  deviceID: cfg.device,
-                                                                 channel: "mic")
+                                                                 channel: SessionControlContract.mic,
+                                                                 generation: grantedServerGeneration)
                 }
                 guard generation == self.connectionGeneration else { return }
                 self.note("连接异常:\(error.localizedDescription)")
@@ -486,11 +504,23 @@ final class SessionModel: ObservableObject {
     private func stop() {
         let stoppedMeetingID = sessionID
         let stopConfig = cfg
+        let stoppedGeneration = serverGeneration
+        if !stoppedMeetingID.isEmpty {
+            do {
+                try MeetingControlClient.queueMicStop(serverURL: stopConfig.url,
+                                                      meetingID: stoppedMeetingID,
+                                                      deviceID: stopConfig.device,
+                                                      generation: stoppedGeneration)
+            } catch {
+                note("停止意图保存失败: \(error.localizedDescription)")
+            }
+        }
         connectionGeneration += 1     // 在飞的连接尝试作废,不许它稍后回写状态
         stopTimer()
         isRecording = false
         intent = .notWanted             // 只有用户按停止才清期望
         sessionID = ""                  // 契约:停止即换场,下一场重新生成
+        serverGeneration = 0
         partials = []                 // 在飞的部分字幕属于上一场,停止后不该再挂在屏幕上
         syncBoard()
         note("用户停止:推流 \(Int(recordedSeconds))s / 家里识别 \(Int(serverSeconds))s")
@@ -505,10 +535,7 @@ final class SessionModel: ObservableObject {
             // 先结束媒体传输，再让电脑端封住该通道；否则 stop 请求可能先到，截掉尾部音频。
             if !stoppedMeetingID.isEmpty {
                 do {
-                    try await MeetingControlClient.stopChannel(serverURL: stopConfig.url,
-                                                               meetingID: stoppedMeetingID,
-                                                               deviceID: stopConfig.device,
-                                                               channel: "mic")
+                    try await MeetingControlClient.flushPendingMicStop()
                 } catch {
                     self?.note("电脑端会议停止状态同步失败: \(error.localizedDescription)")
                 }

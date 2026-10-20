@@ -2,13 +2,13 @@
 
 VoiceMemo iOS 是会议录音客户端。主 App 采集麦克风音频；用户可手动启动 ReplayKit 广播扩展采集符合 iOS 录制规则的系统播放音频。两路分别加入家里的 LiveKit 房间，电脑端负责识别、归档与会后纪要。
 
-音频和转写数据发往用户自己的 Windows 主机。App 源码不包含 LiveKit 长期 key/secret；连接前通过 TLS 代理 `/token` 获取短期票据。字段与场次规则以 [`../notes/契约-App与电脑端.md`](../notes/契约-App与电脑端.md) 为准。
+音频和转写数据发往用户自己的 Windows 主机。App 源码不包含 LiveKit 长期 key/secret；已登记设备经 TLS 代理 `/v1/meetings/start` 申请电脑端签发的会议号和短期票据。实时消息与会议控制的正本分别在电脑端仓库的 `contracts/wire-v2.json`、`contracts/session-control-v1.json`。
 
 ## 当前代码基线
 
-- 当前源码版本：`0.9.18 / build 86`，收发两端均由电脑端 `contracts/wire-v2.json` 生成的 `WireContract.generated.swift` 校验；最终 CI/IPA 结果以对应 GitHub Actions 运行为准。
+- 当前待编译源码版本：`0.9.20 / build 89`。实时消息校验器与控制接口常量分别由电脑端 `wire-v2.json`、`session-control-v1.json` 生成；本轮源码尚未通过 Mac CI 或真机检查。
 - 最近一个已核验 IPA：build 86，GitHub Actions `39196411913`，源码提交 `7237250`；产物 `dist/ci-build86-wire-contract/VoiceMemo-unsigned-ipa/VoiceMemo-unsigned.ipa`，SHA-256：`A061201E93EE1E30809ED7C5FCC3FEA0682F7C413429F7C1A00480CBEC8A1494`。主 App 与 ReplayKit 扩展均为 `0.9.18 / 86`。这是编译与打包验证，不是设备安装或真机验收。
-- 字段、方向、版本和类型范围以电脑端机器正本生成 App 校验器；build86 已通过 CI 编译与打包，尚未做真机验收。
+- build 88 的 Mac CI 曾编译成功，但不验证本轮 build 89 源码；用户已将打包交给 Hermes，本轮不下载 IPA。所有 V2 正式设备项目仍为“待检测”。
 - 当前主界面：五个顶部控制按钮、第一遍/定稿字幕、会中提要面板（档位、状态和要点）及底部状态栏。
 - 收包端按消息类型校验必填字段和类型；schema 整数采用跨端安全范围，`summary.clock` 只接受 ASCII `HH:mm`。
 - tag 或 CI 编译成功都不能代替真机运行验收。当前包和 CI 状态以 GitHub Actions 实际结果为准。

@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 /// Shared control contract for the main App and ReplayKit extension.
 /// The computer creates the meeting id and returns it with the media grant.
@@ -8,9 +9,10 @@ struct MeetingGrant: Decodable {
     let identity: String
     let ttl: Int
     let meetingID: String
+    let generation: Int
 
     enum CodingKeys: String, CodingKey {
-        case url, token, identity, ttl
+        case url, token, identity, ttl, generation
         case meetingID = "meeting_id"
     }
 }
@@ -54,8 +56,10 @@ enum MeetingControlClient {
         let deviceID: String
         let channel: String
         let requestID: String
+        let generation: Int?
     }
     private static let pendingStopKey = "vm.pendingSystemAudioStop"
+    private static let pendingMicStopKey = "vm.pendingMicStop"
     static let appGroupID = "group.com.luanshijia.voicememo"
     static let appGroupCandidates = [appGroupID, "group.com.luanshijia.voicememo.458RP2552K"]
     static let defaultServerURL = "wss://100.64.0.2:7443"
@@ -86,7 +90,7 @@ enum MeetingControlClient {
             throw failure(2, "连接地址不合法: \(serverURL)")
         }
         components.scheme = components.scheme == "wss" ? "https" : "http"
-        components.path = "/v1/meetings/start"
+        components.path = SessionControlContract.startPath
         components.queryItems = [URLQueryItem(name: "identity", value: identity),
                                  URLQueryItem(name: "ttl", value: String(ttl))]
         guard let endpoint = components.url else {
@@ -123,10 +127,38 @@ enum MeetingControlClient {
               let mediaURL = URL(string: grant.url),
               ["ws", "wss"].contains(mediaURL.scheme ?? ""),
               mediaURL.host?.caseInsensitiveCompare(configuredHost) == .orderedSame,
-              grant.ttl > 0, grant.ttl <= 24 * 3600 else {
+              grant.ttl > 0, grant.ttl <= 24 * 3600,
+              grant.generation > 0 else {
             throw failure(5, "会议授权回包身份、会议号、地址或有效期无效")
         }
         return grant
+    }
+
+    static func reportObservation(serverURL: String, meetingID: String, deviceID: String,
+                                  channel: String, generation: Int,
+                                  observed: String) async throws {
+        guard UUID(uuidString: meetingID) != nil,
+              generation > 0, var components = URLComponents(string: serverURL) else {
+            throw failure(14, "采集状态参数无效")
+        }
+        components.scheme = components.scheme == "wss" ? "https" : "http"
+        components.path = SessionControlContract.meetingPath(
+            SessionControlContract.observePathTemplate, meetingID)
+        components.queryItems = nil
+        guard let endpoint = components.url else { throw failure(14, "采集状态地址无效") }
+        var request = URLRequest(url: endpoint)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(try credential(), forHTTPHeaderField: "X-VM-Device-Token")
+        request.httpBody = try JSONSerialization.data(withJSONObject: [
+            "device_id": deviceID, "channel": channel,
+            "generation": generation, "observed": observed
+        ])
+        request.timeoutInterval = 8
+        let (_, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            throw failure(14, "电脑端未确认采集状态")
+        }
     }
 
     static func sharedRegistration() throws -> (serverURL: String, deviceID: String, userID: String) {
@@ -145,7 +177,8 @@ enum MeetingControlClient {
             throw failure(9, "设备查询地址无效")
         }
         components.scheme = components.scheme == "wss" ? "https" : "http"
-        components.path = "/v1/devices/\(deviceID)/meeting"
+        components.path = SessionControlContract.devicePath(
+            SessionControlContract.deviceViewPathTemplate, deviceID)
         components.queryItems = nil
         guard let endpoint = components.url else { throw failure(9, "设备查询地址无效") }
         var request = URLRequest(url: endpoint)
@@ -166,7 +199,8 @@ enum MeetingControlClient {
             throw failure(11, "报告地址无效")
         }
         components.scheme = components.scheme == "wss" ? "https" : "http"
-        components.path = "/v1/meetings/\(meetingID)/artifact"
+        components.path = SessionControlContract.meetingPath(
+            SessionControlContract.artifactPathTemplate, meetingID)
         components.queryItems = [URLQueryItem(name: "device_id", value: deviceID)]
         guard let endpoint = components.url else { throw failure(11, "报告地址无效") }
         var request = URLRequest(url: endpoint)
@@ -177,7 +211,12 @@ enum MeetingControlClient {
               let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               object["meeting_id"] as? String == meetingID,
               let sha256 = object["sha256"] as? String, sha256.count == 64,
-              object["report"] is [String: Any] else {
+              let report = object["report"] as? [String: Any],
+              let encoded = object["report_json_base64"] as? String,
+              let reportBytes = Data(base64Encoded: encoded),
+              let verifiedReport = try? JSONSerialization.jsonObject(with: reportBytes) as? [String: Any],
+              NSDictionary(dictionary: verifiedReport).isEqual(to: report),
+              SHA256.hash(data: reportBytes).map({ String(format: "%02x", $0) }).joined() == sha256 else {
             throw failure(11, "报告尚未生成或回包无效")
         }
         return (sha256, data)
@@ -190,7 +229,8 @@ enum MeetingControlClient {
             throw failure(12, "报告回执地址无效")
         }
         components.scheme = components.scheme == "wss" ? "https" : "http"
-        components.path = "/v1/meetings/\(meetingID)/artifact/ack"
+        components.path = SessionControlContract.meetingPath(
+            SessionControlContract.artifactAckPathTemplate, meetingID)
         components.queryItems = nil
         guard let endpoint = components.url else { throw failure(12, "报告回执地址无效") }
         var request = URLRequest(url: endpoint)
@@ -217,22 +257,25 @@ enum MeetingControlClient {
                                            identity: identity,
                                            userID: registration.userID,
                                            deviceID: registration.deviceID,
-                                           channel: "system_audio")
+                                           channel: SessionControlContract.systemAudio)
         return grant
     }
 
     static func stopChannel(serverURL: String, meetingID: String,
                             deviceID: String, channel: String,
+                            generation: Int? = nil,
                             requestID: String = UUID().uuidString.lowercased()) async throws {
         guard UUID(uuidString: meetingID) != nil,
               var components = URLComponents(string: serverURL) else {
             throw failure(7, "停止会议参数无效")
         }
         components.scheme = components.scheme == "wss" ? "https" : "http"
-        components.path = "/v1/meetings/\(meetingID)/stop"
+        components.path = SessionControlContract.meetingPath(
+            SessionControlContract.stopPathTemplate, meetingID)
         components.queryItems = nil
         guard let endpoint = components.url else { throw failure(7, "停止会议地址无效") }
-        guard channel == "mic" || channel == "system_audio" else {
+        guard channel == SessionControlContract.mic ||
+              channel == SessionControlContract.systemAudio else {
             throw failure(7, "采集通道无效")
         }
         do {
@@ -240,11 +283,13 @@ enum MeetingControlClient {
             request.httpMethod = "POST"
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.setValue(try credential(), forHTTPHeaderField: "X-VM-Device-Token")
-            request.httpBody = try JSONSerialization.data(withJSONObject: [
+            var payload: [String: Any] = [
                 "request_id": requestID,
                 "device_id": deviceID,
                 "channel": channel
-            ])
+            ]
+            if let generation { payload["generation"] = generation }
+            request.httpBody = try JSONSerialization.data(withJSONObject: payload)
             request.timeoutInterval = 8
             let (_, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
@@ -253,33 +298,60 @@ enum MeetingControlClient {
         }
     }
 
-    static func queueBroadcastStop(serverURL: String, meetingID: String, deviceID: String) throws {
+    static func queueBroadcastStop(serverURL: String, meetingID: String, deviceID: String,
+                                   generation: Int) throws {
+        try queueStop(serverURL: serverURL, meetingID: meetingID,
+                      deviceID: deviceID, channel: SessionControlContract.systemAudio,
+                      generation: generation,
+                      key: pendingStopKey)
+    }
+
+    static func queueMicStop(serverURL: String, meetingID: String, deviceID: String,
+                             generation: Int) throws {
+        try queueStop(serverURL: serverURL, meetingID: meetingID,
+                      deviceID: deviceID, channel: SessionControlContract.mic,
+                      generation: generation,
+                      key: pendingMicStopKey)
+    }
+
+    private static func queueStop(serverURL: String, meetingID: String, deviceID: String,
+                                  channel: String, generation: Int, key: String) throws {
         guard let defaults = sharedDefaults() else {
-            throw failure(13, "App Group 不可用，无法保存系统声音停止请求")
+            throw failure(13, "App Group 不可用，无法保存停止请求")
         }
-        if let data = defaults.data(forKey: pendingStopKey),
+        if let data = defaults.data(forKey: key),
            let existing = try? JSONDecoder().decode(PendingStop.self, from: data),
            existing.meetingID == meetingID && existing.deviceID == deviceID &&
-           existing.channel == "system_audio" {
+           existing.channel == channel && existing.generation == generation {
             return // Keep the idempotency key across retries and extension shutdown races.
         }
         let pending = PendingStop(serverURL: serverURL, meetingID: meetingID,
-                                  deviceID: deviceID, channel: "system_audio",
-                                  requestID: UUID().uuidString.lowercased())
-        defaults.set(try JSONEncoder().encode(pending), forKey: pendingStopKey)
+                                  deviceID: deviceID, channel: channel,
+                                  requestID: UUID().uuidString.lowercased(),
+                                  generation: generation)
+        defaults.set(try JSONEncoder().encode(pending), forKey: key)
         defaults.synchronize()
     }
 
     static func flushPendingBroadcastStop() async throws {
+        try await flushPendingStop(key: pendingStopKey)
+    }
+
+    static func flushPendingMicStop() async throws {
+        try await flushPendingStop(key: pendingMicStopKey)
+    }
+
+    private static func flushPendingStop(key: String) async throws {
         guard let defaults = sharedDefaults(),
-              let data = defaults.data(forKey: pendingStopKey) else { return }
+              let data = defaults.data(forKey: key) else { return }
         let pending = try JSONDecoder().decode(PendingStop.self, from: data)
         try await stopChannel(serverURL: pending.serverURL, meetingID: pending.meetingID,
                               deviceID: pending.deviceID, channel: pending.channel,
+                              generation: pending.generation,
                               requestID: pending.requestID)
         // Another process may have replaced the record while this request was in flight.
-        if defaults.data(forKey: pendingStopKey) == data {
-            defaults.removeObject(forKey: pendingStopKey)
+        if defaults.data(forKey: key) == data {
+            defaults.removeObject(forKey: key)
         }
     }
 

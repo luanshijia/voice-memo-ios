@@ -18,8 +18,9 @@
 | `Sources/ContentView.swift` | 当前主界面:顶部 5 个按钮、第一遍/定稿字幕、会中提要面板与贴底状态栏 |
 | `Sources/SessionModel.swift` | 会话与状态模型:连接、计时、`summode` 上行、服务端消息分发与字段诊断 |
 | `Sources/VoiceRoom.swift` | LiveKit 连接与数据通道;收包按契约校验版本、必填字段、类型及范围,错误消息记诊断后丢弃 |
-| `Sources/LiveKitConfig.swift` | 连接参数与短期 token 请求;App 不持有 LiveKit 长期 key/secret,请求包含 identity、ttl,录音时包含 session UUID |
-| `Broadcast/` | ReplayKit 广播扩展,与主 App 使用同一个场次 UUID 取卡并发布系统播放音频 |
+| `Sources/LiveKitConfig.swift`、`Shared/MeetingControlClient.swift` | 设备登记信息、会议申请、短期票据、停止与报告回执；会议 UUID 由电脑端签发 |
+| `Shared/SessionControl.generated.swift` | 从电脑端 `contracts/session-control-v1.json` 生成的控制路径与通道常量，不手改 |
+| `Broadcast/` | ReplayKit 广播扩展，独立申请系统声音通道并加入电脑端当前会议 |
 | `Sources/NetProbe.swift`、`Sources/BroadcastProbe.swift` | 网络、App Group 与广播扩展状态探针 |
 
 ## 怎么出包(唯一路径:CI)
@@ -39,8 +40,8 @@ bash ../tools/ops/vm-watch-ci37.sh <run-id> <标签> <桌面文件名>
 
 - **不做识别、不做纪要**:App 只负责采集、推流、显示。
 - **主链路(推流 / 字幕 / 断线重连 / 数据协议)的改动要先给方案、经批准再动手**;改完必须真机验证,CI 通过 ≠ 能用。
-- **不要把真密钥写进源码**:App 通过 TLS 代理 `/token` 请求短期票据;服务端长期凭据只存在 `secrets/livekit.json`。
-- **共同契约**:`../notes/契约-App与电脑端.md` 是网线协议正本。当前协议为 v2;整数范围、ASCII `clock`、每种消息必填字段必须与电脑端 `agent/vmcore/contracts.py` 对齐。`sumstatus.code` 刻意由 App 前向兼容,未知码不能整条丢弃。
+- **不要把真密钥写进源码**：App 保存本机设备凭据，经 TLS 代理 `/v1/meetings/start` 请求短期票据；LiveKit 长期凭据只存在电脑端 `secrets/livekit.json`。
+- **共同契约**：实时消息以电脑端 `contracts/wire-v2.json` 为正本，会议控制以 `contracts/session-control-v1.json` 为正本；Swift 生成文件由电脑端工具生成并经离线门禁核对。`sumstatus.code` 刻意由 App 前向兼容,未知码不能整条丢弃。
 - **界面几何保持一致**:同一排按钮等高同圆角;改文案不要连带改版式。
 - 版本号只改 `project.yml`,不要手改生成出来的 `.xcodeproj`。
 
