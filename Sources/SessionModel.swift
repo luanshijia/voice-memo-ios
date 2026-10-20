@@ -462,11 +462,15 @@ final class SessionModel: ObservableObject {
                 let live = try await room.connect(url: card.url, token: card.token, identity: cfg.identity)
                 guard generation == self.connectionGeneration else {   // 这一轮已被停止/重开取代
                     await self.room.disconnect(live)                   // 只断自己这条,不碰新会话
-                    try? await MeetingControlClient.stopChannel(serverURL: cfg.url,
-                                                                 meetingID: card.meetingID,
-                                                                 deviceID: cfg.device,
-                                                                 channel: SessionControlContract.mic,
-                                                                 generation: card.generation)
+                    do {
+                        try MeetingControlClient.queueMicStop(serverURL: cfg.url,
+                                                              meetingID: card.meetingID,
+                                                              deviceID: cfg.device,
+                                                              generation: card.generation)
+                        try await MeetingControlClient.flushPendingMicStop()
+                    } catch {
+                        self.note("迟到的会议授权停止待同步: \(error.localizedDescription)")
+                    }
                     return
                 }
                 self.sessionID = card.meetingID
@@ -486,11 +490,15 @@ final class SessionModel: ObservableObject {
             } catch {
                 // VoiceRoom.connect 失败时已自行断开这条连接,这里只回写 UI
                 if let grantedMeetingID {
-                    try? await MeetingControlClient.stopChannel(serverURL: cfg.url,
-                                                                 meetingID: grantedMeetingID,
-                                                                 deviceID: cfg.device,
-                                                                 channel: SessionControlContract.mic,
-                                                                 generation: grantedServerGeneration)
+                    do {
+                        try MeetingControlClient.queueMicStop(serverURL: cfg.url,
+                                                              meetingID: grantedMeetingID,
+                                                              deviceID: cfg.device,
+                                                              generation: grantedServerGeneration)
+                        try await MeetingControlClient.flushPendingMicStop()
+                    } catch {
+                        self.note("连接失败后的会议停止待同步: \(error.localizedDescription)")
+                    }
                 }
                 guard generation == self.connectionGeneration else { return }
                 self.note("连接异常:\(error.localizedDescription)")
