@@ -10,19 +10,22 @@ struct MeetingContext: Equatable {
     let meeting: AppSharedContract.MeetingState?
     let mic: AppSharedContract.ChannelState?
     let systemAudio: AppSharedContract.ChannelState?
+    let systemAudioGeneration: Int?
     let pendingReports: Int
     let revision: Int
 
     static let empty = MeetingContext(meetingID: nil, meeting: nil, mic: nil,
-                                      systemAudio: nil, pendingReports: 0, revision: 0)
+                                      systemAudio: nil, systemAudioGeneration: nil,
+                                      pendingReports: 0, revision: 0)
 
     private init(meetingID: String?, meeting: AppSharedContract.MeetingState?,
                  mic: AppSharedContract.ChannelState?, systemAudio: AppSharedContract.ChannelState?,
-                 pendingReports: Int, revision: Int) {
+                 systemAudioGeneration: Int?, pendingReports: Int, revision: Int) {
         self.meetingID = meetingID
         self.meeting = meeting
         self.mic = mic
         self.systemAudio = systemAudio
+        self.systemAudioGeneration = systemAudioGeneration
         self.pendingReports = pendingReports
         self.revision = revision
     }
@@ -34,6 +37,9 @@ struct MeetingContext: Equatable {
         self.mic = (meeting?.channels["mic"]?.status).flatMap { AppSharedContract.channelState($0) }
         self.systemAudio = (meeting?.channels["system_audio"]?.status)
             .flatMap { AppSharedContract.channelState($0) }
+        // A channel without a generation is malformed V2 evidence: 0 forces
+        // the probe comparison to stay unknown instead of trusting an old line.
+        self.systemAudioGeneration = meeting?.channels["system_audio"].map { $0.generation ?? 0 }
         self.pendingReports = view.pendingReports.count
         self.revision = view.stateRevision
     }

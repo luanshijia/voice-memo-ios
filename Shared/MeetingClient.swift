@@ -26,7 +26,10 @@ struct DeviceMeetingView: Decodable {
         }
     }
     struct Meeting: Decodable {
-        struct Channel: Decodable { let status: String }
+        struct Channel: Decodable {
+            let status: String
+            let generation: Int?
+        }
         let meetingID: String
         let status: String
         let channels: [String: Channel]

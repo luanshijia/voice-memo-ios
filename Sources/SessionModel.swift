@@ -737,7 +737,9 @@ final class SessionModel: ObservableObject {
     /// `desired` 取自扩展日志里的「=== 扩展启动 / 结束」标记 —— 那是**用户动作的记录**,
     /// 不是从失败结果倒推;所以这里既不猜也不越权。
     func refreshExt() async {
-        let status = await BroadcastProbe.status()
+        let status = await BroadcastProbe.status(
+            expectedMeetingID: meetingContext.meetingID,
+            expectedGeneration: meetingContext.systemAudioGeneration)
         broadcastAlive = status.isActive
 
         let generation = connectionGeneration

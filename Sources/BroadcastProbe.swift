@@ -116,7 +116,8 @@ enum BroadcastProbe {
     }
 
     /// 只解读最新一条结构化观测。
-    static func status() async -> Status {
+    static func status(expectedMeetingID: String? = nil,
+                       expectedGeneration: Int? = nil) async -> Status {
         guard let url = containerURL()?.appendingPathComponent(fileName) else {
             return Status(phase: .stopped, isActive: false, appFrames: 0, reason: nil)
         }
@@ -130,6 +131,12 @@ enum BroadcastProbe {
                           isActive: false, appFrames: 0, reason: nil)
         }
         guard let observation = SharedObservation.parse(latest) else {
+            return Status(phase: .unknown, isActive: false, appFrames: 0, reason: nil)
+        }
+        if let expectedMeetingID, observation.meetingID != expectedMeetingID {
+            return Status(phase: .unknown, isActive: false, appFrames: 0, reason: nil)
+        }
+        if let expectedGeneration, observation.generation != expectedGeneration {
             return Status(phase: .unknown, isActive: false, appFrames: 0, reason: nil)
         }
         let heartbeatAge = Date().timeIntervalSince(observation.at)
