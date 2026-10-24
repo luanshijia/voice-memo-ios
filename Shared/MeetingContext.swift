@@ -105,11 +105,14 @@ struct MeetingContext: Equatable {
 
     // MARK: - 对本机事实的账(与右列的总管状态并列,不合并)
 
-    /// 本机此刻「想继续、但没在采」= 断线/连接失败后的真实处位。
+    /// 本机此刻「想继续、但没在采或网络不通」= 断线/连接失败后的真实处位。
     /// 这不是总管状态:总管那边可能还记着 `active`(要等观察宽限才转待确认)。
     /// 两个来源分列,差集本身就是要显示的信号 —— 合并成一个值就永远判不出来。
-    static func isDetached(wantsToContinue: Bool, recording: Bool) -> Bool {
-        wantsToContinue && !recording
+    /// `recording` 只在 SDK 报 `.disconnected` 才翻转,而 SDK 断网后会长时间停在
+    /// `.reconnecting` 重试、不判死 —— 只读它,断网几分钟按钮都进不了岔路(真机实测)。
+    /// 所以直接收本机探测的 `networkOK`(每 6 秒一次):不通就是断联,不必等 SDK。
+    static func isDetached(wantsToContinue: Bool, recording: Bool, networkOK: Bool?) -> Bool {
+        wantsToContinue && (networkOK == false || !recording)
     }
 
     /// 总管允许带号恢复的三格。`finishing` 不在内:总管回 `recovery_meeting_closed`。
@@ -123,7 +126,7 @@ struct MeetingContext: Equatable {
     /// `networkOK` 是本机事实(探测结果);nil = 没测过/不知道 —— 按「发不出去」处理,
     /// 因为可点必须等于「点下去能成」,不是「这个动作有意义」。
     func canReconnect(wantsToContinue: Bool, recording: Bool, networkOK: Bool?) -> Bool {
-        guard Self.isDetached(wantsToContinue: wantsToContinue, recording: recording),
+        guard Self.isDetached(wantsToContinue: wantsToContinue, recording: recording, networkOK: networkOK),
               meetingAcceptsRecovery, isFresh(), networkOK == true else { return false }
         guard let deadline = recoveryDeadline else { return true }
         return Date() < deadline
@@ -136,16 +139,16 @@ struct MeetingContext: Equatable {
         !meetingAcceptsRecovery
     }
 
-    /// 此刻是否走在「断联岔路」上(想继续、本机没在采、总管还记着这场会)。
+    /// 此刻是否走在「断联岔路」上(想继续、本机没在采或网络不通、总管还记着这场会)。
     /// 它只决定界面上这个动作**是否属于当前这条路**,不决定能不能点。
-    func isDetachedBranch(wantsToContinue: Bool, recording: Bool) -> Bool {
-        hasOpenMeeting && Self.isDetached(wantsToContinue: wantsToContinue, recording: recording)
+    func isDetachedBranch(wantsToContinue: Bool, recording: Bool, networkOK: Bool?) -> Bool {
+        hasOpenMeeting && Self.isDetached(wantsToContinue: wantsToContinue, recording: recording, networkOK: networkOK)
     }
 
     /// 「主动终止」:只在断线岔路上成立,而且必须**发得出去**才能点。
     /// 发不出去时它仍显示(半透明蓝),因为这条路只剩它;但点不动。
     func canTerminate(wantsToContinue: Bool, recording: Bool, networkOK: Bool?) -> Bool {
-        isDetachedBranch(wantsToContinue: wantsToContinue, recording: recording)
+        isDetachedBranch(wantsToContinue: wantsToContinue, recording: recording, networkOK: networkOK)
             && networkOK == true
     }
 
@@ -154,7 +157,7 @@ struct MeetingContext: Equatable {
     /// 「本机事实 + 总管状态」翻成人话,不发明新结论。
     func blockReason(wantsToContinue: Bool, recording: Bool, networkOK: Bool?) -> String? {
         guard hasOpenMeeting else { return nil }
-        if isDetachedBranch(wantsToContinue: wantsToContinue, recording: recording),
+        if isDetachedBranch(wantsToContinue: wantsToContinue, recording: recording, networkOK: networkOK),
            networkOK != true {
             return "现在连不上电脑端,等网络恢复再点"
         }

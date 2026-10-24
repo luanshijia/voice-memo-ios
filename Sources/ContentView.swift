@@ -98,21 +98,23 @@ struct ContentView: View {
     private var recordButton: some View {
         let local = (wants: model.intent == .wanted, recording: model.isRecording, net: model.netOK)
         let detached = model.meetingContext.isDetachedBranch(
-            wantsToContinue: local.wants, recording: local.recording)
+            wantsToContinue: local.wants, recording: local.recording, networkOK: local.net)
         let reconnecting = model.meetingContext.canReconnect(
             wantsToContinue: local.wants, recording: local.recording, networkOK: local.net)
         let hint = reconnecting
             ? "带原会议号接回原房间"
             : (model.meetingContext.canStartNew() ? "会新开一场,不接回原会" : "会接回原会,不新开")
-        let title: String = model.isRecording ? "停止" : (detached ? "重连" : "开启")
-        let fill: Color = model.isRecording ? Color.red
-            : (detached ? (reconnecting ? Color.blue : Color.secondary.opacity(0.25))
-                        : Color.accentColor)
-        return flatButton(icon: model.isRecording ? "stop.circle.fill" : "record.circle",
+        // 断联岔路优先于「在不在采」:断网时 SDK 尚未判死、isRecording 仍是 true,
+        // 若让 isRecording 优先,按钮会一直红「停止」、永远进不了灰「重连」(真机实测)。
+        let title: String = detached ? "重连" : (model.isRecording ? "停止" : "开启")
+        let fill: Color = detached
+            ? (reconnecting ? Color.blue : Color.secondary.opacity(0.25))
+            : (model.isRecording ? Color.red : Color.accentColor)
+        return flatButton(icon: (detached || !model.isRecording) ? "record.circle" : "stop.circle.fill",
                           title: title,
                           fill: fill,
                           fg: (detached && !reconnecting) ? Color.primary : .white,
-                          enabled: model.isRecording || !detached || reconnecting,
+                          enabled: !detached || reconnecting,
                           hint: hint) {
             model.toggle()
         }
@@ -228,7 +230,8 @@ struct ContentView: View {
                               networkOK: model.netOK) && !model.terminating,
                           pending: model.meetingContext.isDetachedBranch(
                               wantsToContinue: model.intent == .wanted,
-                              recording: model.isRecording),
+                              recording: model.isRecording,
+                              networkOK: model.netOK),
                           hint: model.meetingContext.blockReason(
                               wantsToContinue: model.intent == .wanted,
                               recording: model.isRecording,
