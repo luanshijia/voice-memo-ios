@@ -89,12 +89,24 @@ struct ContentView: View {
         }
     }
 
-    /// 开启 / 停止:切换状态
+    /// 开启 / 重连 / 停止:同一颗按钮,三态。
+    ///   · 正在采 → 「停止」
+    ///   · 断线后(想继续、本机没在采、总管那格还肯接回)→ 「重连」,点它带原号接回
+    ///   · 其余 → 「开启」,不带号;总管按它自己的裁决并回旧会或新建一场
+    /// 判断全部来自管家助手,这里只做文案。
     private var recordButton: some View {
-        flatButton(icon: model.isRecording ? "stop.circle.fill" : "record.circle",
-                   title: model.isRecording ? "停止" : "开启",
-                   fill: model.isRecording ? Color.red : Color.accentColor,
-                   fg: .white) {
+        let reconnecting = model.meetingContext.canReconnect(
+            wantsToContinue: model.intent == .wanted, recording: model.isRecording)
+        // 不接回时这一下到底是新建还是并回旧会 —— 由管家助手按总管的裁决规则
+        // 给出投影,只作提示,不改变"永远可点、裁决在总管"。
+        let hint = model.meetingContext.canStartNew()
+            ? "会新开一场,不接回原会"
+            : "会接回原会,不新开"
+        return flatButton(icon: model.isRecording ? "stop.circle.fill" : "record.circle",
+                          title: model.isRecording ? "停止" : (reconnecting ? "重连" : "开启"),
+                          fill: model.isRecording ? Color.red : Color.accentColor,
+                          fg: .white,
+                          hint: hint) {
             model.toggle()
         }
     }
@@ -171,12 +183,14 @@ struct ContentView: View {
     /// 为什么不用系统 .bordered/.borderedProminent:系统会在内容上下各加一圈内边距,
     /// 「网络/开启/设置」比「扩展」高出一截 —— 一行按钮高低不齐还白占屏幕(用户实测反馈)。
     private func flatButton(icon: String, title: String, fill: Color, fg: Color,
+                            hint: String? = nil,
                             action: @escaping () -> Void) -> some View {
         Button(action: action) {
             buttonLabel(icon: icon, title: title, fg: fg)
                 .background(RoundedRectangle(cornerRadius: 6).fill(fill))
         }
         .buttonStyle(.plain)
+        .accessibilityHint(Text(hint ?? ""))
     }
 
     // MARK: - 屏幕最下方一行(会议状态 · 连接状态 · 主动终止)
@@ -197,8 +211,15 @@ struct ContentView: View {
             inlineText(AppSharedContract.channelLabel, micWord, .secondary)
             inlineText("", sysWord, .secondary)
             Spacer(minLength: 6)
+            // 断联后的二选一(B 岔路):想继续、但本机没在采、总管还记着这场会。
+            // 日常结束是顶部「停止」——终止不在这颗按钮的职责里。
             connectButton("主动终止",
-                          enabled: model.meetingContext.hasOpenMeeting && !model.terminating) {
+                          enabled: model.meetingContext.canTerminate(
+                              wantsToContinue: model.intent == .wanted,
+                              recording: model.isRecording) && !model.terminating,
+                          hint: model.meetingContext.blockReason(
+                              wantsToContinue: model.intent == .wanted,
+                              recording: model.isRecording)) {
                 model.terminateMeeting()
             }
         }
@@ -223,7 +244,7 @@ struct ContentView: View {
 
     /// 底栏小按钮:与顶部按钮同一套圆角与高度,不可点时变灰且不响应点击。
     /// 宽度 56 = 四个 10pt 字 + 两侧余量(原来的 44 只够两个字,四个字会被挤掉)。
-    private func connectButton(_ title: String, enabled: Bool,
+    private func connectButton(_ title: String, enabled: Bool, hint: String? = nil,
                                action: @escaping () -> Void) -> some View {
         Button(action: { if enabled { action() } }) {
             Text(title)
@@ -235,6 +256,9 @@ struct ContentView: View {
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
+        // 电脑端只做事后拒绝(409 + 错误码),没有事前原因;不可点的理由由
+        // 管家助手翻成人话挂在这里,不占底栏位置。
+        .accessibilityHint(Text(hint ?? ""))
     }
 
     /// 「标签 + 短文本」横向排(网络/麦克风这类状态用)

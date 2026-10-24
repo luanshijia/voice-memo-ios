@@ -33,7 +33,34 @@ struct DeviceMeetingView: Decodable {
         let meetingID: String
         let status: String
         let channels: [String: Channel]
-        enum CodingKeys: String, CodingKey { case meetingID = "meeting_id", status, channels }
+        /// 电脑端给的接回截止时刻：通道中断起点 + 恢复宽限。
+        /// nil 有两种来源，两种都等价于「此刻没有截止线」：
+        ///   ① 还没开始计时（总管没标 interrupted_pending）；
+        ///   ② 旧版电脑端根本不发这个字段。
+        /// 格式坏的也落 nil —— 后果只可能是「多试一次带号」，被拒后由
+        /// 409 回落拿新号，不会造成状态分叉。
+        let recoveryDeadline: Date?
+        enum CodingKeys: String, CodingKey {
+            case meetingID = "meeting_id", status, channels
+            case recoveryDeadline = "recovery_deadline"
+        }
+        init(from decoder: Decoder) throws {
+            let box = try decoder.container(keyedBy: CodingKeys.self)
+            meetingID = try box.decode(String.self, forKey: .meetingID)
+            status = try box.decode(String.self, forKey: .status)
+            channels = try box.decode([String: Channel].self, forKey: .channels)
+            recoveryDeadline = DeviceMeetingView.instant(
+                try box.decodeIfPresent(String.self, forKey: .recoveryDeadline))
+        }
+    }
+    /// 契约里的时刻一律是 UTC ISO-8601（毫秒）。带小数的解析器单独建一个,
+    /// 不带小数的旧格式也试一次:两处都失败才返回 nil。
+    static func instant(_ text: String?) -> Date? {
+        guard let text else { return nil }
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = fractional.date(from: text) { return date }
+        return ISO8601DateFormatter().date(from: text)
     }
     struct Receiver: Decodable {
         let url: String

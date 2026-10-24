@@ -467,7 +467,11 @@ final class SessionModel: ObservableObject {
             } catch {
                 // 失败即停在本机:两路没停干净就清号,下次开启会被并回旧会,
                 // 界面会显示"开了新会"而实际没有——宁可报错让用户重试。
-                note("主动终止失败:\(error.localizedDescription)")
+                // 断网时按钮本来就是亮的(断联正是它的使用场景),此刻点它拿到
+                // 的多半是连接错误:要说清是"连不上",不是"停不掉"。
+                let offline = (error as NSError).domain == NSURLErrorDomain
+                note(offline ? "电脑端暂时连不上,等网络恢复再点主动终止"
+                             : "主动终止失败:\(error.localizedDescription)")
             }
         }
     }

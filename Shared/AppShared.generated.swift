@@ -4,7 +4,7 @@
 import Foundation
 
 enum AppSharedContract {
-    static let manifestSHA256 = "21e88e7e610206a6860f152026c7f89da2b9139e595ea5e4c1474d6f36cbae44"
+    static let manifestSHA256 = "b37626de24da593d677b4880c3a74871ee4a0fbb1c4126068f377751e26c92f1"
     static let observationPrefix = "obs"
     static let observationVersion = 1
     static let meetingLabel = "会议状态"
