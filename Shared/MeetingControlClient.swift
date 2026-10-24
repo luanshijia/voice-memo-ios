@@ -94,8 +94,19 @@ enum MeetingControlClient {
     static let appGroupID = "group.com.luanshijia.voicememo"
     static let appGroupCandidates = [appGroupID, "group.com.luanshijia.voicememo.458RP2552K"]
     static let defaultServerURL = "wss://100.64.0.2:7443"
-    static let defaultDeviceID = "iphone"
-    static let defaultUserID = "owner"
+
+    /// 设备名/使用者的真值只在打包时注入,源码留占位。
+    /// 读不到 key(未注入 / 在扩展包里)时回落到中性占位,不会崩也不会显示空。
+    private static func infoValue(_ key: String, fallback: String) -> String {
+        guard let raw = Bundle.main.object(forInfoDictionaryKey: key) as? String else { return fallback }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        // build setting 未配置时 Info.plist 里会留下字面量 "$(VM_DEFAULT_DEVICE)"。
+        guard !trimmed.isEmpty, !trimmed.hasPrefix("$(") else { return fallback }
+        return trimmed
+    }
+
+    static var defaultDeviceID: String { infoValue("VMDefaultDevice", fallback: "iphone") }
+    static var defaultUserID: String { infoValue("VMDefaultUser", fallback: "owner") }
 
     static func sharedDefaults() -> UserDefaults? {
         for group in appGroupCandidates where

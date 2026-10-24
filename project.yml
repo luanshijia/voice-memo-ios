@@ -51,8 +51,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.luanshijia.voicememo.broadcast
         PRODUCT_NAME: VoiceMemoBroadcast
-        MARKETING_VERSION: "0.9.23"
-        CURRENT_PROJECT_VERSION: "92"
+        MARKETING_VERSION: "0.9.24"
+        CURRENT_PROJECT_VERSION: "93"
         SWIFT_VERSION: "5.0"
         IPHONEOS_DEPLOYMENT_TARGET: "17.0"
         # LiveKit 的动态框架(RTC/UniFFI)由主 App 嵌入;扩展运行时从主 App Frameworks 查找。
@@ -93,6 +93,10 @@ targets:
         # 图标:光设 ASSETCATALOG_COMPILER_APPICON_NAME 不够 —— 本工程 Info.plist 是手写的
         # (GENERATE_INFOPLIST_FILE: NO),必须显式给 CFBundleIconName,否则主屏还是空白
         CFBundleIconName: AppIcon
+        # 连接参数默认值:源码与 Info.plist 里只有占位,真值由 CI 用 Secrets 覆盖 build setting。
+        # 不配也能跑 —— App 会回落到中性占位,用户在设置页填一次即可。
+        VMDefaultDevice: "$(VM_DEFAULT_DEVICE)"
+        VMDefaultUser: "$(VM_DEFAULT_USER)"
         UILaunchScreen: {}
         # 锁屏/后台继续录音的关键:后台音频模式
         UIBackgroundModes:
@@ -105,8 +109,12 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.luanshijia.voicememo
         PRODUCT_NAME: VoiceMemo
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-        MARKETING_VERSION: "0.9.23"
-        CURRENT_PROJECT_VERSION: "92"
+        # 连接参数默认值的占位:CI 打包时用 xcodebuild 的参数覆盖(值来自仓库 Secrets,
+        # 不落在代码里)。不覆盖时 App 回落到中性占位,用户在设置页填一次即可。
+        VM_DEFAULT_DEVICE: iphone
+        VM_DEFAULT_USER: owner
+        MARKETING_VERSION: "0.9.24"
+        CURRENT_PROJECT_VERSION: "93"
         SWIFT_VERSION: "5.0"
         # 显式锁定:接 SwiftPM 依赖后产物 Info.plist 的 MinimumOSVersion 曾变成 13.0(依赖的声明下限),
         # 而代码用了 iOS 17 的 API —— 写死避免漂移。

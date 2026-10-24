@@ -67,6 +67,8 @@ jobs:
       - name: 编译(不签名)
         run: |
           set -o pipefail
+          # 设备名与使用者的真值只在这里出现:值来自仓库 Secrets(日志里被遮蔽),
+          # 由 build setting 注入 Info.plist。代码与 project.yml 里只有中性占位。
           xcodebuild \
             -project VoiceMemo.xcodeproj \
             -scheme VoiceMemo \
@@ -74,10 +76,15 @@ jobs:
             -sdk iphoneos \
             -destination 'generic/platform=iOS' \
             -archivePath "$RUNNER_TEMP/VoiceMemo.xcarchive" \
+            VM_DEFAULT_DEVICE="${VM_DEFAULT_DEVICE}" \
+            VM_DEFAULT_USER="${VM_DEFAULT_USER}" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             archive
+        env:
+          VM_DEFAULT_DEVICE: ${{ secrets.VM_DEFAULT_DEVICE }}
+          VM_DEFAULT_USER: ${{ secrets.VM_DEFAULT_USER }}
 
       - name: 嵌入 entitlements(ad-hoc 签名)
         run: |
