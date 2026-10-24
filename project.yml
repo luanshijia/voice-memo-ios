@@ -51,8 +51,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.luanshijia.voicememo.broadcast
         PRODUCT_NAME: VoiceMemoBroadcast
-        MARKETING_VERSION: "0.9.29"
-        CURRENT_PROJECT_VERSION: "98"
+        MARKETING_VERSION: "0.9.30"
+        CURRENT_PROJECT_VERSION: "99"
         SWIFT_VERSION: "5.0"
         IPHONEOS_DEPLOYMENT_TARGET: "17.0"
         # LiveKit 的动态框架(RTC/UniFFI)由主 App 嵌入;扩展运行时从主 App Frameworks 查找。
@@ -113,8 +113,8 @@ targets:
         # 不落在代码里)。不覆盖时 App 回落到中性占位,用户在设置页填一次即可。
         VM_DEFAULT_DEVICE: iphone
         VM_DEFAULT_USER: owner
-        MARKETING_VERSION: "0.9.29"
-        CURRENT_PROJECT_VERSION: "98"
+        MARKETING_VERSION: "0.9.30"
+        CURRENT_PROJECT_VERSION: "99"
         SWIFT_VERSION: "5.0"
         # 显式锁定:接 SwiftPM 依赖后产物 Info.plist 的 MinimumOSVersion 曾变成 13.0(依赖的声明下限),
         # 而代码用了 iOS 17 的 API —— 写死避免漂移。

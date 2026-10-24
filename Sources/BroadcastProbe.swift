@@ -91,16 +91,22 @@ enum BroadcastProbe {
     /// 用累计值判活(旧写法)会把"中途死掉的系统声轨"一直显示成在收。
     private static let sampleLock = NSLock()
     private static var lastAppFrames = 0
+    /// **最后一次计数增长的时刻**(不是最后一次读日志的时刻)。
     private static var lastAppFramesAt = Date.distantPast
+    /// 多久没涨仍算"在收"。踩过的坑(2026-10-24 真机):App 每 3 秒读一次
+    /// 扩展日志(`refreshLoop`),扩展每 5 秒才写一行 `obs`,于是每 15 秒里
+    /// 必有 2 次读到**同一行**。旧判据要求"这一次读到的计数必须变",
+    /// 把这 2 次当成"没在收" → 录屏那格红(connected)蓝(connecting)交替闪。
+    /// 判据只能容忍"读到旧行":窗口要大于写入周期 + 轮询周期。
+    static let audioGrowthWindow: TimeInterval = 12
 
     private static func noteAppFrames(_ frames: Int) -> Bool {
         sampleLock.lock(); defer { sampleLock.unlock() }
         if frames != lastAppFrames {          // 涨了或新一轮从 0 重数,都算"还活着"
             lastAppFrames = frames
             lastAppFramesAt = Date()
-            return true
         }
-        return false
+        return Date().timeIntervalSince(lastAppFramesAt) < audioGrowthWindow
     }
 
     /// 原因码只发码;码表在 `StatusBoard.LinkReason`。未认识的码按 bridgeFailed 报,不静默吞掉。
