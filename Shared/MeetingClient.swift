@@ -192,7 +192,10 @@ enum MeetingClient {
         }
         guard http.statusCode == 200 || http.statusCode == 201 else {
             let body = String(data: data.prefix(200), encoding: .utf8) ?? ""
-            throw failure(http.statusCode, "电脑端拒绝会议申请(\(http.statusCode))\(body.isEmpty ? "" : ":" + body)")
+            let errorCode = Self.controlErrorCode(from: data)
+            throw failure(http.statusCode,
+                          "电脑端拒绝会议申请(\(http.statusCode))\(body.isEmpty ? "" : ":" + body)",
+                          controlErrorCode: errorCode)
         }
         let grant: MeetingGrant
         do {
@@ -412,11 +415,15 @@ enum MeetingClient {
     }
 
     /// 带号恢复被电脑端明确拒绝(旧会已封场,或这个号在电脑端已不存在)的判定。
-    /// 只能按错误文案认码:控制面把 `{"error":"recovery_meeting_closed"}` 塞进 409 的
-    /// body,而 `failure()` 只产出 code + message 的 NSError,没有结构化错误类型可用。
     static func isClosedMeetingRefusal(_ error: Error) -> Bool {
-        let text = error.localizedDescription
-        return text.contains("recovery_meeting_closed") || text.contains("recovery_meeting_not_found")
+        let code = (error as NSError).userInfo["controlErrorCode"] as? String
+        return code == "recovery_meeting_closed" || code == "recovery_meeting_not_found"
+    }
+
+    private static func controlErrorCode(from data: Data) -> String? {
+        guard let body = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let code = body["error"] as? String else { return nil }
+        return code
     }
 
     /// 丢掉这个通道的待确认申请。
@@ -533,8 +540,11 @@ enum MeetingClient {
         }
     }
 
-    private static func failure(_ code: Int, _ message: String) -> NSError {
-        NSError(domain: "VoiceMemo.MeetingControl", code: code,
-                userInfo: [NSLocalizedDescriptionKey: message])
+    private static func failure(_ code: Int, _ message: String,
+                                controlErrorCode: String? = nil) -> NSError {
+        var userInfo: [String: Any] = [NSLocalizedDescriptionKey: message]
+        if let controlErrorCode { userInfo["controlErrorCode"] = controlErrorCode }
+        return NSError(domain: "VoiceMemo.MeetingControl", code: code,
+                       userInfo: userInfo)
     }
 }

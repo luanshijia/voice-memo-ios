@@ -28,7 +28,7 @@ struct TranscriptView<Summary: View>: View {
         var text: String
     }
 
-    private static let gapThreshold: Double = 2.4
+    private static var gapThreshold: Double { 2.4 }
 
     var body: some View {
         GeometryReader { geo in
