@@ -32,6 +32,8 @@ final class SessionModel: ObservableObject {
     /// 每个音源各自保留第一遍流式字幕，避免一路定稿清空另一路内容。
     @Published var partials: [TranscriptPartial] = []
     @Published var isRecording = false
+    /// 「主动终止」正在跑(查账 → 停两路 → 清本机)。防重复点击与重复请求。
+    @Published private(set) var terminating = false
     /// 用户意图:**只有 `start()` / `stop()` 能改**。
     /// SDK 被动断开时不许清它 —— 否则"掉线"会被当成"用户不想录",状态层就把故障判成正常
     /// (Codex 2026-10-18 评审第 1 条)。
@@ -48,10 +50,9 @@ final class SessionModel: ObservableObject {
     /// 系统直播那一路的事实:扩展写过「=== 扩展启动」且没写「结束」。
     @Published var broadcastAlive = false
 
-    /// 电脑端总管状态的本机镜像(管家助手)。底栏的会议状态、连接状态与两个
-    /// 对接按钮的可用性都读它;没查到时保持上一次的值,断网不会把会议从屏幕上抹掉。
+    /// 电脑端总管状态的本机镜像(管家助手)。底栏的会议状态、连接状态与「主动终止」
+    /// 的可用性都读它;没查到时保持上一次的值,断网不会把会议从屏幕上抹掉。
     @Published private(set) var meetingContext = MeetingContext.empty
-    private var newMeetingCheckInFlight = false
     /// 五列面板。**唯一写入点 = `syncBoard()` 与 `refreshNet()`**。
     @Published var board = StatusBoard()
     /// 兼容现有视图的派生读取口；状态事实只保存在 board，不再维护第二份布尔值。
@@ -417,47 +418,89 @@ final class SessionModel: ObservableObject {
 
     func toggle() { isRecording ? stop() : start() }
 
-    /// 「另开」:先把这场会了结,再开新的一场。
-    /// 有未封场会议时总管会把它并回旧场(同设备只有一场未封场),所以按钮在那种情况下是灰的;
-    /// 这里再做一次守卫,避免程序化路径绕过界面。
-    func startNewMeeting() {
-        guard !isRecording, !newMeetingCheckInFlight else {
-            note("正在录音,先停止再另开")
-            return
-        }
-        newMeetingCheckInFlight = true
-        Task {
-            defer { newMeetingCheckInFlight = false }
+    /// 「主动终止」:结束这场会,并清掉本机这一轮的会议身份。
+    ///
+    /// 语义(用户 2026-10-24 定,固定不变):**不想要这个 room 号了、会议清盘结束,
+    /// 但录音和后续纪要照常要**。所以对电脑端来说这就是一次正常的用户停止
+    /// (`finishing_reason=user_stop`)——它照常核验、封场、出纪要;本机清号,
+    /// 下一次点顶部「开启」不带号,电脑端自会新建一场(新 UUID / 新 room)。
+    ///
+    /// 为什么必须先查电脑端:用户可能刚在控制中心停过录屏,本地缓存不是权威。
+    /// 为什么要替系统声补一次 stop:扩展退出后没人给它发停止,电脑端会一直认为
+    /// 那一路在采;少停一路,会议就进不了收尾,下一次开启又会被并回旧会。
+    func terminateMeeting() {
+        guard !terminating else { return }
+        terminating = true
+        Task { @MainActor in
+            defer { terminating = false }
             do {
-                let view = try await MeetingClient.deviceView(
-                    serverURL: cfg.url, deviceID: cfg.device)
+                let view = try await MeetingClient.deviceView(serverURL: cfg.url, deviceID: cfg.device)
                 let fresh = MeetingContext(view: view)
                 meetingContext = fresh
-                guard fresh.canStartNew(recording: isRecording) else {
-                    note(fresh.blockReason(recording: isRecording) ?? "还有未结束的会议")
+                guard let meetingID = fresh.meetingID, fresh.hasOpenMeeting else {
+                    note("没有需要终止的会议")
                     return
                 }
+                if fresh.isChannelOpen(fresh.systemAudio) {
+                    // 扩展那一路 App 停不回来(既有限制):它还在推就请用户去停;
+                    // 已经停了而电脑端还记着"在采",就替它补一次 stop。
+                    guard systemAudioAlreadyStopped else {
+                        note("系统声音那一路还在直播:请先在控制中心停止录屏,再点一次主动终止")
+                        return
+                    }
+                    try await MeetingClient.stopChannel(
+                        serverURL: cfg.url, meetingID: meetingID, deviceID: cfg.device,
+                        channel: SessionControlContract.systemAudio,
+                        generation: fresh.systemAudioGeneration)
+                }
+                if fresh.isChannelOpen(fresh.mic) {
+                    try await MeetingClient.stopChannel(
+                        serverURL: cfg.url, meetingID: meetingID, deviceID: cfg.device,
+                        channel: SessionControlContract.mic,
+                        generation: fresh.micGeneration)
+                }
+                // 两路都已在电脑端停干净:先清本机会议号,`stop()` 见号为空就只做
+                // 断连接与清屏,不会再去打扰电脑端(否则会拿旧代次重发一次多余请求)。
                 sessionID = ""
-                start()
+                stop()
+                note("已主动终止:旧会议交给电脑端照常收尾出纪要;下次「开启」会开新会")
             } catch {
-                note("无法核对电脑端会议状态: \(error.localizedDescription)")
+                // 失败即停在本机:两路没停干净就清号,下次开启会被并回旧会,
+                // 界面会显示"开了新会"而实际没有——宁可报错让用户重试。
+                note("主动终止失败:\(error.localizedDescription)")
             }
         }
     }
 
-    /// 「重连」:回到总管手里这场还没结束的会议(带原会议号恢复,不新建)。
-    func reconnectMeeting() {
-        guard !isRecording else {
-            note("正在录音,不需要重连")
-            return
+    /// 扩展那一路是否已经不推了。
+    /// 看不到(unknown / notStarted)按"已停"处理:用户点的是终止,这一场的系统声
+    /// 到此为止是可接受的;反过来当成"还在推",终止会永远卡在提示上。
+    private var systemAudioAlreadyStopped: Bool {
+        switch board.replaykit.observed {
+        case .connected, .connecting, .reconnecting: return false
+        default: return true
         }
-        guard let meetingID = meetingContext.meetingID,
-              meetingContext.canReconnect(recording: isRecording) else {
-            note("没有可重连的会议")
-            return
+    }
+
+    /// 取麦克风授权。带号恢复被电脑端明确拒绝(旧会已封场、或号已不存在)时,
+    /// 丢掉那条待确认申请,再以不带号重发一次。
+    /// 为什么必须清 pending:同一个通道会复用原请求号与原请求体(MeetingClient.pendingStart),
+    /// 不清就会把同一个带号请求原样重放,永远拿不到新会。
+    private func requestMicToken(recoveryMeetingID: String?) async throws -> MeetingGrant {
+        do {
+            return try await cfg.requestToken(identity: cfg.identity,
+                                              channel: SessionControlContract.mic,
+                                              meetingID: recoveryMeetingID)
+        } catch {
+            guard recoveryMeetingID != nil,
+                  MeetingClient.isClosedMeetingRefusal(error) else { throw error }
+            MeetingClient.discardPendingStart(channel: SessionControlContract.mic,
+                                              deviceID: cfg.device)
+            note("原会议已结束,改为新开一场")
+            return try await cfg.requestToken(identity: cfg.identity,
+                                              channel: SessionControlContract.mic,
+                                              meetingID: nil)
         }
-        sessionID = meetingID
-        start()
     }
 
     /// 会中提要档位:自动 5 分钟 / 手动 10 分钟(手动更长 —— 在外面要等久一点才抓得到要点)。
@@ -515,9 +558,7 @@ final class SessionModel: ObservableObject {
             var grantedServerGeneration = 0
             do {
                 try await MeetingClient.flushPendingMicStop()
-                let card = try await cfg.requestToken(identity: cfg.identity,
-                                                      channel: SessionControlContract.mic,
-                                                      meetingID: recoveryMeetingID)
+                let card = try await self.requestMicToken(recoveryMeetingID: recoveryMeetingID)
                 grantedMeetingID = card.meetingID
                 grantedServerGeneration = card.generation
                 let live = try await room.connect(url: card.url, token: card.token, identity: cfg.identity)

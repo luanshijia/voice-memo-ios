@@ -9,21 +9,25 @@ struct MeetingContext: Equatable {
     let meetingID: String?
     let meeting: AppSharedContract.MeetingState?
     let mic: AppSharedContract.ChannelState?
+    let micGeneration: Int?
     let systemAudio: AppSharedContract.ChannelState?
     let systemAudioGeneration: Int?
     let pendingReports: Int
     let revision: Int
 
     static let empty = MeetingContext(meetingID: nil, meeting: nil, mic: nil,
-                                      systemAudio: nil, systemAudioGeneration: nil,
+                                      micGeneration: nil, systemAudio: nil,
+                                      systemAudioGeneration: nil,
                                       pendingReports: 0, revision: 0)
 
     private init(meetingID: String?, meeting: AppSharedContract.MeetingState?,
-                 mic: AppSharedContract.ChannelState?, systemAudio: AppSharedContract.ChannelState?,
+                 mic: AppSharedContract.ChannelState?, micGeneration: Int?,
+                 systemAudio: AppSharedContract.ChannelState?,
                  systemAudioGeneration: Int?, pendingReports: Int, revision: Int) {
         self.meetingID = meetingID
         self.meeting = meeting
         self.mic = mic
+        self.micGeneration = micGeneration
         self.systemAudio = systemAudio
         self.systemAudioGeneration = systemAudioGeneration
         self.pendingReports = pendingReports
@@ -35,6 +39,7 @@ struct MeetingContext: Equatable {
         self.meetingID = meeting?.meetingID
         self.meeting = meeting.flatMap { AppSharedContract.meetingState($0.status) }
         self.mic = (meeting?.channels["mic"]?.status).flatMap { AppSharedContract.channelState($0) }
+        self.micGeneration = meeting?.channels["mic"].map { $0.generation ?? 0 }
         self.systemAudio = (meeting?.channels["system_audio"]?.status)
             .flatMap { AppSharedContract.channelState($0) }
         // A channel without a generation is malformed V2 evidence: 0 forces
@@ -56,30 +61,19 @@ struct MeetingContext: Equatable {
         return AppSharedContract.channelAlias(channel.rawValue)
     }
 
-    // MARK: - 对账:两个按钮能不能点
+    // MARK: - 对账:还有没有会、哪一路没关
 
-    /// 总管眼里这场会还没结束(可以回去,也不该另起一场)。
+    /// 总管眼里这场会还没结束(没封场、也没取消)。
     var hasOpenMeeting: Bool {
         guard let meeting else { return false }
         return [.preparing, .active, .interruptedPending, .finishing].contains(meeting)
     }
 
-    /// 「另开」只能在旧会议封场后进行;总管会把新申请并回仍开放的会议。
-    func canStartNew(recording: Bool) -> Bool {
-        !recording && !hasOpenMeeting
-    }
-
-    /// 「重连」:有未结束的会议才有意义;本机正录着且这一路还在时不需要重连。
-    func canReconnect(recording: Bool) -> Bool {
-        guard hasOpenMeeting, meetingID != nil else { return false }
-        return !(recording && mic == .active)
-    }
-
-    /// 点了不能点的按钮时,给一句人话说明为什么。
-    func blockReason(recording: Bool) -> String? {
-        guard hasOpenMeeting else { return nil }
-        if systemAudio == .active { return "系统声音直播还在,先在控制中心停止录屏" }
-        if recording { return "正在录音,先停止再另开" }
-        return "这场会议尚未封场,请等电脑端完成收尾"
+    /// 电脑端认为这一路还开着 —— starting / active / interrupted_pending。
+    /// 用 rawValue 判断而不是枚举成员:这里只关心契约里"尚未收干净"的三个值,
+    /// 词表将来增删别名不该改变这个含义。
+    func isChannelOpen(_ channel: AppSharedContract.ChannelState?) -> Bool {
+        guard let channel else { return false }
+        return ["starting", "active", "interrupted_pending"].contains(channel.rawValue)
     }
 }

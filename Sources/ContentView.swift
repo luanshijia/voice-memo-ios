@@ -179,12 +179,15 @@ struct ContentView: View {
         .buttonStyle(.plain)
     }
 
-    // MARK: - 屏幕最下方一行(会议状态 · 连接状态 · 两个对接按钮)
+    // MARK: - 屏幕最下方一行(会议状态 · 连接状态 · 主动终止)
 
     /// 底栏只放「必需显示」那一层(判据:看不到它会不会做错动作)。
-    ///   · 会议状态 = 电脑端总管 meeting.status 的别名,六个词;看不到就不知道该按另开还是重连;
+    ///   · 会议状态 = 电脑端总管 meeting.status 的别名,六个词;
     ///   · 连接状态 = 两路 channel.status 的别名,五个词;看不到就不知道哪一路还活着;
-    ///   · 另开 / 重连 = 总管状态机里「创建新会议」和「恢复原会议」两个操作的入口。
+    ///   · 主动终止 = 用户主动结束这场会。它的含义固定:**不想要这个 room 号了、
+    ///     会议清盘结束,但录音和后续纪要照常要**。所以它做三件事:把两路在电脑端
+    ///     停干净(会议照常收尾出纪要)、清本机会议号、让下一次「开启」从新 UUID 开始。
+    ///     接回原会议**不在这里**:顶部「开启」带缓存会议号,断线后点它就是重连。
     /// 原来的「录 收 句」三个数按用户口径撤掉:它们不影响任何动作。
     /// 左右各留 24 点(避开屏幕圆角)、下方 12 点(避开 home 指示条),几何与上一版一致。
     private var bottomBar: some View {
@@ -194,11 +197,9 @@ struct ContentView: View {
             inlineText(AppSharedContract.channelLabel, micWord, .secondary)
             inlineText("", sysWord, .secondary)
             Spacer(minLength: 6)
-            connectButton("另开", enabled: model.meetingContext.canStartNew(recording: model.isRecording)) {
-                model.startNewMeeting()
-            }
-            connectButton("重连", enabled: model.meetingContext.canReconnect(recording: model.isRecording)) {
-                model.reconnectMeeting()
+            connectButton("主动终止",
+                          enabled: model.meetingContext.hasOpenMeeting && !model.terminating) {
+                model.terminateMeeting()
             }
         }
         .padding(.horizontal, 24)
@@ -221,13 +222,14 @@ struct ContentView: View {
     }
 
     /// 底栏小按钮:与顶部按钮同一套圆角与高度,不可点时变灰且不响应点击。
+    /// 宽度 56 = 四个 10pt 字 + 两侧余量(原来的 44 只够两个字,四个字会被挤掉)。
     private func connectButton(_ title: String, enabled: Bool,
                                action: @escaping () -> Void) -> some View {
         Button(action: { if enabled { action() } }) {
             Text(title)
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(enabled ? Color.white : Color.primary)
-                .frame(width: 44, height: 24)
+                .frame(width: 56, height: 24)
                 .background(RoundedRectangle(cornerRadius: 6)
                     .fill(enabled ? Color.accentColor : Color.secondary.opacity(0.25)))
         }

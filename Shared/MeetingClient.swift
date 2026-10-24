@@ -384,6 +384,21 @@ enum MeetingClient {
         }
     }
 
+    /// 带号恢复被电脑端明确拒绝(旧会已封场,或这个号在电脑端已不存在)的判定。
+    /// 只能按错误文案认码:控制面把 `{"error":"recovery_meeting_closed"}` 塞进 409 的
+    /// body,而 `failure()` 只产出 code + message 的 NSError,没有结构化错误类型可用。
+    static func isClosedMeetingRefusal(_ error: Error) -> Bool {
+        let text = error.localizedDescription
+        return text.contains("recovery_meeting_closed") || text.contains("recovery_meeting_not_found")
+    }
+
+    /// 丢掉这个通道的待确认申请。
+    /// 为什么必须丢:同一个通道会复用原 requestID 与原请求体(见 `pendingStart`),
+    /// 不清就会把"带号恢复"那条请求原样重放,永远拿不到新会。
+    static func discardPendingStart(channel: String, deviceID: String) {
+        clearPendingStart(channel: channel, deviceID: deviceID)
+    }
+
     static func queueBroadcastStop(serverURL: String, meetingID: String, deviceID: String,
                                    generation: Int) throws {
         try queueStop(serverURL: serverURL, meetingID: meetingID,
