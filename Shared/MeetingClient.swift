@@ -366,8 +366,10 @@ enum MeetingClient {
         let identity = registration.deviceID + "-replaykit"
         let view = try await deviceView(serverURL: registration.serverURL,
                                         deviceID: registration.deviceID)
-        let meetingID = ["preparing", "active", "interrupted_pending"].contains(
-            view.meeting?.status ?? "") ? view.meeting?.meetingID : nil
+        let meetingID = view.meeting.flatMap { meeting in
+            SessionControlContract.recoveryEligibleMeetingStates.contains(meeting.status)
+                ? meeting.meetingID : nil
+        }
         let grant = try await requestGrant(serverURL: registration.serverURL,
                                            identity: identity,
                                            userID: registration.userID,

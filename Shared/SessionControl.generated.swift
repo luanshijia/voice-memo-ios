@@ -2,9 +2,10 @@
 import Foundation
 
 enum SessionControlContract {
-    static let manifestSHA256 = "f628e31a8b0418313d72a5aad7a878f0b059ba9928197d4e9841f6a30fcf57b6"
+    static let manifestSHA256 = "23a4194e013ee7a0dc80046f727a6da2dd28255969c3188b36e6c3fb961b30fb"
     static let mic = "mic"
     static let systemAudio = "system_audio"
+    static let recoveryEligibleMeetingStates: Set<String> = ["preparing", "active", "interrupted_pending"]
     static let startPath = "/v1/meetings/start"
     static let stopPathTemplate = "/v1/meetings/<meeting_id>/stop"
     static let observePathTemplate = "/v1/meetings/<meeting_id>/observe"

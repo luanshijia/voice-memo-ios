@@ -118,7 +118,7 @@ struct MeetingContext: Equatable {
     /// 总管允许带号恢复的三格。`finishing` 不在内:总管回 `recovery_meeting_closed`。
     var meetingAcceptsRecovery: Bool {
         guard let meeting else { return false }
-        return [.preparing, .active, .interruptedPending].contains(meeting)
+        return SessionControlContract.recoveryEligibleMeetingStates.contains(meeting.rawValue)
     }
 
     /// 「重连」:断线后,总管那格还肯接回,**而且此刻发得出去**。
