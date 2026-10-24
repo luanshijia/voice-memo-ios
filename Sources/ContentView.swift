@@ -89,23 +89,30 @@ struct ContentView: View {
         }
     }
 
-    /// 开启 / 重连 / 停止:同一颗按钮,三态。
-    ///   · 正在采 → 「停止」
-    ///   · 断线后(想继续、本机没在采、总管那格还肯接回)→ 「重连」,点它带原号接回
-    ///   · 其余 → 「开启」,不带号;总管按它自己的裁决并回旧会或新建一场
-    /// 判断全部来自管家助手,这里只做文案。
+    /// 开启 / 重连 / 停止:同一颗按钮,四态。
+    ///   · 正在采 → 红「停止」
+    ///   · 断联岔路 + 网络可用 → 蓝「重连」(点它带原号接回)
+    ///   · 断联岔路 + 网络不可用 → **灰「重连」且不可点**(发不出去就别亮着)
+    ///   · 其余 → 蓝「开启」,不带号;总管按自己的裁决并回旧会或新建一场
+    /// 判断全部来自管家助手,这里只做文案与可点性。
     private var recordButton: some View {
+        let local = (wants: model.intent == .wanted, recording: model.isRecording, net: model.netOK)
+        let detached = model.meetingContext.isDetachedBranch(
+            wantsToContinue: local.wants, recording: local.recording)
         let reconnecting = model.meetingContext.canReconnect(
-            wantsToContinue: model.intent == .wanted, recording: model.isRecording)
-        // 不接回时这一下到底是新建还是并回旧会 —— 由管家助手按总管的裁决规则
-        // 给出投影,只作提示,不改变"永远可点、裁决在总管"。
-        let hint = model.meetingContext.canStartNew()
-            ? "会新开一场,不接回原会"
-            : "会接回原会,不新开"
+            wantsToContinue: local.wants, recording: local.recording, networkOK: local.net)
+        let hint = reconnecting
+            ? "带原会议号接回原房间"
+            : (model.meetingContext.canStartNew() ? "会新开一场,不接回原会" : "会接回原会,不新开")
+        let title: String = model.isRecording ? "停止" : (detached ? "重连" : "开启")
+        let fill: Color = model.isRecording ? Color.red
+            : (detached ? (reconnecting ? Color.blue : Color.secondary.opacity(0.25))
+                        : Color.accentColor)
         return flatButton(icon: model.isRecording ? "stop.circle.fill" : "record.circle",
-                          title: model.isRecording ? "停止" : (reconnecting ? "重连" : "开启"),
-                          fill: model.isRecording ? Color.red : Color.accentColor,
-                          fg: .white,
+                          title: title,
+                          fill: fill,
+                          fg: (detached && !reconnecting) ? Color.primary : .white,
+                          enabled: model.isRecording || !detached || reconnecting,
                           hint: hint) {
             model.toggle()
         }
@@ -183,13 +190,14 @@ struct ContentView: View {
     /// 为什么不用系统 .bordered/.borderedProminent:系统会在内容上下各加一圈内边距,
     /// 「网络/开启/设置」比「扩展」高出一截 —— 一行按钮高低不齐还白占屏幕(用户实测反馈)。
     private func flatButton(icon: String, title: String, fill: Color, fg: Color,
-                            hint: String? = nil,
+                            enabled: Bool = true, hint: String? = nil,
                             action: @escaping () -> Void) -> some View {
         Button(action: action) {
             buttonLabel(icon: icon, title: title, fg: fg)
                 .background(RoundedRectangle(cornerRadius: 6).fill(fill))
         }
         .buttonStyle(.plain)
+        .disabled(!enabled)
         .accessibilityHint(Text(hint ?? ""))
     }
 
@@ -211,15 +219,20 @@ struct ContentView: View {
             inlineText(AppSharedContract.channelLabel, micWord, .secondary)
             inlineText("", sysWord, .secondary)
             Spacer(minLength: 6)
-            // 断联后的二选一(B 岔路):想继续、但本机没在采、总管还记着这场会。
-            // 日常结束是顶部「停止」——终止不在这颗按钮的职责里。
+            // 断联岔路(B 岔路):想继续、但本机没在采、总管还记着这场会。
+            // 发不出去时它仍是半透明蓝(这条路只剩它),但点不动;网络回来才实心可点。
             connectButton("主动终止",
                           enabled: model.meetingContext.canTerminate(
                               wantsToContinue: model.intent == .wanted,
-                              recording: model.isRecording) && !model.terminating,
+                              recording: model.isRecording,
+                              networkOK: model.netOK) && !model.terminating,
+                          pending: model.meetingContext.isDetachedBranch(
+                              wantsToContinue: model.intent == .wanted,
+                              recording: model.isRecording),
                           hint: model.meetingContext.blockReason(
                               wantsToContinue: model.intent == .wanted,
-                              recording: model.isRecording)) {
+                              recording: model.isRecording,
+                              networkOK: model.netOK)) {
                 model.terminateMeeting()
             }
         }
@@ -244,15 +257,20 @@ struct ContentView: View {
 
     /// 底栏小按钮:与顶部按钮同一套圆角与高度,不可点时变灰且不响应点击。
     /// 宽度 56 = 四个 10pt 字 + 两侧余量(原来的 44 只够两个字,四个字会被挤掉)。
-    private func connectButton(_ title: String, enabled: Bool, hint: String? = nil,
+    private func connectButton(_ title: String, enabled: Bool, pending: Bool = false,
+                               hint: String? = nil,
                                action: @escaping () -> Void) -> some View {
-        Button(action: { if enabled { action() } }) {
+        // 三种底色：可点 = 实心蓝；在路上但发不出去 = 半透明蓝(用户口径:这个动作此刻属于这条路,
+        // 但网络没回来前点不动)；与这条路无关 = 灰。
+        let fill: Color = enabled ? Color.accentColor
+            : (pending ? Color.accentColor.opacity(0.4) : Color.secondary.opacity(0.25))
+        let fg: Color = (enabled || pending) ? Color.white : Color.primary
+        return Button(action: { if enabled { action() } }) {
             Text(title)
                 .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(enabled ? Color.white : Color.primary)
+                .foregroundStyle(fg)
                 .frame(width: 56, height: 24)
-                .background(RoundedRectangle(cornerRadius: 6)
-                    .fill(enabled ? Color.accentColor : Color.secondary.opacity(0.25)))
+                .background(RoundedRectangle(cornerRadius: 6).fill(fill))
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
@@ -511,7 +529,8 @@ struct ContentView: View {
             await model.refreshExt()
             model.refreshMicMode()
             tick += 1
-            if tick % 5 == 0 { await model.refreshNet() }        // 每 15 秒顺手探一次网络
+            if tick % 2 == 0 { await model.refreshNet() }        // 每 6 秒探一次网络:
+            // 「能不能发出去」是可点性的判据之一,15 秒太慢 —— 断网/恢复后按钮要尽快换形态。
         }
     }
 }

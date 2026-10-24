@@ -14,18 +14,26 @@ struct MeetingContext: Equatable {
     let systemAudioGeneration: Int?
     /// 电脑端给的接回截止时刻；nil = 还没开始计时（或旧版电脑端不发这个字段）。
     let recoveryDeadline: Date?
+    /// 这份投影是什么时候从电脑端拿到的（`device_view` 成功那一刻）。
+    /// 断网后没人再更新它 —— 底栏要据此判「我把不知道当成了知道」。
+    let lastSeen: Date
     let pendingReports: Int
     let revision: Int
+
+    /// 投影多久算过期。`observeDesktop` 每 5 秒探一轮，12 秒 = 容两轮抖动
+    /// （断网后最迟 12 秒底栏就该说「未知」、按钮就该不可点）。
+    static let staleAfter: TimeInterval = 12
 
     static let empty = MeetingContext(meetingID: nil, meeting: nil, mic: nil,
                                       micGeneration: nil, systemAudio: nil,
                                       systemAudioGeneration: nil, recoveryDeadline: nil,
+                                      lastSeen: .distantPast,
                                       pendingReports: 0, revision: 0)
 
     private init(meetingID: String?, meeting: AppSharedContract.MeetingState?,
                  mic: AppSharedContract.ChannelState?, micGeneration: Int?,
                  systemAudio: AppSharedContract.ChannelState?,
-                 systemAudioGeneration: Int?, recoveryDeadline: Date?,
+                 systemAudioGeneration: Int?, recoveryDeadline: Date?, lastSeen: Date,
                  pendingReports: Int, revision: Int) {
         self.meetingID = meetingID
         self.meeting = meeting
@@ -34,6 +42,7 @@ struct MeetingContext: Equatable {
         self.systemAudio = systemAudio
         self.systemAudioGeneration = systemAudioGeneration
         self.recoveryDeadline = recoveryDeadline
+        self.lastSeen = lastSeen
         self.pendingReports = pendingReports
         self.revision = revision
     }
@@ -52,17 +61,26 @@ struct MeetingContext: Equatable {
         self.pendingReports = view.pendingReports.count
         self.revision = view.stateRevision
         self.recoveryDeadline = meeting?.recoveryDeadline
+        self.lastSeen = Date()
     }
 
     // MARK: - 底栏要显示的两个词
 
+    /// 这份投影还新不新。不动它就会把断网前的「已激活」一直挂在底栏上。
+    func isFresh(now: Date = Date()) -> Bool {
+        now.timeIntervalSince(lastSeen) < Self.staleAfter
+    }
+
     var meetingAlias: String {
         guard let meeting else { return "无会议" }
+        // 拿不到新投影 = 不知道电脑端现在怎么看，不许沿用旧词。
+        guard isFresh() else { return "未知" }
         return AppSharedContract.meetingAlias(meeting.rawValue)
     }
 
     func channelAlias(_ channel: AppSharedContract.ChannelState?) -> String {
         guard let channel else { return "无通道" }
+        guard isFresh() else { return "未知" }
         return AppSharedContract.channelAlias(channel.rawValue)
     }
 
@@ -100,11 +118,13 @@ struct MeetingContext: Equatable {
         return [.preparing, .active, .interruptedPending].contains(meeting)
     }
 
-    /// 「重连」:断线后,总管那格还肯接回。
+    /// 「重连」:断线后,总管那格还肯接回,**而且此刻发得出去**。
     /// 截止线取电脑端给的 `recovery_deadline`:没有截止线(还没开始计时)= 肯接回。
-    func canReconnect(wantsToContinue: Bool, recording: Bool) -> Bool {
+    /// `networkOK` 是本机事实(探测结果);nil = 没测过/不知道 —— 按「发不出去」处理,
+    /// 因为可点必须等于「点下去能成」,不是「这个动作有意义」。
+    func canReconnect(wantsToContinue: Bool, recording: Bool, networkOK: Bool?) -> Bool {
         guard Self.isDetached(wantsToContinue: wantsToContinue, recording: recording),
-              meetingAcceptsRecovery else { return false }
+              meetingAcceptsRecovery, isFresh(), networkOK == true else { return false }
         guard let deadline = recoveryDeadline else { return true }
         return Date() < deadline
     }
@@ -116,17 +136,28 @@ struct MeetingContext: Equatable {
         !meetingAcceptsRecovery
     }
 
-    /// 「主动终止」:只在断线后成立 —— 它有明确含义(号不要了、录音与纪要照要),
-    /// 不是日常结束按钮;日常结束是顶部「停止」。
-    func canTerminate(wantsToContinue: Bool, recording: Bool) -> Bool {
+    /// 此刻是否走在「断联岔路」上(想继续、本机没在采、总管还记着这场会)。
+    /// 它只决定界面上这个动作**是否属于当前这条路**,不决定能不能点。
+    func isDetachedBranch(wantsToContinue: Bool, recording: Bool) -> Bool {
         hasOpenMeeting && Self.isDetached(wantsToContinue: wantsToContinue, recording: recording)
+    }
+
+    /// 「主动终止」:只在断线岔路上成立,而且必须**发得出去**才能点。
+    /// 发不出去时它仍显示(半透明蓝),因为这条路只剩它;但点不动。
+    func canTerminate(wantsToContinue: Bool, recording: Bool, networkOK: Bool?) -> Bool {
+        isDetachedBranch(wantsToContinue: wantsToContinue, recording: recording)
+            && networkOK == true
     }
 
     /// 点了不能点的按钮时,给一句人话说明为什么。
     /// 电脑端只做事后拒绝(409 + 错误码),没有事前原因;这里只把
     /// 「本机事实 + 总管状态」翻成人话,不发明新结论。
-    func blockReason(wantsToContinue: Bool, recording: Bool) -> String? {
+    func blockReason(wantsToContinue: Bool, recording: Bool, networkOK: Bool?) -> String? {
         guard hasOpenMeeting else { return nil }
+        if isDetachedBranch(wantsToContinue: wantsToContinue, recording: recording),
+           networkOK != true {
+            return "现在连不上电脑端,等网络恢复再点"
+        }
         if let deadline = recoveryDeadline, Date() >= deadline, meetingAcceptsRecovery {
             return "断线太久,这场已在收尾,再点开启就是新会"
         }
