@@ -103,70 +103,96 @@ enum BroadcastProbe {
         return false
     }
 
-    /// 仅解读最近一次广播生命周期，避免旧日志计数把新一轮状态染绿。
-    /// 必须看到 LiveKit 已连接且本轮 audioApp 帧数大于零，才报告“正在收声”。
+    /// 结构化观测行:`obs v=1 state=... [gen=N] [meeting=UUID] [reason=码] [audio_app=样本数]`。
+    /// 状态判定只认这一行;中文行留给人和排错,改文案不再改状态。
+    struct Observation {
+        let state: AppSharedContract.ChannelState
+        let generation: Int?
+        let meetingID: String?
+        let reason: String?
+        let audioApp: Int
+        let at: Date
+    }
+
+    static func observation(_ line: String.SubSequence) -> Observation? {
+        let parts = line.split(separator: " ", omittingEmptySubsequences: true)
+        guard let mark = parts.firstIndex(where: { $0 == "obs" }), mark + 1 < parts.count else { return nil }
+        var fields: [String: String] = [:]
+        for token in parts[(mark + 1)...] {
+            guard let eq = token.firstIndex(of: "=") else { continue }
+            fields[String(token[token.startIndex..<eq])] = String(token[token.index(after: eq)...])
+        }
+        guard fields["v"] == String(AppSharedContract.observationVersion),
+              let raw = fields["state"],
+              let state = AppSharedContract.channelState(raw) else { return nil }
+        let stamp = ISO8601DateFormatter().date(from: String(parts[0])) ?? Date.distantPast
+        return Observation(state: state,
+                           generation: fields["gen"].flatMap { Int($0) },
+                           meetingID: fields["meeting"],
+                           reason: fields["reason"],
+                           audioApp: fields["audio_app"].flatMap { Int($0) } ?? 0,
+                           at: stamp)
+    }
+
+    /// 原因码只发码;码表在 `StatusBoard.LinkReason`。未认识的码按 bridgeFailed 报,不静默吞掉。
+    private static func linkReason(_ code: String?) -> LinkReason? {
+        switch code {
+        case nil, "stopped_by_user": return nil
+        case "grant_failed": return .tokenRejected
+        case "connect_failed": return .connectFailed
+        case "disconnected": return .disconnected
+        case "identity_mismatch", "pcm_unavailable", "conversion_failed": return .bridgeFailed
+        default: return .bridgeFailed
+        }
+    }
+
+    /// 只解读最新一条结构化观测。
     static func status() async -> Status {
         guard let url = containerURL()?.appendingPathComponent(fileName) else {
             return Status(phase: .stopped, isActive: false, appFrames: 0, reason: nil)
         }
         // 读+解析最多 512KB,而调用方每 3 秒一轮、且跑在主线程:放后台做(2026-10-18 审计)。
         let lines = await Task.detached(priority: .utility) {
-            Self.tailText(url: url, bytes: 512_000).split(separator: "\n").map(String.init)
+            Self.tailText(url: url, bytes: 512_000).split(separator: "\n")
         }.value
-        guard let start = lines.lastIndex(where: { $0.contains("=== 扩展启动") }) else {
+        guard let latest = lines.last(where: { $0.contains(" obs ") }),
+              let observation = Self.observation(latest) else {
+            // 没有结构化观测:旧格式日志,或扩展从未启动。不猜,按未开播处理。
             return Status(phase: .stopped, isActive: false, appFrames: 0, reason: nil)
         }
-        let current = lines[start...]
-        guard !current.contains(where: { $0.contains("=== 扩展结束") }) else {
-            return Status(phase: .stopped, isActive: false, appFrames: 0, reason: nil)
-        }
-        let failed = current.contains { line in
-            ["连接或发布失败", "配置缺失或无效", "身份不符合", "无法建立", "不支持 ReplayKit", "复制 ReplayKit PCM 失败", "ReplayKit PCM 转换失败", "LiveKit 连接断开"]
-                .contains { line.contains($0) }
-        }
-        var frames = 0
-        for line in current where line.contains("计数 回调") {
-            guard let marker = line.range(of: "audioApp=") else { continue }
-            let digits = line[marker.upperBound...].prefix { $0.isNumber }
-            if let value = Int(digits) { frames = value }
-        }
-        let connected = current.contains { $0.contains("LiveKit 已连接并发布音频轨") }
-        let sentAudio = current.contains { $0.contains("LiveKit 已送入系统声音") }
-        let paused = current.last(where: { $0.contains("扩展暂停") || $0.contains("扩展恢复") })?
-            .contains("扩展暂停") ?? false
-        let heartbeatIndex = current.lastIndex(where: { $0.contains("计数 回调") })
-        let lifecycleIndex = current.lastIndex(where: {
-            $0.contains("=== 扩展启动") || $0.contains("扩展暂停") || $0.contains("扩展恢复")
-        })
-        let referenceIndex = max(heartbeatIndex ?? start, lifecycleIndex ?? start)
-        let referenceLine = current[referenceIndex]
-        let timestamp = referenceLine.split(separator: " ", maxSplits: 1).first.map(String.init) ?? ""
-        let formatter = ISO8601DateFormatter()
-        let heartbeatAge = formatter.date(from: timestamp).map { Date().timeIntervalSince($0) } ?? .infinity
-        // 15 秒太紧:静止画面时 ReplayKit 给帧稀疏,静音会议会被判成"扩展死了"→ 圆点变橙、按钮"未开播"。
-        // 30 秒没有新计数行才算进程真的没了。
-        let stale = !paused && heartbeatAge > 30
-        // 第二重判活:screen 帧一直在跳(所以 heartbeat 新鲜),但 audioApp 计数 12 秒没涨 = 系统声那一路死了。
-        let audioFresh = Self.noteAppFrames(frames)
-        // 静音会议里 audioApp 本来就不涨(对方没说话/视频静音),12 秒判死必然误报。
-        // 改成 40 秒,并要求进程还活着(心跳 10 秒内):真死的是心跳,假死的是音频。
-        let stalled = connected && frames > 0 && !paused && !audioFresh
+        let heartbeatAge = Date().timeIntervalSince(observation.at)
+        let audioFresh = Self.noteAppFrames(observation.audioApp)
+        // 心跳新鲜但 audioApp 计数 40 秒不涨 = 系统声那一路死了(视频还在出帧时才会走到这里)。
+        let stalled = observation.state == .active && observation.audioApp > 0 && !audioFresh
             && heartbeatAge < 10
             && Date().timeIntervalSince(Self.lastAppFramesAt) > 40
-        var reason: LinkReason? = nil
-        if failed {
-            // 细分两种最常见、但处置完全不同的失败:配置没准备好 vs 连接/握手坏了
-            reason = current.contains { $0.contains("配置缺失或无效") } ? .configMissing : .bridgeFailed
-        } else if stale {
-            reason = .heartbeatStale
-        } else if stalled {
-            reason = .noAudioFrames
+        var reason: LinkReason?
+        let phase: Phase
+        switch observation.state {
+        case .stopped:
+            phase = .stopped
+        case .interrupted:
+            phase = .error
+            reason = Self.linkReason(observation.reason)
+        case .interruptedPending:
+            phase = .waiting          // 用户主动暂停:不报错,也不能判成进程死亡
+        case .starting:
+            phase = .waiting
+        case .active:
+            if heartbeatAge > 30 {
+                phase = .error
+                reason = .heartbeatStale
+            } else if observation.audioApp > 0 && audioFresh {
+                phase = .receiving
+            } else if stalled {
+                phase = .error
+                reason = .noAudioFrames
+            } else {
+                phase = .waiting
+            }
         }
-        let phase: Phase = failed || stale || stalled ? .error
-            : (connected && sentAudio && frames > 0 && !paused ? .receiving : .waiting)
-        // isActive 必须由 phase 推导:stale/failed 时主 App 要重新补写广播 token,并把按钮显示成未开播。
-        // 以前恒为 true,日志里残留一条"扩展启动"就会让主 App 永远不再补写 token,下一次开播直接"配置缺失"。
-        return Status(phase: phase, isActive: phase != .error, appFrames: frames, reason: reason)
+        return Status(phase: phase, isActive: phase != .error && phase != .stopped,
+                      appFrames: observation.audioApp, reason: reason)
     }
 
     /// 整份探针日志(设置页「复制排错信息」用),带上限免得把大文件全读进内存

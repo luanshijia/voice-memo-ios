@@ -33,6 +33,21 @@ final class SampleHandler: RPBroadcastSampleHandler {
         }
     }
 
+    /// 结构化观测:`obs v=1 [gen=N] [meeting=UUID] state=... [reason=码] [audio_app=样本数]`。
+    /// 状态词只用 AppSharedContract.ChannelState 的五个,不许自造;原因只发码,句子留给显示层。
+    /// 授权到手前没有代次,此时不写 gen(契约里 gen 允许缺省)。
+    private func observe(_ state: AppSharedContract.ChannelState,
+                         generation: Int? = nil, meeting: String? = nil,
+                         reason: String? = nil, audioApp: Int? = nil) {
+        var parts = ["obs", "v=\(AppSharedContract.observationVersion)",
+                     "state=\(state.rawValue)"]
+        if let generation { parts.append("gen=\(generation)") }
+        if let meeting { parts.append("meeting=\(meeting)") }
+        if let reason { parts.append("reason=\(reason)") }
+        if let audioApp { parts.append("audio_app=\(audioApp)") }
+        log(parts.joined(separator: " "))
+    }
+
     override func broadcastStarted(withSetupInfo setupInfo: [String: NSObject]?) {
         appFrames = 0
         callbacks = 0
@@ -41,17 +56,27 @@ final class SampleHandler: RPBroadcastSampleHandler {
         sampleRate = 0
         lastStatus = .distantPast
         log("=== 扩展启动 ===")
+        observe(.starting)
         publisher = LiveKitBroadcastPublisher { [weak self] in self?.log($0) }
         publisher?.start()
     }
 
-    override func broadcastPaused() { log("扩展暂停") }
-    override func broadcastResumed() { log("扩展恢复") }
+    override func broadcastPaused() {
+        log("扩展暂停")
+        // 暂停期间不再有音频帧,心跳会停在最后一条 —— 显式写"待确认",读方据此不判进程死亡。
+        observe(.interruptedPending)
+    }
+
+    override func broadcastResumed() {
+        log("扩展恢复")
+        observe(.active)
+    }
 
     override func broadcastFinished() {
         publisher?.stop()
         publisher = nil
         log("=== 扩展结束; audioApp 回调=\(callbacks) audioMic 回调=\(micCallbacks) 样本=\(appFrames) 时长≈\(seconds())秒 ===")
+        observe(.stopped, audioApp: appFrames)
     }
 
     override func processSampleBuffer(_ sampleBuffer: CMSampleBuffer, with type: RPSampleBufferType) {
@@ -80,6 +105,8 @@ final class SampleHandler: RPBroadcastSampleHandler {
         if now.timeIntervalSince(lastStatus) >= 5 {
             lastStatus = now
             log("计数 回调 video=\(videoCallbacks) audioApp=\(callbacks) audioMic=\(micCallbacks) 样本=\(appFrames) 时长≈\(seconds())秒")
+            // 心跳本身也是观测:主 App 用它判"扩展进程还活着、系统声还在进"。
+            observe(.active, audioApp: appFrames)
         }
     }
 

@@ -37,12 +37,29 @@ final class LiveKitBroadcastPublisher: NSObject, RoomDelegate {
         super.init()
     }
 
+    /// 结构化观测行:主 App 只认这一种(见 contracts/app-shared-v1.json)。
+    /// 有授权就有代次与会议号;没有授权时只写 state,读方不得把缺省代次当成有效代次。
+    private func observe(_ state: AppSharedContract.ChannelState, reason: String? = nil) {
+        lock.lock()
+        let current = meeting
+        lock.unlock()
+        var parts = ["obs", "v=\(AppSharedContract.observationVersion)",
+                     "state=\(state.rawValue)"]
+        if let current {
+            parts.append("gen=\(current.generation)")
+            parts.append("meeting=\(current.id)")
+        }
+        if let reason { parts.append("reason=\(reason)") }
+        log(parts.joined(separator: " "))
+    }
+
     // MARK: - RoomDelegate
     // 这两个回调是扩展侧唯一的"连接已死"信号:BroadcastProbe 的失败清单认 "LiveKit 连接断开",
     // 主 App 据此把 phase 判成 error → 圆点变橙、按钮变"未开播",并立刻补写下一个 token。
 
     func room(_ room: Room, didDisconnectWithError error: LiveKitError?) {
         log("LiveKit 连接断开: \(error?.description ?? "对端关闭")")
+        observe(.interrupted, reason: "disconnected")
         workQueue.async {
             self.ready = false                     // 别再往死连接里送 PCM
             self.pending.removeAll(keepingCapacity: false)
@@ -51,6 +68,7 @@ final class LiveKitBroadcastPublisher: NSObject, RoomDelegate {
 
     func room(_ room: Room, didFailToConnectWithError error: LiveKitError?) {
         log("LiveKit 连接断开: 连接失败 \(error?.description ?? "未知")")
+        observe(.interrupted, reason: "connect_failed")
         workQueue.async { self.ready = false }
     }
 
@@ -70,6 +88,7 @@ final class LiveKitBroadcastPublisher: NSObject, RoomDelegate {
                                 String(grant.identity.dropLast("-replaykit".count)),
                                 grant.generation)
                 self.lock.unlock()
+                self.observe(.starting)
                 if alreadyStopped {
                     self.queueAndFlushStop()
                     return
@@ -95,6 +114,7 @@ final class LiveKitBroadcastPublisher: NSObject, RoomDelegate {
                 }
             }
             self.log("LiveKit 连接重试 3 次仍失败:本场系统声不会送到家里")
+            self.observe(.interrupted, reason: "connect_failed")
             self.queueAndFlushStop()
         }
     }
@@ -151,6 +171,7 @@ final class LiveKitBroadcastPublisher: NSObject, RoomDelegate {
         let current = known ?? meeting
         lock.unlock()
         guard let current else { return }
+        observe(.stopped, reason: "stopped_by_user")
         guard queueStop(current) else { return }
         Task {
             do { try await MeetingControlClient.flushPendingBroadcastStop() }
@@ -202,6 +223,7 @@ final class LiveKitBroadcastPublisher: NSObject, RoomDelegate {
             }
 
             log("LiveKit 已连接并发布音频轨 identity=\(configuration.identity)")
+            observe(.active)
             if let session = configuration.session {
                 let device = String(configuration.identity.dropLast("-replaykit".count))
                 do {
@@ -223,6 +245,7 @@ final class LiveKitBroadcastPublisher: NSObject, RoomDelegate {
             return true
         } catch {
             log("LiveKit 连接或发布失败: \(error.localizedDescription)")
+            observe(.interrupted, reason: "connect_failed")
             await newRoom.disconnect()
             return false
         }
