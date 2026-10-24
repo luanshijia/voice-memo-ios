@@ -424,13 +424,16 @@ enum MeetingControlClient {
         let key = try pendingStartKey(channel)
         if let data = defaults.data(forKey: key) {
             let pending = try JSONDecoder().decode(PendingStart.self, from: data)
-            guard pending.serverURL == serverURL, pending.userID == userID,
-                  pending.deviceID == deviceID, pending.channel == channel else {
-                throw failure(15, "存在待恢复的旧会议申请，请先恢复原设备登记")
+            if pending.serverURL == serverURL, pending.userID == userID,
+               pending.deviceID == deviceID, pending.channel == channel {
+                // A retry must keep the original request body as well as its ID.
+                // A newly observed meeting cannot be inserted into that fingerprint.
+                return pending
             }
-            // A retry must keep the original request body as well as its ID.
-            // A newly observed meeting cannot be inserted into that fingerprint.
-            return pending
+            // 这一条属于上一套设备登记或上一个地址,不是"丢失的回包"。
+            // 以前这里抛错,结果是一次失败尝试(比如还没来得及填凭据)就能把 App 永久锁死:
+            // 用户改了登记之后没有任何入口能清掉它,只能删 App 重装。
+            defaults.removeObject(forKey: key)
         }
         if let meetingID, UUID(uuidString: meetingID) == nil {
             throw failure(15, "待恢复会议号无效")
