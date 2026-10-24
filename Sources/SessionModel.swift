@@ -64,6 +64,13 @@ final class SessionModel: ObservableObject {
         }
     }
     var micIsWide: Bool { board.micMode.observed == .wide }
+    var presentation: SessionPresentation {
+        SessionPresentation(isRecording: isRecording,
+                           wantsToContinue: intent == .wanted,
+                           networkOK: netOK,
+                           terminating: terminating,
+                           meeting: meetingContext)
+    }
     /// 这一代被动结束的原因码(主动停 = nil)。只由 VoiceRoom 的 onEndReason 写入。
     private var livekEndReason: LinkReason?
     /// 影子对照去重(同一组合只记一次),`start()` 时清空。
@@ -77,6 +84,8 @@ final class SessionModel: ObservableObject {
     private var unknownTypes = Set<String>()
     /// 收包层结构性问题计数(`parse` / `missing_type` / `topic:x` / `version:x`)
     private var protocolIssues: [String: Int] = [:]
+    /// Throttles repeated retry diagnostics while pending reports are polled.
+    private var artifactDeliveryFailureAt: [String: Date] = [:]
     /// 本场是否已补发过档位(每场只补一次,见 final 分支)。
     private var didResyncSumMode = false
     /// 上一场迟到消息的丢弃条数。**正常业务事件**,不参与 `Cap.Protocol` 结论 ——
@@ -303,6 +312,22 @@ final class SessionModel: ObservableObject {
         Task { [weak self] in await self?.observeDesktop() }
     }
 
+    /// Foreground probes follow the root view's SwiftUI task lifetime.
+    func refreshForegroundStateLoop() async {
+        await refreshExt()
+        await refreshNet()
+        refreshMicMode()
+        var tick = 0
+        while !Task.isCancelled {
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            guard !Task.isCancelled else { return }
+            await refreshExt()
+            refreshMicMode()
+            tick += 1
+            if tick % 2 == 0 { await refreshNet() }
+        }
+    }
+
     private func observeDesktop() async {
         while !Task.isCancelled {
             // ReplayKit may have exited before its stop request completed.
@@ -336,27 +361,52 @@ final class SessionModel: ObservableObject {
                             if !isRecording { sessionID = "" }
                             syncBoard()
                         }
-                        for pending in state.pendingReports {
-                            do {
-                                let artifact = try await MeetingClient.fetchArtifact(
-                                    serverURL: cfg.url, meetingID: pending.meetingID,
-                                    deviceID: cfg.device)
-                                guard artifact.sha256 == pending.sha256 else { continue }
-                                try storeReport(artifact.data, meetingID: pending.meetingID)
-                                try await MeetingClient.acknowledgeArtifact(
-                                    serverURL: cfg.url, meetingID: pending.meetingID,
-                                    deviceID: cfg.device, sha256: artifact.sha256)
-                                note("会后报告已保存并回执电脑端")
-                            } catch {
-                                // Report generation may still be running; retry on the next poll.
-                            }
-                        }
                     }
+                // Reports are independent of the current recording. The control
+                // contract includes earlier unacknowledged reports while a newer
+                // meeting is active, so always deliver them after the device view.
+                await deliverPendingReports(state.pendingReports)
             } catch {
                 // Keep the last known meeting visible during a temporary network loss.
             }
             try? await Task.sleep(nanoseconds: 5_000_000_000)
         }
+    }
+
+    private func deliverPendingReports(_ pendingReports: [DeviceMeetingView.PendingReport]) async {
+        for pending in pendingReports {
+            do {
+                let artifact = try await MeetingClient.fetchArtifact(
+                    serverURL: cfg.url, meetingID: pending.meetingID,
+                    deviceID: cfg.device)
+                guard artifact.sha256 == pending.sha256 else {
+                    noteArtifactDeliveryFailure(
+                        meetingID: pending.meetingID, message: "电脑端报告摘要与待送达清单不一致")
+                    continue
+                }
+                // Persist the exact verified bytes before acknowledging delivery.
+                try storeReport(artifact.data, meetingID: pending.meetingID)
+                try await MeetingClient.acknowledgeArtifact(
+                    serverURL: cfg.url, meetingID: pending.meetingID,
+                    deviceID: cfg.device, sha256: artifact.sha256)
+                artifactDeliveryFailureAt.removeValue(forKey: pending.meetingID)
+                note("会后报告已保存并回执电脑端")
+            } catch {
+                noteArtifactDeliveryFailure(
+                    meetingID: pending.meetingID,
+                    message: "\(error.localizedDescription)，将自动重试")
+            }
+        }
+    }
+
+    private func noteArtifactDeliveryFailure(meetingID: String, message: String) {
+        let now = Date()
+        if let previous = artifactDeliveryFailureAt[meetingID],
+           now.timeIntervalSince(previous) < 60 {
+            return
+        }
+        artifactDeliveryFailureAt[meetingID] = now
+        note("会后报告暂未送达(\(meetingID)): \(message)")
     }
 
     private func loadSavedReport() {
@@ -463,6 +513,9 @@ final class SessionModel: ObservableObject {
                 // 断连接与清屏,不会再去打扰电脑端(否则会拿旧代次重发一次多余请求)。
                 sessionID = ""
                 stop()
+                resetCurrentMeetingData()
+                syncBoard()
+                syncProtocolStatus()
                 note("已主动终止:旧会议交给电脑端照常收尾出纪要;下次「开启」会开新会")
             } catch {
                 // 失败即停在本机:两路没停干净就清号,下次开启会被并回旧会,
@@ -519,32 +572,49 @@ final class SessionModel: ObservableObject {
         Task { await room.send(summodePayload(m)) }
     }
 
-    private func start() {
-        let recoveryMeetingID = sessionID.isEmpty ? nil : sessionID
-        connectionGeneration += 1
-        let generation = connectionGeneration
+    /// Clear device-owned, in-memory data for the current meeting while keeping
+    /// saved reports and the coordinator's authoritative lifecycle projection.
+    private func resetCurrentMeetingData() {
         lines = []
         partials = []
-        lastFinalSeq = 0                 // 新一场:补取游标归零,首轮补取会立刻拉一次
-        lastCatchUpAt = Date.distantPast
+        lastFinalSeq = 0
+        lastCatchUpAt = .distantPast
         recordedSeconds = 0
         serverSeconds = 0
         serverBySource = [:]
-        progressSeenAt = [:]                // 新一场:进度墙钟与未知 type 提示都重置
+        progressSeenAt = [:]
         unknownTypes = []
         protocolIssues = [:]
         loggedUnknownFields = []
         sessionDrops = 0
         didResyncSumMode = false
-        summaries = []                      // 新一场:提要列表与状态区都从零开始
+        summaries = []
         sumState = "等待提要…"
         sumCode = "wait_period"
+        sessionID = ""
+        serverGeneration = 0
+        livekEndReason = nil
+        noteSignatures = []
+
+        let now = Date()
+        board.recorded = Status(desired: .wanted,
+                                observed: MetricValue(value: 0, unit: "秒"),
+                                reason: nil, lastSeen: now, generation: connectionGeneration)
+        board.received = Status(desired: .wanted,
+                                observed: MetricValue(value: 0, unit: "秒"),
+                                reason: nil, lastSeen: now, generation: connectionGeneration)
+        board.summary = Status(desired: .wanted,
+                               observed: MetricValue(value: 0, unit: "轮"),
+                               reason: nil, lastSeen: now, generation: connectionGeneration)
+    }
+
+    private func start() {
+        let recoveryMeetingID = sessionID.isEmpty ? nil : sessionID
+        connectionGeneration += 1
+        let generation = connectionGeneration
+        resetCurrentMeetingData()
         isRecording = true
         intent = .wanted
-        sessionID = ""                               // 会议号由电脑总管创建并在授权回包中返回
-        serverGeneration = 0
-        livekEndReason = nil           // 新一代:上一代"被动结束"的原因作废
-        noteSignatures = []
         syncBoard()
         syncProtocolStatus()
         let cfg = self.cfg

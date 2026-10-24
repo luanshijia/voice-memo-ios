@@ -1,10 +1,9 @@
 import Foundation
 import Network
 
-/// 「网络」按钮的判据:能不能连上家里那条链路。
-/// 做法:直接用 TCP 连一下配置里的主机(ws://100.64.0.2:7880 → 100.64.0.2:7880)。
-/// 为什么不用 http 请求:那会额外受 ATS/证书这些东西干扰,而我们只想回答
-/// 「路通不通」这一个问题 —— TCP 能建起来就算通,3 秒建不起来就算不通。
+/// 「代理」按钮检测 XEdge 提供的点到点链路是否能到达家里的 TLS 入口。
+/// 通过 TCP 探测配置地址的主机和端口；当前默认目标是 100.64.0.2:7443。
+/// TCP 建立成功表示这条链路可达，不单独证明 LiveKit 房间或媒体流已连接。
 enum NetProbe {
     static func check(host: String, port: UInt16, timeout: TimeInterval = 3) async -> Bool {
         await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
@@ -35,7 +34,7 @@ enum NetProbe {
         }
     }
 
-    /// 从设置页里的 ws://100.64.0.2:7443 取出主机和端口
+    /// 从设置页的 TLS 入口地址中取出主机和端口；默认入口由 XEdge 点到点网络提供。
     static func hostPort(from serverURL: String) -> (host: String, port: UInt16)? {
         guard let comps = URLComponents(string: serverURL), let host = comps.host else { return nil }
         // 缺端口时不能落回 7880:真正连的是 7443(TLS 代理),探 7880 会给出"网络灯断但录音正常"的假象。

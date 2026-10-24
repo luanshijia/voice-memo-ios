@@ -1,9 +1,8 @@
 import SwiftUI
-import UIKit
 
 /// 主界面。
 /// 顶部一行**五个**按钮(等宽),颜色当指示灯用:
-///   网络 = 能不能连上家里(蓝=通 / 灰=不通或没测)
+///   代理 = XEdge 点到点链路能否到达家里 TLS 入口(蓝=通 / 灰=不通或没测)
 ///   宽谱 = 当前麦克风是否宽谱模式(蓝=是 / 灰=否或未授权);点它弹系统「麦克风模式」面板
 ///   开启 = 录音开关(红=录着)
 ///   扩展 = 系统直播三态(灰=确定没开播 / 蓝=已开播但没收到系统声 / 红=已收到系统声)
@@ -15,12 +14,6 @@ struct ContentView: View {
     @StateObject private var model = SessionModel()
     @State private var showSettings = false
     @Environment(\.scenePhase) private var scenePhase
-
-    // 顶部按钮状态
-    @State private var followsLatestFinal = true
-    /// 合并后的定稿行。以前是 computed property:status 每秒变两次 → 每 0.5 秒把整场字幕重合并一遍
-    /// (两小时会议几千行,单人长文 O(n²) 拼接)。改成只在定稿条数变化时重算。
-    @State private var rows: [DisplayRow] = []
 
     var body: some View {
         // 底部那一行(未连接 / 网络 断 / 麦克风 … / 录 收 句)改成**真正贴屏幕底边**:
@@ -39,8 +32,8 @@ struct ContentView: View {
             bottomBar
         }
         .ignoresSafeArea(edges: .bottom)
-        .sheet(isPresented: $showSettings) { SettingsSheet(model: model) }
-        .task { await refreshLoop() }
+        .sheet(isPresented: $showSettings) { SettingsView(model: model) }
+        .task { await model.refreshForegroundStateLoop() }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
                 Task {
@@ -50,9 +43,6 @@ struct ContentView: View {
                     await model.catchUpNow()
                 }
             }
-        }
-        .onChange(of: model.isRecording) { _, active in
-            if active { followsLatestFinal = true }
         }
     }
 
@@ -68,8 +58,8 @@ struct ContentView: View {
         }
     }
 
-    /// 代理(原名「网络」,2026-10-19 改名):只有显示功能。点了当场测一次;启动和回到前台也会自动测。
-    /// 它测的是"能不能穿过代理链到家里",叫「代理」比叫「网络」准确。
+    /// 代理:检测 XEdge 提供的点到点链路是否能到达家里的 TLS 入口。
+    /// 点了当场重测;启动和回到前台也会自动测。
     /// 配色(用户口径 2026-10-15 晚):通 = 实心深蓝(与「宽谱」「开启」同一档);不通/没测 = 灰(与其它按钮关闭态同一档)。
     private var netButton: some View {
         flatButton(icon: model.netOK == true ? "wifi" : "wifi.slash", title: "代理",
@@ -96,27 +86,22 @@ struct ContentView: View {
     ///   · 其余 → 蓝「开启」,不带号;总管按自己的裁决并回旧会或新建一场
     /// 判断全部来自管家助手,这里只做文案与可点性。
     private var recordButton: some View {
-        let local = (wants: model.intent == .wanted, recording: model.isRecording, net: model.netOK)
-        let detached = model.meetingContext.isDetachedBranch(
-            wantsToContinue: local.wants, recording: local.recording, networkOK: local.net)
-        let reconnecting = model.meetingContext.canReconnect(
-            wantsToContinue: local.wants, recording: local.recording, networkOK: local.net)
-        let hint = reconnecting
-            ? "带原会议号接回原房间"
-            : (model.meetingContext.canStartNew() ? "会新开一场,不接回原会" : "会接回原会,不新开")
-        // 断联岔路优先于「在不在采」:断网时 SDK 尚未判死、isRecording 仍是 true,
-        // 若让 isRecording 优先,按钮会一直红「停止」、永远进不了灰「重连」(真机实测)。
-        let title: String = detached ? "重连" : (model.isRecording ? "停止" : "开启")
-        let fill: Color = detached
-            ? (reconnecting ? Color.blue : Color.secondary.opacity(0.25))
-            : (model.isRecording ? Color.red : Color.accentColor)
-        return flatButton(icon: (detached || !model.isRecording) ? "record.circle" : "stop.circle.fill",
-                          title: title,
-                          fill: fill,
-                          fg: (detached && !reconnecting) ? Color.primary : .white,
-                          enabled: !detached || reconnecting,
-                          hint: hint) {
+        let state = model.presentation.primaryAction
+        return flatButton(icon: state.icon,
+                          title: state.title,
+                          fill: color(for: state.tone),
+                          fg: state.tone == .muted ? .primary : .white,
+                          enabled: state.enabled,
+                          hint: state.hint) {
             model.toggle()
+        }
+    }
+
+    private func color(for tone: SessionPresentation.Tone) -> Color {
+        switch tone {
+        case .accent: return .accentColor
+        case .stop: return .red
+        case .muted: return Color.secondary.opacity(0.25)
         }
     }
 
@@ -223,19 +208,11 @@ struct ContentView: View {
             Spacer(minLength: 6)
             // 断联岔路(B 岔路):想继续、但本机没在采、总管还记着这场会。
             // 发不出去时它仍是半透明蓝(这条路只剩它),但点不动;网络回来才实心可点。
+            let state = model.presentation.terminateAction
             connectButton("主动终止",
-                          enabled: model.meetingContext.canTerminate(
-                              wantsToContinue: model.intent == .wanted,
-                              recording: model.isRecording,
-                              networkOK: model.netOK) && !model.terminating,
-                          pending: model.meetingContext.isDetachedBranch(
-                              wantsToContinue: model.intent == .wanted,
-                              recording: model.isRecording,
-                              networkOK: model.netOK),
-                          hint: model.meetingContext.blockReason(
-                              wantsToContinue: model.intent == .wanted,
-                              recording: model.isRecording,
-                              networkOK: model.netOK)) {
+                          enabled: state.enabled,
+                          pending: state.pending,
+                          hint: state.hint) {
                 model.terminateMeeting()
             }
         }
@@ -291,87 +268,12 @@ struct ContentView: View {
         .fixedSize()
     }
 
-    /// 转写区。渲染规则(用户口径 2026-10-15):
-    ///   ① **同一人接着写** —— 收到 final 不再另起一段,直接接在上一段文字后面;换人才分段
-    ///      (这时才断行 + 显示说话人;屏幕上看不到机器身份,自己那一路显示「我」);
-    ///   ② 同一人两段之间静音 ≥2.4 秒 → 在文字**中间夹一个 ~**(单个半角,不换行、不空行;超 30 秒带时长);
-    ///   ③ 长行**不做任何干预** —— 不提前换行、也不阻止换行,交给手机自己排版。
-    /// 本机(agent)的断句/定稿/第二遍逻辑完全不变,这里只是不再把它的内部分段显示成段落。
-    /// 转写区(用户口径 2026-10-15 深夜,第二版):**三块固定高度,互不挤压** ——
-    ///   上 1/10 = 第一遍(蓝,流式滚动,只露一两行);中 1/2 = 第二遍(黑,定稿带 ~);
-    ///   下 4/10 = 实时总结区(占位,目前留空)。
-    /// 调整理由:第一遍只是"正在说的"提示,读的是第二遍;把大头留给定稿。
-    /// 为什么改:以前整屏一个滚动区,第一遍的字一长就占满全屏,第二遍只剩最后一行。
     private var transcript: some View {
-        GeometryReader { geo in
-            let usable = max(geo.size.height - 6, 0)      // 扣掉两条分隔线 + 间距
-            VStack(spacing: 3) {
-                partialPanel.frame(height: usable * 0.1)
-                Divider().opacity(0.25)
-                finalPanel.frame(height: usable * 0.5)
-                Divider().opacity(0.25)
-                summaryPanel(width: geo.size.width).frame(height: usable * 0.4)
-            }
-        }
-    }
-
-    /// 第一遍:流式部分自己的滚动区,跟着最新文字滚到底
-    private var partialPanel: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 4) {
-                    ForEach(model.partials) { item in
-                        paragraph(who: displayWho(item.who, source: item.source), text: item.text, color: .blue)
-                            .id(item.id)
-                    }
-                }
-                .padding(.vertical, 4)
-            }
-            .onChange(of: model.partials.map(\.text)) { _, _ in
-                guard let last = model.partials.last else { return }
-                proxy.scrollTo(last.id, anchor: .bottom)
-            }
-        }
-    }
-
-    /// 第二遍:定稿(带 ~ 停顿记号)自己的滚动区
-    private var finalPanel: some View {
-        ScrollViewReader { proxy in
-            ZStack(alignment: .bottomTrailing) {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 16) {
-                        ForEach(rows) { row in
-                            paragraph(who: row.who, text: row.text, color: .primary)
-                                .id(row.id)
-                        }
-                    }
-                    .padding(.vertical, 4)
-                }
-                .simultaneousGesture(DragGesture(minimumDistance: 5).onChanged { _ in
-                    followsLatestFinal = false
-                })
-                .onChange(of: model.lines.last?.id) { _, _ in
-                    rows = buildRows()          // 定稿变多才重算;用最后一条的 id 而不是 count ——
-                                                // 到达 4000 条上限后 count 恒定,用 count 会永久冻结(2026-10-18 审计)
-                    guard followsLatestFinal, let last = rows.last else { return }
-                    proxy.scrollTo(last.id, anchor: .bottom)
-                }
-                .onAppear { if rows.isEmpty { rows = buildRows() } }
-                if !followsLatestFinal, let last = rows.last {
-                    Button {
-                        followsLatestFinal = true
-                        withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
-                    } label: {
-                        Image(systemName: "arrow.down.to.line")
-                            .font(.system(size: 12, weight: .semibold))
-                            .frame(width: 28, height: 28)
-                            .background(.regularMaterial, in: Circle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("回到最新字幕")
-                    .padding(6)
-                }
-            }
+        TranscriptView(partials: model.partials,
+                       lines: model.lines,
+                       localIdentity: model.identity,
+                       isRecording: model.isRecording) { width in
+            summaryPanel(width: width)
         }
     }
 
@@ -449,248 +351,6 @@ struct ContentView: View {
         case "quality", "busy_prev", "busy_refine", "busy_vram", "busy_cpu": return .orange
         default: return .secondary
         }
-    }
-
-    // MARK: - 转写渲染(分人 / 停顿 / 超长换行)
-
-    /// 界面上的一段转写。**同一个说话人的连续定稿会长在同一段里**(text 会一直往后追加),
-    /// 只有换人才起新的一段。停顿记号 ~ 直接夹在 text 中间。
-    private struct DisplayRow: Identifiable {
-        let id: String
-        let who: String        // 空 = 同一人接着说,不重复显示说话人
-        var text: String       // 随这个人的后续定稿继续往后长
-    }
-
-    /// 静音超过这么久,才在同一人的两段之间夹一个 ~(沿用家里断句阈值 2.4 秒)
-    private static let gapThreshold: Double = 2.4
-
-    private func buildRows() -> [DisplayRow] {
-        var out: [DisplayRow] = []
-        var prevWho = ""
-        for (idx, line) in model.lines.enumerated() {
-            let speakerKey = "\(line.source)|\(line.who)"
-            let sameSpeaker = (speakerKey == prevWho)
-            if sameSpeaker, !out.isEmpty {
-                // 同一人:接着上一段往后写;中间停顿 ≥2.4 秒就夹一个 ~(不换行)
-                if let gap = line.gap, gap >= Self.gapThreshold {
-                    out[out.count - 1].text += " " + Self.gapLabel(gap)
-                }
-                out[out.count - 1].text += line.text
-            } else {
-                // 换人:起新的一段,并显示说话人
-                out.append(DisplayRow(id: "line-\(idx)",
-                                      who: displayWho(line.who, source: line.source), text: line.text))
-            }
-            prevWho = speakerKey
-        }
-        return out
-    }
-
-    /// 身份标签(用户口径 2026-10-15 晚:**自己那一路不再显示任何标签** ——
-    /// 以前显示「我」或机器身份,没有实际用途和意义,已去掉)。
-    /// 「对方」保留:线上会议时它是唯一能区分两个人的东西,去掉就分不清谁说的。
-    private func displayWho(_ who: String, source: String) -> String {
-        if source == model.identity { return "本地1" }
-        if source.hasSuffix("-livekit") { return "现场·\(who)" }
-        if source.hasSuffix("-replaykit") { return "在线1" }
-        return source.isEmpty ? who : "\(source)·\(who)"
-    }
-
-    /// 停顿记号(用户口径 2026-10-15:三个 ~~~ 改成**一个半角 ~**):超过 30 秒带上时长。
-    private static func gapLabel(_ seconds: Double) -> String {
-        guard seconds >= 30 else { return "~" }
-        let total = Int(seconds.rounded())
-        let m = total / 60
-        let s = total % 60
-        return s == 0 ? "~ \(m)分钟" : "~ \(m)分\(s)秒"
-    }
-
-    private func paragraph(who: String, text: String, color: Color) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            if !who.isEmpty {
-                Text(who).font(.system(size: 10)).foregroundStyle(.secondary)
-            }
-            // 字号 15(用户口径 2026-10-15:调小 2 号);长行不干预,交给手机自己排版
-            Text(text)
-                .font(.system(size: 15))
-                .lineSpacing(6)
-                .foregroundStyle(color)
-                .textSelection(.enabled)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    // MARK: - 刷新
-
-    private func refreshLoop() async {
-        await model.refreshExt()
-        await model.refreshNet()
-        model.refreshMicMode()
-        var tick = 0
-        while !Task.isCancelled {
-            try? await Task.sleep(nanoseconds: 3_000_000_000)   // 每 3 秒看一次扩展状态 + 麦克风模式
-            await model.refreshExt()
-            model.refreshMicMode()
-            tick += 1
-            if tick % 2 == 0 { await model.refreshNet() }        // 每 6 秒探一次网络:
-            // 「能不能发出去」是可点性的判据之一,15 秒太慢 —— 断网/恢复后按钮要尽快换形态。
-        }
-    }
-}
-
-/// 设置页:连接参数、黑匣子信息都收在这里,平时主界面干净
-struct SettingsSheet: View {
-    @ObservedObject var model: SessionModel
-    @Environment(\.dismiss) private var dismiss
-    @State private var copiedAt = ""
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                stateSection          // 固定信息(环境 / 身份 / 版本)—— 按用户口径放最上面
-                connectionSection     // 固定(可编辑)
-                if !model.finalReportText.isEmpty {
-                    Section("会后材料") {
-                        NavigationLink("查看已保存的纪要和逐字稿") {
-                            ScrollView {
-                                Text(model.finalReportText)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .padding()
-                            }
-                            .navigationTitle("会后材料")
-                        }
-                    }
-                }
-                logSection            // 日志:主 App 步骤 + 扩展日志 + 一键复制(用户口径 2026-10-19 合并)
-                crashSection          // 有才显示
-            }
-            .navigationTitle("设置")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } }
-            }
-        }
-    }
-
-    private var connectionSection: some View {
-        Section {
-            TextField("wss://100.64.0.2:7443", text: $model.serverURL)
-                .autocorrectionDisabled()
-                .textInputAutocapitalization(.never)
-                .keyboardType(.URL)
-                .font(.system(size: 14, design: .monospaced))
-            TextField("设备名", text: $model.deviceID)
-                .autocorrectionDisabled()
-                .textInputAutocapitalization(.never)
-                .disabled(model.isRecording)
-            TextField("使用者", text: $model.userID)
-                .autocorrectionDisabled()
-                .textInputAutocapitalization(.never)
-                .disabled(model.isRecording)
-            SecureField("设备登记凭据", text: $model.deviceToken)
-                .autocorrectionDisabled()
-                .textInputAutocapitalization(.never)
-                .disabled(model.isRecording)
-            Button("恢复默认连接参数") { model.resetToDefaults() }
-        } header: {
-            Text("连接参数")
-        }
-    }
-
-    /// 复制走的内容:一眼能看全「这台手机现在是什么状态」
-    private var debugBundle: String {
-        """
-        server=\(model.serverURL)
-        identity=\(model.identity)
-        LivK=\(model.livekWord) RepK=\(model.repkWord)
-        录=\(Int(model.recordedSeconds)) 收=\(Int(model.serverSeconds)) 句=\(model.lines.count)
-        麦克风模式=\(model.micModeText)(宽谱=\(model.micIsWide))
-        App Group=\(BroadcastProbe.groupName())
-        扩展=\(BroadcastProbe.extensionBundleID)
-        version=\(appVersion)
-
-        \(BroadcastProbe.fullLogText())
-        """
-    }
-
-    @ViewBuilder private var crashSection: some View {
-        if let crash = CrashLog.previousCrashFile {
-            Section("上次异常(黑匣子文件)") {
-                Text(crash).font(.system(size: 11, design: .monospaced))
-                Button("清空黑匣子") { CrashLog.clear() }
-            }
-        } else if let failed = CrashLog.lastFailure {
-            Section("上次异常") {
-                Text(failed).font(.system(size: 11, design: .monospaced))
-                Button("清空黑匣子") { CrashLog.clear() }
-            }
-        }
-    }
-
-    /// 日志(用户口径 2026-10-19):把「主程序步骤」与「扩展日志」并进同一个分区,
-    /// 内部只用两行灰字小标题区分来源 —— 两者是不同进程的证据,不是同一事实的副本。
-    /// 底部保留唯一的复制入口(原「排错」分区不再单列)。
-    private var logSection: some View {
-        Section {
-            Text("主程序").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
-            if model.notes.isEmpty {
-                Text("还没有步骤记录").font(.system(size: 10)).foregroundStyle(.secondary)
-            } else {
-                Text(model.notesText)
-                    .font(.system(size: 10, design: .monospaced))
-                    .textSelection(.enabled)
-            }
-            Text("扩展").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
-            ExtLogBody()
-            Button {
-                UIPasteboard.general.string = debugBundle
-                copiedAt = "已复制 \(debugBundle.count) 字符"
-            } label: {
-                Label("复制排错信息", systemImage: "square.and.arrow.up")
-            }
-            if !copiedAt.isEmpty {
-                Text(copiedAt).font(.system(size: 11)).foregroundStyle(.secondary)
-            }
-        } header: {
-            Text("日志")
-        }
-    }
-
-    // MARK: - 状态段(全固定 → 放设置页最上面)
-
-    private var stateSection: some View {
-        Section {
-            AppGroupRow()
-            ExtensionRow()
-            valueRow("身份", model.identity)
-            valueRow("版本", appVersion)
-        } header: {
-            Text("注册状态")
-        }
-    }
-
-    /// 值那一列统一款式:等宽小字 + 绿色,与 App Group / 扩展 两行完全一致
-    private func valueRow(_ label: String, _ value: String) -> some View {
-        HStack(spacing: 6) {
-            Text(label)
-                .font(.system(size: 12))
-                .foregroundStyle(.secondary)
-                .layoutPriority(1)
-            Spacer(minLength: 4)
-            Text(value)
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(.green)
-                .lineLimit(1)
-                .minimumScaleFactor(0.6)
-                .truncationMode(.middle)
-        }
-    }
-
-    /// 版本从包里读真值(以前写死 "build 12",排查时会误导)
-    private var appVersion: String {
-        let v = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
-        let b = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
-        return "v\(v) · build \(b)"
     }
 }
 
