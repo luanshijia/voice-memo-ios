@@ -37,11 +37,13 @@ struct LiveKitConfig {
     typealias Token = MeetingGrant
 
     /// 向家里要一张卡。失败一律抛出 —— 调用方必须让用户看到"取卡失败",不能静默连不上。
-    func requestToken(identity: String, ttl: Int = 15 * 60, channel: String? = nil) async throws -> Token {
+    func requestToken(identity: String, ttl: Int = 15 * 60, channel: String? = nil,
+                      meetingID: String? = nil) async throws -> Token {
         let resolvedChannel = channel ?? (identity == broadcastIdentity ? "system_audio" : "mic")
         return try await MeetingControlClient.requestGrant(serverURL: url, identity: identity,
                                                             userID: userID, deviceID: device,
-                                                            channel: resolvedChannel, ttl: ttl)
+                                                            channel: resolvedChannel,
+                                                            meetingID: meetingID, ttl: ttl)
     }
 
 }

@@ -424,6 +424,7 @@ final class SessionModel: ObservableObject {
     }
 
     private func start() {
+        let recoveryMeetingID = sessionID.isEmpty ? nil : sessionID
         connectionGeneration += 1
         let generation = connectionGeneration
         lines = []
@@ -466,7 +467,8 @@ final class SessionModel: ObservableObject {
             do {
                 try await MeetingControlClient.flushPendingMicStop()
                 let card = try await cfg.requestToken(identity: cfg.identity,
-                                                      channel: SessionControlContract.mic)
+                                                      channel: SessionControlContract.mic,
+                                                      meetingID: recoveryMeetingID)
                 grantedMeetingID = card.meetingID
                 grantedServerGeneration = card.generation
                 let live = try await room.connect(url: card.url, token: card.token, identity: cfg.identity)

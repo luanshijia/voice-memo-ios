@@ -77,6 +77,7 @@ enum MeetingControlClient {
         let deviceID: String
         let channel: String
         let requestID: String
+        let meetingID: String?
     }
     private struct PendingStop: Codable {
         let serverURL: String
@@ -114,6 +115,7 @@ enum MeetingControlClient {
 
     static func requestGrant(serverURL: String, identity: String, userID: String,
                              deviceID: String, channel: String,
+                             meetingID: String? = nil,
                              ttl: Int = 15 * 60) async throws -> MeetingGrant {
         guard var components = URLComponents(string: serverURL),
               let configuredHost = components.host else {
@@ -129,12 +131,13 @@ enum MeetingControlClient {
         // Keep the same idempotency key across a lost HTTP response or process
         // death. It is cleared only after publication is reported or a stop is
         // durably queued; returning a grant is not proof that the caller saved it.
-        let requestID = try pendingStartID(serverURL: serverURL, userID: userID,
-                                           deviceID: deviceID, channel: channel)
-        let payload: [String: Any] = ["request_id": requestID,
-                                      "user_id": userID,
-                                      "device_id": deviceID,
+        let pending = try pendingStart(serverURL: serverURL, userID: userID,
+                                       deviceID: deviceID, channel: channel,
+                                       meetingID: meetingID)
+        var payload: [String: Any] = ["request_id": pending.requestID,
+                                      "user_id": userID, "device_id": deviceID,
                                       "channel": channel]
+        if let meetingID = pending.meetingID { payload["meeting_id"] = meetingID }
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -317,11 +320,16 @@ enum MeetingControlClient {
         try await flushPendingBroadcastStop()
         let registration = try sharedRegistration()
         let identity = registration.deviceID + "-replaykit"
+        let view = try await deviceView(serverURL: registration.serverURL,
+                                        deviceID: registration.deviceID)
+        let meetingID = ["preparing", "active", "interrupted_pending"].contains(
+            view.meeting?.status ?? "") ? view.meeting?.meetingID : nil
         let grant = try await requestGrant(serverURL: registration.serverURL,
                                            identity: identity,
                                            userID: registration.userID,
                                            deviceID: registration.deviceID,
-                                           channel: SessionControlContract.systemAudio)
+                                           channel: SessionControlContract.systemAudio,
+                                           meetingID: meetingID)
         return grant
     }
 
@@ -407,8 +415,9 @@ enum MeetingControlClient {
         }
     }
 
-    private static func pendingStartID(serverURL: String, userID: String,
-                                       deviceID: String, channel: String) throws -> String {
+    private static func pendingStart(serverURL: String, userID: String,
+                                     deviceID: String, channel: String,
+                                     meetingID: String?) throws -> PendingStart {
         guard let defaults = sharedDefaults() else {
             throw failure(13, "App Group 不可用，无法保存会议申请")
         }
@@ -419,14 +428,20 @@ enum MeetingControlClient {
                   pending.deviceID == deviceID, pending.channel == channel else {
                 throw failure(15, "存在待恢复的旧会议申请，请先恢复原设备登记")
             }
-            return pending.requestID
+            // A retry must keep the original request body as well as its ID.
+            // A newly observed meeting cannot be inserted into that fingerprint.
+            return pending
+        }
+        if let meetingID, UUID(uuidString: meetingID) == nil {
+            throw failure(15, "待恢复会议号无效")
         }
         let pending = PendingStart(serverURL: serverURL, userID: userID,
                                    deviceID: deviceID, channel: channel,
-                                   requestID: UUID().uuidString.lowercased())
+                                   requestID: UUID().uuidString.lowercased(),
+                                   meetingID: meetingID)
         defaults.set(try JSONEncoder().encode(pending), forKey: key)
         defaults.synchronize()
-        return pending.requestID
+        return pending
     }
 
     private static func clearPendingStart(channel: String, deviceID: String) {
