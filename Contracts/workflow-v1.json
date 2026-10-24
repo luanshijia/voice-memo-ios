@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "description": "Coordinator-owned post-meeting task order and stage evidence",
+  "stages": [
+    {"name": "asr", "executor": "worker", "requires": [], "checkpoint": "asr", "summary_status": ["pending"]},
+    {"name": "diarize", "executor": "worker", "requires": ["asr"], "checkpoint": "diarize", "summary_status": ["pending"]},
+    {"name": "summary", "executor": "worker", "requires": ["diarize"], "checkpoint": "diarize", "summary_status": ["complete", "skipped", "failed"]},
+    {"name": "material", "executor": "coordinator", "requires": ["summary"], "format": "html", "source": "accepted_report_sha256"}
+  ],
+  "task_identity": ["meeting_id", "stage", "task_id", "attempt"],
+  "dispatch": {
+    "next": "/v1/meetings/{meeting_id}/stages/next",
+    "owner": "coordinator",
+    "worker_orders_stages": false,
+    "note": "The worker asks this endpoint for the stage to run and never iterates stages itself."
+  },
+  "final_report_requires": "summary stage result accepted by coordinator",
+  "stage_result": ["meeting_id", "input_paths", "workflow_stage", "summary_status", "sha256"]
+}

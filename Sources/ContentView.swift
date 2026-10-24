@@ -22,6 +22,12 @@ struct ContentView: View {
         ZStack(alignment: .bottom) {
             VStack(spacing: 6) {
                 buttonRow                   // 顶部五个按钮(状态行搬到屏幕最下方)
+                if !model.transcriptGapText.isEmpty {
+                    Text(model.transcriptGapText)
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .accessibilityLabel("字幕缺口：" + model.transcriptGapText)
+                }
                 transcript // 字幕与会中提要区域
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)

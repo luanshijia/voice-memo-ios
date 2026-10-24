@@ -1,0 +1,64 @@
+{
+  "manifest_version": 1,
+  "topic": "stt",
+  "current_schema_version": 2,
+  "supported_schema_versions": [1, 2],
+  "session_id_required_from_version": 2,
+  "session_id_pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
+  "max_safe_integer": 9007199254740991,
+  "sumstatus_codes": [
+    "no_session", "wait_period", "short", "quality", "busy_prev",
+    "busy_refine", "busy_vram", "busy_cpu", "go"
+  ],
+  "messages": {
+    "partial": {
+      "direction": "down",
+      "fields": [
+        {"name":"who","kind":"string"},
+        {"name":"source","kind":"string"},
+        {"name":"text","kind":"string"},
+        {"name":"audio_s","kind":"number","minimum":0},
+        {"name":"ts","kind":"number","exclusive_minimum":0}
+      ]
+    },
+    "final": {
+      "direction": "down",
+      "fields": [
+        {"name":"who","kind":"string"},
+        {"name":"source","kind":"string"},
+        {"name":"text","kind":"string"},
+        {"name":"audio_s","kind":"number","minimum":0},
+        {"name":"gap_s","kind":"number","nullable":true,"minimum":0},
+        {"name":"seq","kind":"integer","minimum":1,"optional":true},
+        {"name":"transcript_epoch","kind":"string","optional":true},
+        {"name":"ts","kind":"number","exclusive_minimum":0}
+      ]
+    },
+    "summary": {
+      "direction": "down",
+      "fields": [
+        {"name":"text","kind":"string"},
+        {"name":"clock","kind":"clock_hm"},
+        {"name":"ts","kind":"number","exclusive_minimum":0},
+        {"name":"unsupported","kind":"integer","minimum":0}
+      ]
+    },
+    "sumstatus": {
+      "direction": "down",
+      "fields": [
+        {"name":"mode","kind":"string","enum":["auto","manual"]},
+        {"name":"code","kind":"string"},
+        {"name":"text","kind":"string"},
+        {"name":"chars","kind":"integer","minimum":0},
+        {"name":"next_in","kind":"number","nullable":true,"minimum":0},
+        {"name":"ts","kind":"number","exclusive_minimum":0}
+      ]
+    },
+    "summode": {
+      "direction": "up",
+      "fields": [
+        {"name":"mode","kind":"string","enum":["auto","manual"]}
+      ]
+    }
+  }
+}

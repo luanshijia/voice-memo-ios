@@ -1,0 +1,178 @@
+{
+  "schema_version": 1,
+  "description": "VoiceMemo meeting-control request and lifecycle vocabulary",
+  "transport": {
+    "public": "TLS proxy on configured port",
+    "internal": "loopback-only coordinator API",
+    "device_credential_header": "X-VM-Device-Token",
+    "device_registration": "secrets/token-allow.json devices[device_id] with user_id and credential_sha256; source IP must also be allowed"
+  },
+  "start_request": {
+    "path": "/v1/meetings/start",
+    "required": ["request_id", "user_id", "device_id", "channel"],
+    "properties": {
+      "request_id": {"type": "string", "format": "uuid"},
+      "user_id": {"type": "string", "pattern": "^[A-Za-z0-9._-]{1,64}$"},
+      "device_id": {"type": "string", "pattern": "^[A-Za-z0-9._-]{1,64}$"},
+      "channel": {"type": "string", "enum": ["mic", "system_audio"]},
+      "meeting_id": {"type": "string", "format": "uuid"}
+    },
+    "optional": ["meeting_id"],
+    "recovery": "with meeting_id the request may only resume that meeting: unknown id, another device's meeting, another owner's meeting, or a sealed/canceled meeting is refused and never replaced by a new one; without meeting_id a legacy client still joins its device's single unsealed meeting",
+    "additional_properties": false
+  },
+  "stop_request": {
+    "path": "/v1/meetings/<meeting_id>/stop",
+    "required": ["request_id", "device_id", "channel", "generation"],
+    "legacy_without_generation": "accepted only while that channel remains at generation 1",
+    "properties": {
+      "request_id": {"type": "string", "format": "uuid"},
+      "device_id": {"type": "string", "pattern": "^[A-Za-z0-9._-]{1,64}$"},
+      "channel": {"type": "string", "enum": ["mic", "system_audio"]},
+      "generation": {"type": "integer", "minimum": 1}
+    },
+    "additional_properties": false
+  },
+  "start_response": {
+    "required": ["meeting_id", "room", "status", "channel", "generation", "state_revision", "created_at", "url", "token", "identity", "ttl"],
+    "meeting_id": "computer-issued UUID",
+    "room": "vm-<meeting_id>",
+    "status": "active only after desktop receive room is connected"
+  },
+  "start_error_response": {
+    "body": {"error": "stable machine-readable error code"},
+    "http_status_codes": {
+      "400": ["invalid_json"],
+      "409": ["invalid_start_fields", "invalid_request_id", "invalid_user_id", "invalid_device_id", "invalid_channel", "invalid_recovery_meeting_id", "request_id_conflict", "recovery_meeting_not_found", "recovery_device_mismatch", "device_owner_conflict", "recovery_meeting_closed", "meeting_not_found", "meeting_not_preparing", "channel_not_starting"],
+      "503": ["receiver_not_ready"]
+    },
+    "client_behavior": "For start requests, clients branch on the JSON error field, never on localized display text; unknown codes remain generic HTTP failures."
+  },
+  "device_view": {
+    "method": "GET",
+    "path": "/v1/devices/<device_id>/meeting",
+    "fields": ["state_revision", "meeting", "pending_reports"],
+    "meeting_fields": ["meeting_id", "user_id", "device_id", "created_at", "room", "status", "channels", "input_count", "recovery_deadline"],
+    "meeting": "null when this device has no history",
+    "recovery_deadline": "ISO-8601 UTC instant or null. The last moment this meeting still accepts a recovery start: the latest channel interrupted_at plus agent.control_recovery_grace_seconds. Null while no channel has started the recovery clock, so an open meeting can still be recovered.",
+    "pending_reports": "every generated but unacknowledged report for this device, each with meeting_id and sha256, including earlier meetings while a newer one is active",
+    "view_grant": "when meeting is active, TLS proxy adds a receive-only LiveKit token with identity <device_id>-view"
+  },
+  "artifact_delivery": {
+    "get": "/v1/meetings/<meeting_id>/artifact?device_id=<device_id>",
+    "ack": "/v1/meetings/<meeting_id>/artifact/ack",
+    "ack_required": ["device_id", "sha256"],
+    "acceptance": "report meta meeting_id and input_paths must match the coordinator's sealed manifest",
+    "generated": "accepted report bytes and SHA-256 are persisted by the coordinator",
+    "delivered": "App stores the report locally, then acknowledges the same SHA-256"
+  },
+  "transcript": {
+    "method": "GET",
+    "get": "/v1/meetings/<meeting_id>/transcript?device_id=<device_id>&after=<after>",
+    "query": ["device_id", "after", "epoch"],
+    "response": ["meeting_id", "after", "items", "latest", "oldest", "truncated", "capacity", "epoch", "reset"],
+    "item_fields": ["seq", "who", "source", "text", "audio_s", "gap_s", "ts"],
+    "meaning": "Confirmed finals are identified by (meeting_id, epoch, seq). The memory buffer has a new UUID epoch after agent restart; a different requested epoch returns reset=true and items from the start of the current buffer. The App explicitly shows possible history gaps after reset or truncation. Authenticated device_id must own the requested meeting."
+  },
+  "postprocess": {
+    "stages": ["asr", "diarize", "summary"],
+    "checkpoint": "report JSON meta.workflow_stage and meta.summary_status",
+    "identity": "report JSON meta.meeting_id and meta.input_paths"
+  },
+  "observation_request": {
+    "path": "/v1/meetings/<meeting_id>/observe",
+    "required": ["device_id", "channel", "generation", "observed"],
+    "phone_observed": ["unknown", "publishing", "stopped"],
+    "desktop_observed": ["unknown", "ready", "receiving", "stopped"],
+    "meaning": "receiver readiness, device publication, and desktop reception are separate facts"
+  },
+  "lifecycle": {
+    "meeting": ["preparing", "active", "interrupted_pending", "finishing", "sealed", "canceled"],
+    "recovery_eligible_meeting_states": ["preparing", "active", "interrupted_pending"],
+    "channel": ["starting", "active", "interrupted_pending", "interrupted", "stopped"],
+    "seal_guard": "all channels stopped or interrupted after recovery deadline, all tracked streams closed, WAV and archive verified, immutable input manifest fixed",
+    "interruption_rule": "after observation grace mark pending; after a separate recovery grace without a receiving stream mark interrupted and finish, preserving desired state and interruption reason",
+    "capture_concurrency": "One device has at most one recovery-eligible capture meeting. A finishing meeting may coexist with a new capture meeting; its audio and postprocessing continue normally.",
+    "grant_refresh": "an active channel retains its generation; a stopped channel rejoin increments it",
+    "idempotency": ["same_request_same_result", "same_id_different_payload_conflict"],
+    "start_request_retention": "App Group stores request_id before HTTP; retain through lost response until publishing is confirmed or stop intent is durable"
+  },
+  "authority": {
+    "meeting_id": "computer",
+    "created_at": "computer_first_receipt_utc",
+    "state_revision": "coordinator"
+  },
+  "rules": {
+    "format": "R-<DOMAIN>-<NN>",
+    "scope": "只给不可逆或两端必须对齐的规则编号; 实现细节不编号, 编号一多就没人数",
+    "why": "编号的作用不是好看: 每条编号必须绑一个真实用例(test_by), 规则被改坏时用例先报错; 不绑用例的编号会烂成虚假的确定感",
+    "items": [
+      {"id": "R-JOIN-01", "contract": "session-control-v1.json#lifecycle.idempotency",
+       "text": "a retried request returns its original result; the same request id with different content conflicts",
+       "enforced_by": ["agent/vmcore/coordinator.py"],
+       "tested_by": ["tools/ops/test_coordinator.py::test_duplicate_request_returns_exact_original_response",
+                     "tools/ops/test_coordinator.py::test_reused_request_id_with_different_body_conflicts"]},
+      {"id": "R-JOIN-02", "contract": null,
+       "text": "one registered device holds at most one recovery-eligible capture meeting; later channels join it; finishing meetings may coexist with a new capture meeting",
+       "enforced_by": ["agent/vmcore/coordinator.py"],
+       "tested_by": ["tools/ops/test_coordinator.py::test_start_is_desktop_generated_and_same_device_channels_join_one_meeting",
+                     "tools/ops/test_coordinator.py::test_distinct_devices_can_have_parallel_meetings",
+                     "tools/ops/test_coordinator.py::test_finishing_meeting_does_not_block_a_new_capture"]},
+      {"id": "R-JOIN-03", "contract": "session-control-v1.json#start_request.recovery",
+       "text": "a recovery request carrying meeting_id can only resume that meeting; unknown, foreign, or closed meetings are refused and never replaced by a new meeting",
+       "enforced_by": ["agent/vmcore/coordinator.py", "agent/vmcore/control_api.py", "app-ios/Shared/MeetingClient.swift"],
+       "tested_by": ["tools/ops/test_coordinator.py::test_recovery_requires_exact_open_meeting_and_preserves_legacy_start",
+                     "tools/ops/test_control_api.py::test_start_recovery_errors_are_structured"]},
+      {"id": "R-ERR-01", "contract": "session-control-v1.json#start_error_response",
+       "text": "start API errors use stable JSON codes; clients parse codes independently of localized text",
+       "enforced_by": ["agent/vmcore/control_api.py", "app-ios/Shared/MeetingClient.swift"],
+       "tested_by": ["tools/ops/test_control_api.py::test_start_recovery_errors_are_structured"]},
+      {"id": "R-GEN-01", "contract": "session-control-v1.json#lifecycle.grant_refresh",
+       "text": "a live channel keeps its generation; only a stopped channel that rejoins increments it",
+       "enforced_by": ["agent/vmcore/coordinator.py"],
+       "tested_by": ["tools/ops/test_coordinator.py::test_stopped_channel_can_rejoin_same_open_meeting_with_new_generation",
+                     "tools/ops/test_coordinator.py::test_grant_refresh_keeps_generation_of_live_channel"]},
+      {"id": "R-OBS-01", "contract": "session-control-v1.json#observation_request.meaning",
+       "text": "device publication, desktop reception and room readiness are independent facts; a stale generation cannot write",
+       "enforced_by": ["agent/vmcore/coordinator.py"],
+       "tested_by": ["tools/ops/test_coordinator.py::test_observations_are_independent_and_stale_generation_cannot_apply"]},
+      {"id": "R-INT-01", "contract": "session-control-v1.json#lifecycle.interruption_rule",
+       "text": "after the observation grace mark interrupted_pending; after a separate recovery grace without a receiving stream mark interrupted and finish, preserving desired state and never claiming the user stopped",
+       "enforced_by": ["agent/vmcore/coordinator.py"],
+       "tested_by": ["tools/ops/test_coordinator.py::test_unknown_channel_becomes_pending_without_fake_stop_and_can_recover",
+                     "tools/ops/test_coordinator.py::test_unrecovered_channel_reaches_interrupted_finish_and_preserves_intent",
+                     "tools/ops/test_coordinator.py::test_actual_receiving_stream_prevents_interrupted_finish",
+                     "tools/ops/test_coordinator.py::test_pending_channel_may_recover_before_deadline"]},
+      {"id": "R-SEAL-01", "contract": "session-control-v1.json#lifecycle.seal_guard",
+       "text": "seal only when every started channel is stopped or interrupted, no authorization is pending, audio is closed and verified, the second pass is settled, and the immutable input manifest is fixed",
+       "enforced_by": ["agent/vmcore/coordinator.py", "agent/vmcore/artifacts.py"],
+       "tested_by": ["tools/ops/test_coordinator.py::test_meeting_state_survives_restart_and_only_seals_after_all_started_channels_stop",
+                     "tools/ops/test_coordinator.py::test_second_stop_after_seal_remains_recoverable",
+                     "tools/ops/test_artifacts.py::test_closed_audio_and_archive_become_manifest",
+                     "tools/ops/test_artifacts.py::test_missing_archive_does_not_seal",
+                     "tools/ops/test_artifacts.py::test_other_meeting_audio_does_not_seal"]},
+      {"id": "R-DISP-01", "contract": "workflow-v1.json#dispatch",
+       "text": "the coordinator alone decides the next stage; the worker never orders stages itself",
+       "enforced_by": ["agent/vmcore/coordinator.py", "agent/workflow.py"],
+       "tested_by": ["tools/ops/test_workflow.py::test_worker_follows_the_stage_the_coordinator_names",
+                     "tools/ops/test_workflow.py::test_contract_declares_the_coordinator_as_dispatch_owner",
+                     "tools/ops/test_control_api.py::test_next_stage_endpoint_hands_out_the_coordinator_choice"]},
+      {"id": "R-STAGE-01", "contract": null,
+       "text": "a failed stage is handed back for an explicit retry instead of ending the chain; the retry budget belongs to the caller",
+       "enforced_by": ["agent/vmcore/coordinator.py"],
+       "tested_by": ["tools/ops/test_workflow.py::test_coordinator_approves_each_stage_and_retries_only_failed_summary"]},
+      {"id": "R-MAT-01", "contract": "artifacts-v1.json#kinds.report.writers",
+       "text": "material may only be generated from a report whose digest was accepted; generation is not delivery",
+       "enforced_by": ["agent/vmcore/coordinator.py", "agent/vmcore/artifacts_contract.py"],
+       "tested_by": ["tools/ops/test_coordinator.py::test_material_is_tied_to_accepted_report_but_not_claimed_delivered",
+                     "tools/ops/test_artifacts_contract.py::test_contract_and_code_agree_on_who_writes_what"]},
+      {"id": "R-REC-01", "contract": null,
+       "text": "every journal line carries the digest of the state it produces; replay must reproduce it or fail closed",
+       "enforced_by": ["agent/vmcore/coordinator.py", "agent/vmcore/journal.py"],
+       "tested_by": ["tools/ops/test_journal.py::test_replay_reproduces_the_live_state",
+                     "tools/ops/test_journal.py::test_a_tampered_patch_fails_closed",
+                     "tools/ops/test_coordinator.py::test_failed_persistence_does_not_acknowledge_or_mutate_state"]}
+    ],
+    "pending": []
+  }
+}

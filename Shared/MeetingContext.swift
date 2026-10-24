@@ -86,10 +86,9 @@ struct MeetingContext: Equatable {
 
     // MARK: - 对账:两个按钮能不能点
 
-    /// 总管眼里这场会还没结束(可以回去,也不该另起一场)。
-    /// 注意它含 `finishing`:正在收尾的会**还在这张账上**(所以不该另起一场),
-    /// 但总管已经拒绝对它带号恢复 —— 「该不该另起」和「能不能接回」是两件事,
-    /// 分别看这个字段和 `meetingAcceptsRecovery`。
+    /// 总管眼里仍有未完成的工作，包含 finishing。
+    /// finishing 只表示旧会正在收尾，不阻止新采集；恢复资格与新会投影
+    /// 均以 meetingAcceptsRecovery 为准，不能用本字段作新会禁令。
     var hasOpenMeeting: Bool {
         guard let meeting else { return false }
         return [.preparing, .active, .interruptedPending, .finishing].contains(meeting)

@@ -13,9 +13,24 @@ options:
 packages:
   LiveKit:
     url: https://github.com/livekit/client-sdk-swift
-    from: "2.18.0"
+    exactVersion: "2.18.0"
 
 targets:
+  VoiceMemoTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - Tests
+    dependencies:
+      - target: VoiceMemo
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.luanshijia.voicememo.tests
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/VoiceMemo.app/VoiceMemo"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+        CODE_SIGNING_ALLOWED: NO
+        SWIFT_VERSION: "5.0"
   # 广播扩展作为第二个 LiveKit 参与者,只发布 ReplayKit audioApp 系统声音。
   VoiceMemoBroadcast:
     type: app-extension
@@ -67,6 +82,7 @@ targets:
         CODE_SIGN_IDENTITY: ""
         CODE_SIGNING_REQUIRED: NO
 
+
   VoiceMemo:
     type: application
     platform: iOS
@@ -74,6 +90,8 @@ targets:
       - Sources
       - Shared
       - Assets.xcassets        # 主屏图标(2026-10-15 加):以前包里根本没有图标,装到主屏是空白的
+      - path: Contracts/revision.json
+        buildPhase: resources
     dependencies:
       - package: LiveKit
         product: LiveKit
@@ -127,3 +145,12 @@ targets:
         CODE_SIGNING_ALLOWED: NO
         CODE_SIGN_IDENTITY: ""
         CODE_SIGNING_REQUIRED: NO
+
+schemes:
+  VoiceMemo:
+    build:
+      targets:
+        VoiceMemo: all
+    test:
+      targets:
+        - VoiceMemoTests

@@ -1,0 +1,113 @@
+{
+  "schema_version": 1,
+  "description": "App 与 ReplayKit 扩展共读的观测行格式、状态词别名与显示层级。键必须与 session-control-v1.json 一字不差。",
+  "why": "App 侧的界面必须投影电脑端总管的状态机:总管要知道的,App 得有入口;总管有的概念,App 得有显示位。但枚举不能被 App 再抄一遍 —— 抄一遍就有第二个真相源。所以这里只定义三样东西:扩展写进 App Group 的单行观测格式、每个枚举的显示别名、以及每个字段该出现在界面的哪一层。枚举本身仍由 session-control-v1.json 定义,本文件由生成器校验,不一致直接报错。",
+  "authority": {
+    "enums": "session-control-v1.json#lifecycle",
+    "observation_lines": "本文件#observation",
+    "display": "本文件#display"
+  },
+  "observation": {
+    "where": "App Group 的 broadcast-probe.log,一行一条,与人读的中文日志并存",
+    "line_shape": "<prefix> key=value key=value ...",
+    "prefix": "obs",
+    "separator": " ",
+    "why_line_format": "扩展与主 App 是两个进程,唯一的共同介质就是这个文件。原来的状态判定靠匹配中文句子(例如「LiveKit 已连接并发布音频轨」),改一句排错文案就会改掉状态灯 —— 所以状态必须走结构化行,中文行只留给人看。",
+    "fields": {
+      "v": {
+        "kind": "integer",
+        "const": 1,
+        "required": true,
+        "note": "格式版本。主 App 只认认识的版本,不认识的写 unknown 而不是猜"
+      },
+      "gen": {
+        "kind": "integer",
+        "minimum": 1,
+        "required": false,
+        "note": "通道代次,来自授权回包的 generation。授权到手前没有代次,此时该字段缺省;旧代次的观测行不能改新连接的状态"
+      },
+      "meeting": {
+        "kind": "uuid",
+        "required": false,
+        "note": "授权到手前没有会议号,此时只有 starting/failed"
+      },
+      "state": {
+        "kind": "enum",
+        "required": true,
+        "values": ["starting", "active", "interrupted_pending", "interrupted", "stopped"],
+        "note": "与 session-control-v1.json#lifecycle.channel 同一集合"
+      },
+      "reason": {
+        "kind": "enum",
+        "required": false,
+        "values": ["grant_failed", "identity_mismatch", "connect_failed", "disconnected",
+                   "pcm_unavailable", "conversion_failed", "stopped_by_user"],
+        "note": "只发码不发句子;句子在显示层"
+      },
+      "audio_app": {
+        "kind": "integer",
+        "minimum": 0,
+        "required": false,
+        "note": "累计交给 LiveKit 混音器的系统声样本数;原始 ReplayKit 回调计数只留在人读日志,不能冒充已推送"
+      }
+    }
+  },
+  "display": {
+    "why": "三层判据只有一句:看不到它会不会做错动作。会 → 上底栏;不会但逻辑要用 → 持有不显示;两者都不是 → 默认收起。",
+    "labels": {
+      "meeting": "会议状态",
+      "channel": "连接状态"
+    },
+    "channel_short": {
+      "mic": "麦",
+      "system_audio": "声"
+    },
+    "why_short": "底栏显示的是通道(channel)的状态,不是连接身份(livekit/replaykit)。用麦/声与总管的 mic/system_audio 对齐,同时省出宽度。",
+    "meeting": {
+      "preparing": {"alias": "准备中", "layer": "required"},
+      "active": {"alias": "进行中", "layer": "required"},
+      "interrupted_pending": {"alias": "待确认", "layer": "required"},
+      "finishing": {"alias": "收尾中", "layer": "required"},
+      "sealed": {"alias": "已结束", "layer": "required"},
+      "canceled": {"alias": "已取消", "layer": "required"}
+    },
+    "channel": {
+      "starting": {"alias": "起始中", "layer": "required"},
+      "active": {"alias": "已激活", "layer": "required"},
+      "interrupted_pending": {"alias": "待确认", "layer": "required"},
+      "interrupted": {"alias": "已中断", "layer": "required"},
+      "stopped": {"alias": "已停止", "layer": "required"}
+    },
+    "internal": {
+      "state_revision": "总管的状态修订号,判迟到回包用;进设置页状态段,不上底栏",
+      "generation": "通道代次,判旧连接用;进设置页状态段",
+      "ttl": "票据剩余有效期,判何时重取;进设置页状态段"
+    },
+    "optional": {
+      "pending_reports": "还有几份报告没送达;设置页「本场会议」",
+      "input_count": "封场固定的输入份数;设置页「本场会议」",
+      "room": "房间名 vm-<meeting_id>;设置页「本场会议」",
+      "postprocess_stages": "会后 asr/diarize/summary 进度 —— 当前没有给 App 的查询接口,本版不显示"
+    }
+  },
+  "rules": {
+    "format": "R-<DOMAIN>-<NN>",
+    "items": [
+      {
+        "id": "R-VIEW-01",
+        "text": "App 侧状态词只能从总管枚举派生,不允许再写一份自己的词表;别名由 contracts/app-shared-v1.json 提供",
+        "test_by": "tools/ops/test_app_shared_contract.py"
+      },
+      {
+        "id": "R-VIEW-02",
+        "text": "每个进入底栏的显示位必须有 layer=required 标注;internal 与 optional 不得上底栏",
+        "test_by": "tools/ops/test_app_shared_contract.py"
+      },
+      {
+        "id": "R-VIEW-03",
+        "text": "结构化观测行的 state 集合必须与 session-control-v1.json#lifecycle.channel 完全一致",
+        "test_by": "tools/ops/test_app_shared_contract.py"
+      }
+    ]
+  }
+}

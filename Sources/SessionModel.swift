@@ -4,7 +4,7 @@ import LiveKit
 
 /// 一句话转写结果(带说话人 —— agent 是按音轨分轨识别后带上 identity 发回来的)。
 struct TranscriptLine: Identifiable {
-    let id = UUID()
+    var id = UUID()
     let who: String
     let source: String
     let text: String
@@ -24,9 +24,8 @@ struct TranscriptPartial: Identifiable {
 @MainActor
 final class SessionModel: ObservableObject {
     @Published var lines: [TranscriptLine] = []
-    // 补取游标:本场已收到的最大定稿 seq。断线/回前台时按它向电脑端补齐,
-    // 大于它的句子才上屏,所以补取不会与实时消息重复。
-    private var lastFinalSeq = 0
+    private var transcriptStore = TranscriptStore()
+    @Published private(set) var transcriptGapText = ""
     private var lastCatchUpAt = Date.distantPast
     private var catchUpRunning = false
     /// 每个音源各自保留第一遍流式字幕，避免一路定稿清空另一路内容。
@@ -86,6 +85,7 @@ final class SessionModel: ObservableObject {
     private var protocolIssues: [String: Int] = [:]
     /// Throttles repeated retry diagnostics while pending reports are polled.
     private var artifactDeliveryFailureAt: [String: Date] = [:]
+    private var artifactDeliveryTask: Task<Void, Never>?
     /// 本场是否已补发过档位(每场只补一次,见 final 分支)。
     private var didResyncSumMode = false
     /// 上一场迟到消息的丢弃条数。**正常业务事件**,不参与 `Cap.Protocol` 结论 ——
@@ -271,13 +271,18 @@ final class SessionModel: ObservableObject {
                     Task { await self.room.send(self.summodePayload(self.sumMode)) }
                     self.note("已补发当前档位 \(self.sumMode)(本场首条定稿后)")
                 }
-                if !text.isEmpty {
-                    if let seq = raw["seq"] as? Int, seq > self.lastFinalSeq {
-                        self.lastFinalSeq = seq
+                if !text.isEmpty || raw["seq"] != nil {
+                    if let seq = WireContract.strictInteger(raw["seq"]) {
+                        self.transcriptStore.merge([
+                            .init(seq: seq, who: who, source: raw["source"] as? String ?? "",
+                                  text: text, gap: gap, ts: ts)
+                        ], epoch: raw["transcript_epoch"] as? String)
+                        self.syncTranscript()
+                    } else {
+                        self.lines.append(TranscriptLine(who: who, source: raw["source"] as? String ?? "",
+                                                         text: text, gap: gap, ts: ts))
+                        if self.lines.count > 4000 { self.lines.removeFirst(self.lines.count - 4000) }
                     }
-                    self.lines.append(TranscriptLine(who: who, source: raw["source"] as? String ?? "",
-                                                     text: text, gap: gap, ts: ts))
-                    if self.lines.count > 4000 { self.lines.removeFirst(self.lines.count - 4000) }
                 }
                 self.clearPartial(source: raw["source"] as? String ?? "", who: who)
             case "partial":
@@ -334,8 +339,12 @@ final class SessionModel: ObservableObject {
             try? await MeetingClient.flushPendingBroadcastStop()
             try? await MeetingClient.flushPendingMicStop()
             do {
+                let pollGeneration = connectionGeneration
+                let pollConfig = cfg
                 let state = try await MeetingClient.deviceView(
-                    serverURL: cfg.url, deviceID: cfg.device)
+                    serverURL: pollConfig.url, deviceID: pollConfig.device)
+                guard pollConfig.url == cfg.url, pollConfig.device == cfg.device,
+                      pollGeneration == connectionGeneration else { continue }
                 // 管家助手:总管那边这场会现在算什么状态。录着的时候也要查 ——
                 // 底栏的会议状态与两个对接按钮都靠它,不查就永远显示"无会议"。
                 meetingContext = MeetingContext(view: state)
@@ -345,11 +354,18 @@ final class SessionModel: ObservableObject {
                            receiver.meetingID == state.meeting?.meetingID {
                             if observerConnection == nil || sessionID != receiver.meetingID {
                                 if let old = observerConnection { await observerRoom.disconnect(old) }
+                                guard pollGeneration == connectionGeneration, !isRecording else { continue }
+                                if sessionID != receiver.meetingID { resetCurrentMeetingData() }
                                 sessionID = receiver.meetingID
                                 do {
-                                    observerConnection = try await observerRoom.connect(
+                                    let viewing = try await observerRoom.connect(
                                         url: receiver.url, token: receiver.token,
                                         identity: receiver.identity, publishMic: false)
+                                    guard pollGeneration == connectionGeneration, !isRecording else {
+                                        await observerRoom.disconnect(viewing)
+                                        continue
+                                    }
+                                    observerConnection = viewing
                                 } catch {
                                     note("会议查看连接失败: \(error.localizedDescription)")
                                 }
@@ -362,10 +378,20 @@ final class SessionModel: ObservableObject {
                             syncBoard()
                         }
                     }
+                if observerConnection != nil, Date().timeIntervalSince(lastCatchUpAt) >= 10 {
+                    Task { [weak self] in await self?.catchUpNow() }
+                }
                 // Reports are independent of the current recording. The control
                 // contract includes earlier unacknowledged reports while a newer
                 // meeting is active, so always deliver them after the device view.
-                await deliverPendingReports(state.pendingReports)
+                if artifactDeliveryTask == nil, !state.pendingReports.isEmpty {
+                    let deliveryConfig = cfg
+                    artifactDeliveryTask = Task { [weak self] in
+                        guard let self else { return }
+                        defer { self.artifactDeliveryTask = nil }
+                        await self.deliverPendingReports(state.pendingReports, config: deliveryConfig)
+                    }
+                }
             } catch {
                 // Keep the last known meeting visible during a temporary network loss.
             }
@@ -373,12 +399,13 @@ final class SessionModel: ObservableObject {
         }
     }
 
-    private func deliverPendingReports(_ pendingReports: [DeviceMeetingView.PendingReport]) async {
+    private func deliverPendingReports(_ pendingReports: [DeviceMeetingView.PendingReport],
+                                       config: LiveKitConfig) async {
         for pending in pendingReports {
             do {
                 let artifact = try await MeetingClient.fetchArtifact(
-                    serverURL: cfg.url, meetingID: pending.meetingID,
-                    deviceID: cfg.device)
+                    serverURL: config.url, meetingID: pending.meetingID,
+                    deviceID: config.device)
                 guard artifact.sha256 == pending.sha256 else {
                     noteArtifactDeliveryFailure(
                         meetingID: pending.meetingID, message: "电脑端报告摘要与待送达清单不一致")
@@ -387,8 +414,8 @@ final class SessionModel: ObservableObject {
                 // Persist the exact verified bytes before acknowledging delivery.
                 try storeReport(artifact.data, meetingID: pending.meetingID)
                 try await MeetingClient.acknowledgeArtifact(
-                    serverURL: cfg.url, meetingID: pending.meetingID,
-                    deviceID: cfg.device, sha256: artifact.sha256)
+                    serverURL: config.url, meetingID: pending.meetingID,
+                    deviceID: config.device, sha256: artifact.sha256)
                 artifactDeliveryFailureAt.removeValue(forKey: pending.meetingID)
                 note("会后报告已保存并回执电脑端")
             } catch {
@@ -577,7 +604,8 @@ final class SessionModel: ObservableObject {
     private func resetCurrentMeetingData() {
         lines = []
         partials = []
-        lastFinalSeq = 0
+        transcriptStore = TranscriptStore()
+        transcriptGapText = ""
         lastCatchUpAt = .distantPast
         recordedSeconds = 0
         serverSeconds = 0
@@ -734,36 +762,41 @@ final class SessionModel: ObservableObject {
     }
 
     /// 补取本场已确认、但没收到(或断线期间漏掉)的定稿。
-    /// 按 seq 去重:只有大于游标的句子才上屏,所以与实时消息不会重复。
+    /// 实时和补取共用连续游标与去重入口。
     func catchUpNow() async {
-        guard isRecording, !sessionID.isEmpty, !catchUpRunning else { return }
+        guard !sessionID.isEmpty, !catchUpRunning else { return }
         catchUpRunning = true
         defer { catchUpRunning = false }
         let meeting = sessionID
-        let cursor = lastFinalSeq
+        let cursor = transcriptStore.cursor
+        let requestedEpoch = transcriptStore.epoch
+        let generation = connectionGeneration
         do {
             let page = try await MeetingClient.fetchTranscript(
-                serverURL: cfg.url, meetingID: meeting, deviceID: cfg.device, after: cursor)
-            guard meeting == sessionID else { return }      // 期间换场:这一页作废
-            if page.truncated == true {
-                note("补取:电脑端只保留了最近若干句,seq \(cursor) 之后可能有缺口")
-            }
-            var added = 0
-            for item in page.items.sorted(by: { $0.seq < $1.seq }) where item.seq > lastFinalSeq {
-                lines.append(TranscriptLine(who: item.who, source: item.source,
-                                            text: item.text, gap: item.gapS, ts: item.ts))
-                lastFinalSeq = item.seq
-                added += 1
-            }
-            if lines.count > 4000 { lines.removeFirst(lines.count - 4000) }
+                serverURL: cfg.url, meetingID: meeting, deviceID: cfg.device,
+                after: cursor, epoch: requestedEpoch)
+            guard meeting == sessionID, generation == connectionGeneration else { return }
+            // Realtime may establish a newer epoch while the HTTP page is in flight.
+            guard transcriptStore.epoch == requestedEpoch || page.epoch == transcriptStore.epoch else { return }
+            transcriptStore.merge(page.items.map {
+                .init(seq: $0.seq, who: $0.who, source: $0.source, text: $0.text, gap: $0.gapS, ts: $0.ts)
+            }, epoch: page.epoch, oldest: page.oldest, truncated: page.truncated == true)
+            syncTranscript()
             lastCatchUpAt = Date()
-            if added > 0 {
-                note("补取 \(added) 句(seq \(cursor) → \(lastFinalSeq))")
-            }
         } catch {
             // 断线、家里重启失败都是常态:一行记录即可,不刷屏、不影响推流
             lastCatchUpAt = Date()
             note("补取失败:\(error.localizedDescription)")
+        }
+    }
+
+    private func syncTranscript() {
+        lines = transcriptStore.entries.filter { !$0.text.isEmpty }.map {
+            TranscriptLine(id: $0.id, who: $0.who, source: $0.source, text: $0.text, gap: $0.gap, ts: $0.ts)
+        }
+        if transcriptGapText != transcriptStore.gapMessage {
+            transcriptGapText = transcriptStore.gapMessage
+            if !transcriptGapText.isEmpty { note(transcriptGapText) }
         }
     }
 

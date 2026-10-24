@@ -14,10 +14,7 @@ final class SampleHandler: RPBroadcastSampleHandler {
     private var sampleRate = 0.0
     private var lastStatus = Date.distantPast
 
-    private static let groupCandidates = [
-        "group.com.luanshijia.voicememo",
-        "group.com.luanshijia.voicememo.458RP2552K",
-    ]
+    private static let groupCandidates = MeetingClient.appGroupCandidates
 
     private func log(_ line: String) {
         logQueue.sync {

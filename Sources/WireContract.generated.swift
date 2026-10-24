@@ -25,7 +25,7 @@ enum WireContract {
     static let outboundTypes: Set<String> = [ "summode" ]
     static let knownFields: [String: Set<String>] = [
         "partial": Set<String>(["type", "schema_version", "session_id", "who", "source", "text", "audio_s", "ts"]),
-        "final": Set<String>(["type", "schema_version", "session_id", "who", "source", "text", "audio_s", "gap_s", "seq", "ts"]),
+        "final": Set<String>(["type", "schema_version", "session_id", "who", "source", "text", "audio_s", "gap_s", "seq", "transcript_epoch", "ts"]),
         "summary": Set<String>(["type", "schema_version", "session_id", "text", "clock", "ts", "unsupported"]),
         "sumstatus": Set<String>(["type", "schema_version", "session_id", "mode", "code", "text", "chars", "next_in", "ts"]),
         "summode": Set<String>(["type", "schema_version", "session_id", "mode"]),
@@ -43,6 +43,7 @@ enum WireContract {
             WireFieldRule(name: "audio_s", kind: .number, nullable: false, optional: false, minimum: 0.0, exclusiveMinimum: nil, allowed: nil),
             WireFieldRule(name: "gap_s", kind: .number, nullable: true, optional: false, minimum: 0.0, exclusiveMinimum: nil, allowed: nil),
             WireFieldRule(name: "seq", kind: .integer, nullable: false, optional: true, minimum: 1.0, exclusiveMinimum: nil, allowed: nil),
+            WireFieldRule(name: "transcript_epoch", kind: .string, nullable: false, optional: true, minimum: nil, exclusiveMinimum: nil, allowed: nil),
             WireFieldRule(name: "ts", kind: .number, nullable: false, optional: false, minimum: nil, exclusiveMinimum: 0.0, allowed: nil)],
         "summary": [WireFieldRule(name: "text", kind: .string, nullable: false, optional: false, minimum: nil, exclusiveMinimum: nil, allowed: nil),
             WireFieldRule(name: "clock", kind: .clock_hm, nullable: false, optional: false, minimum: nil, exclusiveMinimum: nil, allowed: nil),

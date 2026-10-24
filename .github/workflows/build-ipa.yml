@@ -23,6 +23,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: 核对契约快照与生成代码
+        run: python3 tools/check-contracts.py
+
       - name: 工具链版本
         run: |
           sw_vers
@@ -36,6 +39,16 @@ jobs:
           xcodegen --version
           xcodegen generate
           ls -la
+
+      - name: Swift 行为回归
+        run: |
+          set -euo pipefail
+          DEVICE_ID="$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.name | startswith("iPhone"))][0].udid // empty')"
+          test -n "$DEVICE_ID"
+          xcodebuild -project VoiceMemo.xcodeproj -scheme VoiceMemo \
+            -destination "platform=iOS Simulator,id=$DEVICE_ID" \
+            -resultBundlePath "$RUNNER_TEMP/VoiceMemo-tests.xcresult" \
+            CODE_SIGNING_ALLOWED=NO test
 
       - name: 模拟器启动并截取主界面(仅手动运行)
         if: github.event_name == 'workflow_dispatch'
@@ -136,3 +149,14 @@ jobs:
           name: VoiceMemo-ui-preview
           path: ${{ runner.temp }}/VoiceMemo-ui-preview/main.png
           if-no-files-found: error
+
+      - name: 上传测试与依赖解析证据
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: VoiceMemo-build-evidence
+          path: |
+            ${{ runner.temp }}/VoiceMemo-tests.xcresult
+            VoiceMemo.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
+            Contracts/revision.json
+          if-no-files-found: warn

@@ -4,7 +4,7 @@ import Foundation
 ///
 /// 会议启动由电脑总管统一发号与授权；App 不生成会议 UUID，也不持有 LiveKit 长期密钥。
 struct LiveKitConfig {
-    static let defaultURL = "wss://100.64.0.2:7443"   // 经本地 TLS 代理(ATS 要求 wss)
+    static let defaultURL = MeetingClient.defaultServerURL
 
     /// 设备名与使用者默认值来自 Info.plist 的 VMDefaultDevice / VMDefaultUser。
     /// 源码里只留中性占位(C 口径:公开仓库不写自己的设备名),真值由 CI 打包时用

@@ -28,6 +28,9 @@ final class LiveKitBroadcastPublisher: NSObject, RoomDelegate {
     private var observedReason: String?
     private var capturePaused = false
     private var publishedSamples = 0
+    private var queuedAudioSeconds = 0.0               // lock-protected; includes queued closures
+    private var droppedBuffers = 0                    // lock-protected
+    private var pendingAudioSeconds = 0.0             // workQueue only
     private var ready = false                         // workQueue only
     private var pending: [CMSampleBuffer] = []         // bounded startup buffer; workQueue only
     private var converter: AVAudioConverter?           // workQueue only
@@ -109,6 +112,7 @@ final class LiveKitBroadcastPublisher: NSObject, RoomDelegate {
         workQueue.async {
             self.ready = false                     // 别再往死连接里送 PCM
             self.pending.removeAll(keepingCapacity: false)
+            self.pendingAudioSeconds = 0
         }
     }
 
@@ -166,18 +170,38 @@ final class LiveKitBroadcastPublisher: NSObject, RoomDelegate {
     }
 
     func append(_ sampleBuffer: CMSampleBuffer) {
+        guard let description = CMSampleBufferGetFormatDescription(sampleBuffer),
+              let format = CMAudioFormatDescriptionGetStreamBasicDescription(description),
+              format.pointee.mSampleRate > 0 else { return }
+        let seconds = Double(CMSampleBufferGetNumSamples(sampleBuffer)) / format.pointee.mSampleRate
+        guard seconds > 0, seconds.isFinite else { return }
+        lock.lock()
+        guard !stopped else { lock.unlock(); return }
+        guard queuedAudioSeconds + seconds <= 2.4 else {
+            droppedBuffers += 1
+            let count = droppedBuffers
+            lock.unlock()
+            if count == 1 || count % 250 == 0 { log("系统声音处理积压，已丢弃 \(count) 块") }
+            return
+        }
+        queuedAudioSeconds += seconds
+        lock.unlock()
         workQueue.async { [weak self] in
             guard let self else { return }
+            defer {
+                self.lock.lock()
+                self.queuedAudioSeconds = max(0, self.queuedAudioSeconds - seconds)
+                self.lock.unlock()
+            }
             if self.ready {
                 self.publish(sampleBuffer)
-            } else if self.pending.count < 120 {
+            } else if self.pendingAudioSeconds + seconds <= 2.4 {
                 self.pending.append(sampleBuffer)
+                self.pendingAudioSeconds += seconds
             } else {
-                self.pending.removeFirst()
-                self.pending.append(sampleBuffer)
                 if !self.overflowLogged {
                     self.overflowLogged = true
-                    self.log("LiveKit 尚未就绪；启动缓存达到 2.4 秒，丢弃最早样本")
+                    self.log("LiveKit 尚未就绪；启动缓存达到 2.4 秒，丢弃新到样本")
                 }
             }
         }
@@ -198,6 +222,7 @@ final class LiveKitBroadcastPublisher: NSObject, RoomDelegate {
         workQueue.async {
             self.ready = false
             self.pending.removeAll(keepingCapacity: false)
+            self.pendingAudioSeconds = 0
         }
         // 先持久化停止意图，扩展即使立即退出，主 App 仍可补发。
         let queued = currentMeeting.map(queueStop) ?? false
@@ -286,6 +311,7 @@ final class LiveKitBroadcastPublisher: NSObject, RoomDelegate {
                 self.overflowLogged = false
                 let buffered = self.pending
                 self.pending.removeAll(keepingCapacity: true)
+                self.pendingAudioSeconds = 0
                 buffered.forEach(self.publish)
             }
             return true

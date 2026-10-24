@@ -2,7 +2,7 @@
 import Foundation
 
 enum SessionControlContract {
-    static let manifestSHA256 = "23a4194e013ee7a0dc80046f727a6da2dd28255969c3188b36e6c3fb961b30fb"
+    static let manifestSHA256 = "6a92cbeb7a6c2c2d96c9511f5de269808297e250c10d59cc9ce3cf97705065b9"
     static let mic = "mic"
     static let systemAudio = "system_audio"
     static let recoveryEligibleMeetingStates: Set<String> = ["preparing", "active", "interrupted_pending"]
@@ -13,6 +13,8 @@ enum SessionControlContract {
     static let artifactPathTemplate = "/v1/meetings/<meeting_id>/artifact"
     static let artifactAckPathTemplate = "/v1/meetings/<meeting_id>/artifact/ack"
     static let transcriptPathTemplate = "/v1/meetings/<meeting_id>/transcript"
+    static let startRequiredFields: Set<String> = ["meeting_id", "room", "status", "channel", "generation", "state_revision", "created_at", "url", "token", "identity", "ttl"]
+    static let transcriptRequiredFields: Set<String> = ["meeting_id", "after", "items", "latest", "oldest", "truncated", "capacity"]
     static func meetingPath(_ template: String, _ meetingID: String) -> String {
         template.replacingOccurrences(of: "<meeting_id>", with: meetingID)
     }

@@ -81,6 +81,9 @@ struct DeviceMeetingView: Decodable {
 
 /// 已确认定稿的补取页:断线或回前台后按 seq 补齐,线上只发实时 final。
 struct TranscriptPage: Decodable {
+    let meetingID: String
+    let epoch: String?
+    let reset: Bool?
     struct Item: Decodable {
         let seq: Int
         let who: String
@@ -98,6 +101,9 @@ struct TranscriptPage: Decodable {
     let latest: Int
     let oldest: Int
     let truncated: Bool?
+    enum CodingKeys: String, CodingKey {
+        case meetingID = "meeting_id", epoch, reset, items, latest, oldest, truncated
+    }
 }
 
 enum MeetingClient {
@@ -199,6 +205,10 @@ enum MeetingClient {
         }
         let grant: MeetingGrant
         do {
+            guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  SessionControlContract.startRequiredFields.isSubset(of: Set(object.keys)) else {
+                throw failure(4, "会议授权回包缺少契约字段")
+            }
             grant = try JSONDecoder().decode(MeetingGrant.self, from: data)
         } catch {
             throw failure(4, "会议授权回包解析失败: \(error.localizedDescription)")
@@ -278,7 +288,7 @@ enum MeetingClient {
     }
 
     static func fetchTranscript(serverURL: String, meetingID: String, deviceID: String,
-                                after: Int) async throws -> TranscriptPage {
+                                after: Int, epoch: String? = nil) async throws -> TranscriptPage {
         guard UUID(uuidString: meetingID) != nil,
               var components = URLComponents(string: serverURL) else {
             throw failure(12, "补取地址无效")
@@ -288,6 +298,7 @@ enum MeetingClient {
             SessionControlContract.transcriptPathTemplate, meetingID)
         components.queryItems = [URLQueryItem(name: "device_id", value: deviceID),
                                  URLQueryItem(name: "after", value: String(max(0, after)))]
+        if let epoch { components.queryItems?.append(URLQueryItem(name: "epoch", value: epoch)) }
         guard let endpoint = components.url else { throw failure(12, "补取地址无效") }
         var request = URLRequest(url: endpoint)
         request.setValue(try credential(), forHTTPHeaderField: "X-VM-Device-Token")
@@ -297,9 +308,20 @@ enum MeetingClient {
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
             throw failure(12, "电脑端补取失败")
         }
+        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              SessionControlContract.transcriptRequiredFields.isSubset(of: Set(object.keys)) else {
+            throw failure(12, "补取回包缺少契约字段")
+        }
         let page = try JSONDecoder().decode(TranscriptPage.self, from: data)
         // latest < oldest 只可能来自坏回包;宁可这一轮不补,也不把乱序的字塞进屏幕。
-        guard page.latest >= page.oldest else { throw failure(12, "补取回包不自洽") }
+        guard page.meetingID == meetingID, page.oldest >= 0, page.latest >= page.oldest,
+              page.epoch == nil || UUID(uuidString: page.epoch!) != nil,
+              page.items.allSatisfy({ $0.seq > 0 && $0.seq >= page.oldest && $0.seq <= page.latest &&
+                  $0.audioS.isFinite && $0.audioS >= 0 && $0.ts.isFinite && $0.ts > 0 &&
+                  ($0.gapS == nil || ($0.gapS!.isFinite && $0.gapS! >= 0)) }),
+              Set(page.items.map(\.seq)).count == page.items.count else {
+            throw failure(12, "补取回包不自洽")
+        }
         return page
     }
 

@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "authority": "agent/vmcore/artifacts_contract.py",
+  "principle": "路径只是定位,摘要才是身份;生成不等于送达",
+  "why": "报告与材料是这条流水线的最终交付物,但它们的字段一直散在 coordinator 的写入点里。这里把身份、可改性和状态转换集中成机器可读的一份,由 artifacts_contract.py 在每次写入时校验。",
+  "kinds": {
+    "report": {
+      "where": "meeting.artifact",
+      "meaning": "封场后交给手机的会后报告 JSON;手机保存并回执后才算送达",
+      "fields": {
+        "path": {"kind": "path", "required": true, "mutable": false,
+                 "generated_by": "accept_artifact", "consumer": "artifact_view / 材料生成",
+                 "note": "绝对路径,只用于定位;移动或改名不改变身份,所以不能拿它去重"},
+        "sha256": {"kind": "sha256", "required": true, "mutable": false,
+                   "generated_by": "accept_artifact", "consumer": "回执核对 / 材料来源 / 去重",
+                   "note": "报告正文的摘要,是这份报告唯一的身份"},
+        "summary_status": {"kind": "string", "required": true, "mutable": false,
+                           "generated_by": "accept_artifact", "consumer": "交付判断",
+                           "note": "值来自报告 meta.summary_status,本契约不另立枚举,避免和报告生成端分叉"},
+        "generated": {"kind": "boolean", "required": true, "mutable": "false->true"},
+        "delivered": {"kind": "boolean", "required": true, "mutable": "false->true",
+                      "note": "只有 acknowledge_artifact 收到手机回执才置 true;线上推过不等于送达"},
+        "delivered_at": {"kind": "timestamp", "required": false, "mutable": "once",
+                         "generated_by": "acknowledge_artifact",
+                         "note": "首次回执时间;重复回执不改它"}
+      },
+      "transitions": [["generated", "delivered"]],
+      "writers": {"generated": "MeetingCoordinator.accept_artifact",
+                  "delivered": "MeetingCoordinator.acknowledge_artifact"}
+    },
+    "material": {
+      "where": "meeting.material",
+      "meaning": "由已回执的报告生成的 HTML 材料;可供人看,也可作为后续外发正文的来源",
+      "fields": {
+        "path": {"kind": "path", "required": true, "mutable": false,
+                 "generated_by": "complete_material", "consumer": "人工查看 / 外发",
+                 "note": "同 report:路径不是身份"},
+        "sha256": {"kind": "sha256", "required": true, "mutable": false,
+                   "generated_by": "complete_material", "consumer": "外发前核对",
+                   "note": "HTML 正文摘要"},
+        "report_sha256": {"kind": "sha256", "required": true, "mutable": false,
+                          "generated_by": "complete_material", "consumer": "来源核对",
+                          "note": "生成这份材料的报告版本;必须等于 meeting.artifact.sha256"},
+        "generated": {"kind": "boolean", "required": true, "mutable": "false->true"},
+        "delivered": {"kind": "boolean", "required": true, "mutable": "false->true",
+                      "note": "初版没有外发执行者,该字段恒为 false;接上发送后才有写点"},
+        "task_id": {"kind": "string", "required": true, "mutable": false,
+                    "generated_by": "complete_material", "consumer": "追溯:哪次任务",
+                    "note": "补它的理由是可追溯;任务行会被重试改写,历史 attempt 会丢,材料自己不留就查不到"},
+        "attempt": {"kind": "integer", "minimum": 1, "required": true, "mutable": false,
+                    "generated_by": "complete_material", "consumer": "追溯:第几次执行",
+                    "note": "与 task_id 一起构成执行身份;缺了它只能说出某次,说不出第几次"}
+      },
+      "transitions": [["generated"]],
+      "writers": {"generated": "MeetingCoordinator.complete_material"},
+      "reserved": {
+        "delivered": "当前没有任何代码把它置 true(实测:只有写入点留了 false 初值)。接入上传或企微发送后,由执行者在拿到回执时置 true;在此之前不得为了\"看起来完成\"而置 true。"
+      }
+    }
+  },
+  "rejections": {
+    "missing_field": "必填字段缺失",
+    "unexpected_field": "出现契约未声明的字段(新增字段先改这份契约,再改代码)",
+    "invalid_kind": "类型不符:sha256 必须是 64 位小写十六进制,path 必须非空,布尔必须是布尔",
+    "backwards_mutation": "generated/delivered 只能 false->true;delivered_at 只能写一次"
+  }
+}
