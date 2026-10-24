@@ -112,9 +112,9 @@ final class SessionModel: ObservableObject {
         set { cfg.userID = newValue; cfg.save(); objectWillChange.send() }
     }
     var deviceToken: String {
-        get { MeetingControlClient.sharedDefaults()?.string(forKey: "vm.deviceToken") ?? "" }
+        get { MeetingClient.sharedDefaults()?.string(forKey: "vm.deviceToken") ?? "" }
         set {
-            MeetingControlClient.sharedDefaults()?.set(newValue, forKey: "vm.deviceToken")
+            MeetingClient.sharedDefaults()?.set(newValue, forKey: "vm.deviceToken")
             objectWillChange.send()
         }
     }
@@ -171,7 +171,7 @@ final class SessionModel: ObservableObject {
 
     func resetToDefaults() {
         cfg = LiveKitConfig(url: LiveKitConfig.defaultURL, device: LiveKitConfig.defaultDevice,
-                            userID: MeetingControlClient.defaultUserID)
+                            userID: MeetingClient.defaultUserID)
         cfg.save()
         objectWillChange.send()
     }
@@ -305,10 +305,10 @@ final class SessionModel: ObservableObject {
     private func observeDesktop() async {
         while !Task.isCancelled {
             // ReplayKit may have exited before its stop request completed.
-            try? await MeetingControlClient.flushPendingBroadcastStop()
-            try? await MeetingControlClient.flushPendingMicStop()
+            try? await MeetingClient.flushPendingBroadcastStop()
+            try? await MeetingClient.flushPendingMicStop()
             do {
-                let state = try await MeetingControlClient.deviceView(
+                let state = try await MeetingClient.deviceView(
                     serverURL: cfg.url, deviceID: cfg.device)
                 // 管家助手:总管那边这场会现在算什么状态。录着的时候也要查 ——
                 // 底栏的会议状态与两个对接按钮都靠它,不查就永远显示"无会议"。
@@ -337,12 +337,12 @@ final class SessionModel: ObservableObject {
                         }
                         for pending in state.pendingReports {
                             do {
-                                let artifact = try await MeetingControlClient.fetchArtifact(
+                                let artifact = try await MeetingClient.fetchArtifact(
                                     serverURL: cfg.url, meetingID: pending.meetingID,
                                     deviceID: cfg.device)
                                 guard artifact.sha256 == pending.sha256 else { continue }
                                 try storeReport(artifact.data, meetingID: pending.meetingID)
-                                try await MeetingControlClient.acknowledgeArtifact(
+                                try await MeetingClient.acknowledgeArtifact(
                                     serverURL: cfg.url, meetingID: pending.meetingID,
                                     deviceID: cfg.device, sha256: artifact.sha256)
                                 note("会后报告已保存并回执电脑端")
@@ -429,7 +429,7 @@ final class SessionModel: ObservableObject {
         Task {
             defer { newMeetingCheckInFlight = false }
             do {
-                let view = try await MeetingControlClient.deviceView(
+                let view = try await MeetingClient.deviceView(
                     serverURL: cfg.url, deviceID: cfg.device)
                 let fresh = MeetingContext(view: view)
                 meetingContext = fresh
@@ -514,7 +514,7 @@ final class SessionModel: ObservableObject {
             var grantedMeetingID: String?
             var grantedServerGeneration = 0
             do {
-                try await MeetingControlClient.flushPendingMicStop()
+                try await MeetingClient.flushPendingMicStop()
                 let card = try await cfg.requestToken(identity: cfg.identity,
                                                       channel: SessionControlContract.mic,
                                                       meetingID: recoveryMeetingID)
@@ -524,11 +524,11 @@ final class SessionModel: ObservableObject {
                 guard generation == self.connectionGeneration else {   // 这一轮已被停止/重开取代
                     await self.room.disconnect(live)                   // 只断自己这条,不碰新会话
                     do {
-                        try MeetingControlClient.queueMicStop(serverURL: cfg.url,
+                        try MeetingClient.queueMicStop(serverURL: cfg.url,
                                                               meetingID: card.meetingID,
                                                               deviceID: cfg.device,
                                                               generation: card.generation)
-                        try await MeetingControlClient.flushPendingMicStop()
+                        try await MeetingClient.flushPendingMicStop()
                     } catch {
                         self.note("迟到的会议授权停止待同步: \(error.localizedDescription)")
                     }
@@ -538,7 +538,7 @@ final class SessionModel: ObservableObject {
                 self.serverGeneration = card.generation
                 self.connection = live
                 do {
-                    try await MeetingControlClient.reportObservation(
+                    try await MeetingClient.reportObservation(
                         serverURL: cfg.url, meetingID: card.meetingID,
                         deviceID: cfg.device, channel: SessionControlContract.mic,
                         generation: card.generation, observed: "publishing")
@@ -552,11 +552,11 @@ final class SessionModel: ObservableObject {
                 // VoiceRoom.connect 失败时已自行断开这条连接,这里只回写 UI
                 if let grantedMeetingID {
                     do {
-                        try MeetingControlClient.queueMicStop(serverURL: cfg.url,
+                        try MeetingClient.queueMicStop(serverURL: cfg.url,
                                                               meetingID: grantedMeetingID,
                                                               deviceID: cfg.device,
                                                               generation: grantedServerGeneration)
-                        try await MeetingControlClient.flushPendingMicStop()
+                        try await MeetingClient.flushPendingMicStop()
                     } catch {
                         self.note("连接失败后的会议停止待同步: \(error.localizedDescription)")
                     }
@@ -576,7 +576,7 @@ final class SessionModel: ObservableObject {
         let stoppedGeneration = serverGeneration
         if !stoppedMeetingID.isEmpty {
             do {
-                try MeetingControlClient.queueMicStop(serverURL: stopConfig.url,
+                try MeetingClient.queueMicStop(serverURL: stopConfig.url,
                                                       meetingID: stoppedMeetingID,
                                                       deviceID: stopConfig.device,
                                                       generation: stoppedGeneration)
@@ -604,10 +604,10 @@ final class SessionModel: ObservableObject {
             // 先结束媒体传输，再让电脑端封住该通道；否则 stop 请求可能先到，截掉尾部音频。
             if !stoppedMeetingID.isEmpty {
                 do {
-                    try await MeetingControlClient.flushPendingMicStop()
+                    try await MeetingClient.flushPendingMicStop()
                     // 契约里 phone_observed 有 stopped:只发 publishing 的话总管永远等不到
                     // "这台手机说它不采了",只能靠停止请求猜。这里补上,失败只记一行。
-                    try await MeetingControlClient.reportObservation(
+                    try await MeetingClient.reportObservation(
                         serverURL: stopConfig.url, meetingID: stoppedMeetingID,
                         deviceID: stopConfig.device, channel: SessionControlContract.mic,
                         generation: stoppedGeneration, observed: "stopped")
@@ -627,7 +627,7 @@ final class SessionModel: ObservableObject {
         let meeting = sessionID
         let cursor = lastFinalSeq
         do {
-            let page = try await MeetingControlClient.fetchTranscript(
+            let page = try await MeetingClient.fetchTranscript(
                 serverURL: cfg.url, meetingID: meeting, deviceID: cfg.device, after: cursor)
             guard meeting == sessionID else { return }      // 期间换场:这一页作废
             if page.truncated == true {

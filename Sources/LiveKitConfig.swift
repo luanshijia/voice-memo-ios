@@ -9,8 +9,8 @@ struct LiveKitConfig {
     /// 设备名与使用者默认值来自 Info.plist 的 VMDefaultDevice / VMDefaultUser。
     /// 源码里只留中性占位(C 口径:公开仓库不写自己的设备名),真值由 CI 打包时用
     /// Secrets 传入 build setting 注入 —— 值不落在代码里,只落在不签名的 IPA 里。
-    static var defaultDevice: String { MeetingControlClient.defaultDeviceID }
-    static var defaultUser: String { MeetingControlClient.defaultUserID }
+    static var defaultDevice: String { MeetingClient.defaultDeviceID }
+    static var defaultUser: String { MeetingClient.defaultUserID }
 
     var url: String
     var device: String
@@ -30,7 +30,7 @@ struct LiveKitConfig {
         d.set(url, forKey: "lk.url")
         d.set(device, forKey: "lk.device")
         d.set(userID, forKey: "lk.user")
-        if let shared = MeetingControlClient.sharedDefaults() {
+        if let shared = MeetingClient.sharedDefaults() {
             shared.set(url, forKey: "lk.url")
             shared.set(device, forKey: "lk.device")
             shared.set(userID, forKey: "lk.user")
@@ -45,7 +45,7 @@ struct LiveKitConfig {
     func requestToken(identity: String, ttl: Int = 15 * 60, channel: String? = nil,
                       meetingID: String? = nil) async throws -> Token {
         let resolvedChannel = channel ?? (identity == broadcastIdentity ? "system_audio" : "mic")
-        return try await MeetingControlClient.requestGrant(serverURL: url, identity: identity,
+        return try await MeetingClient.requestGrant(serverURL: url, identity: identity,
                                                             userID: userID, deviceID: device,
                                                             channel: resolvedChannel,
                                                             meetingID: meetingID, ttl: ttl)

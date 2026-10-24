@@ -70,7 +70,7 @@ struct TranscriptPage: Decodable {
     let truncated: Bool?
 }
 
-enum MeetingControlClient {
+enum MeetingClient {
     private struct PendingStart: Codable {
         let serverURL: String
         let userID: String

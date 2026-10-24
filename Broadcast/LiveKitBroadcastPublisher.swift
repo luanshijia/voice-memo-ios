@@ -124,7 +124,7 @@ final class LiveKitBroadcastPublisher: NSObject, RoomDelegate {
             guard let self else { return }
             let configuration: Configuration
             do {
-                let grant = try await MeetingControlClient.requestBroadcastGrant()
+                let grant = try await MeetingClient.requestBroadcastGrant()
                 configuration = Configuration(url: grant.url, identity: grant.identity,
                                                token: grant.token, session: grant.meetingID,
                                                generation: grant.generation)
@@ -205,7 +205,7 @@ final class LiveKitBroadcastPublisher: NSObject, RoomDelegate {
             await currentRoom?.disconnect()
             // 媒体连接结束后再通知电脑端封住系统声音通道。
             if queued {
-                do { try await MeetingControlClient.flushPendingBroadcastStop() }
+                do { try await MeetingClient.flushPendingBroadcastStop() }
                 catch { self.log("系统声音停止状态同步失败: \(error.localizedDescription)") }
             }
         }
@@ -220,7 +220,7 @@ final class LiveKitBroadcastPublisher: NSObject, RoomDelegate {
         observe(.stopped, reason: "stopped_by_user")
         guard queueStop(current) else { return }
         Task {
-            do { try await MeetingControlClient.flushPendingBroadcastStop() }
+            do { try await MeetingClient.flushPendingBroadcastStop() }
             catch { self.log("系统声音停止状态同步失败: \(error.localizedDescription)") }
         }
     }
@@ -228,7 +228,7 @@ final class LiveKitBroadcastPublisher: NSObject, RoomDelegate {
     private func queueStop(_ current: (id: String, url: String, device: String,
                                         generation: Int)) -> Bool {
         do {
-            try MeetingControlClient.queueBroadcastStop(serverURL: current.url,
+            try MeetingClient.queueBroadcastStop(serverURL: current.url,
                                                         meetingID: current.id,
                                                         deviceID: current.device,
                                                         generation: current.generation)
@@ -273,7 +273,7 @@ final class LiveKitBroadcastPublisher: NSObject, RoomDelegate {
             if let session = configuration.session {
                 let device = String(configuration.identity.dropLast("-replaykit".count))
                 do {
-                    try await MeetingControlClient.reportObservation(
+                    try await MeetingClient.reportObservation(
                         serverURL: configuration.url, meetingID: session,
                         deviceID: device, channel: SessionControlContract.systemAudio,
                         generation: configuration.generation, observed: "publishing")
