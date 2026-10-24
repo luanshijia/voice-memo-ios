@@ -179,28 +179,29 @@ struct ContentView: View {
         .buttonStyle(.plain)
     }
 
-    // MARK: - 屏幕最下方一行(状态 + 三个数)
+    // MARK: - 屏幕最下方一行(会议状态 · 连接状态 · 两个对接按钮)
 
-    /// 一行放完全部:左边状态文字、右边「录 12 收 12 句 3」。
-    /// 两处细节(用户口径):① 数字不再压成上下两行;② 底色一路铺到屏幕底边(绕开安全区),
-    /// 视觉上就是贴着屏幕圆角底边的一道,而不是浮在中间的一条。
-    /// 2026-10-16:整栏已下沉到屏幕底边(ZStack + ignoresSafeArea);左右各留 24 点(避开屏幕圆角吃字)、下方 12 点(避开 home 指示条)。
+    /// 底栏只放「必需显示」那一层(判据:看不到它会不会做错动作)。
+    ///   · 会议状态 = 电脑端总管 meeting.status 的别名,六个词;看不到就不知道该按另开还是重连;
+    ///   · 连接状态 = 两路 channel.status 的别名,五个词;看不到就不知道哪一路还活着;
+    ///   · 另开 / 重连 = 总管状态机里「创建新会议」和「恢复原会议」两个操作的入口。
+    /// 原来的「录 收 句」三个数按用户口径撤掉:它们不影响任何动作。
+    /// 左右各留 24 点(避开屏幕圆角)、下方 12 点(避开 home 指示条),几何与上一版一致。
     private var bottomBar: some View {
-        HStack(spacing: 8) {
-            // 左组:两路与家里的链路状态(五词:未连/连中/已连/异常/未知,不上色)。
-            // 用户定稿 2026-10-19:左侧那句长文案整条撤掉 —— 连没连上这里已经说了,事件回执进设置页。
-            inlineText("LivK", model.livekWord, .secondary)
+        HStack(spacing: 6) {
+            inlineText(AppSharedContract.meetingLabel, model.meetingContext.meetingAlias, .secondary)
             Text("·").font(.system(size: 10)).foregroundStyle(.secondary)
-            inlineText("RepK", model.repkWord, .secondary)
-            Spacer(minLength: 10)
-            // 右组三个数:录不可分(本机墙钟,与哪一路上传无关);收/句可分,固定顺序 左=LivK 右=RepK。
-            inlineMetric("录", model.recordedSeconds, .primary)
-            Text("·").font(.system(size: 10)).foregroundStyle(.secondary)
-            inlinePair("收", model.serverSecondsByWay.livk, model.serverSecondsByWay.repk, digits: 0)
-            Text("·").font(.system(size: 10)).foregroundStyle(.secondary)
-            inlinePair("句", Double(model.linesByWay.livk), Double(model.linesByWay.repk), digits: 0)
+            inlineText(AppSharedContract.channelLabel, micWord, .secondary)
+            inlineText("", sysWord, .secondary)
+            Spacer(minLength: 6)
+            connectButton("另开", enabled: model.meetingContext.canStartNew(recording: model.isRecording)) {
+                model.startNewMeeting()
+            }
+            connectButton("重连", enabled: model.meetingContext.canReconnect(recording: model.isRecording)) {
+                model.reconnectMeeting()
+            }
         }
-        .padding(.horizontal, 40)     // 用户口径 2026-10-19:两组从边缘向里收(避开屏幕圆角;10/16 是往外的错误方向)
+        .padding(.horizontal, 24)
         .padding(.top, 3)
         .padding(.bottom, 12)
         .background(
@@ -208,38 +209,37 @@ struct ContentView: View {
         )
     }
 
+    /// 麦 / 声 两路的当前状态词。左=麦克风,右=系统声音,与总管 channel 枚举一一对应。
+    private var micWord: String {
+        let short = AppSharedContract.channelShort[SessionControlContract.mic] ?? "麦"
+        return "\(short) \(model.meetingContext.channelAlias(model.meetingContext.mic))"
+    }
+
+    private var sysWord: String {
+        let short = AppSharedContract.channelShort[SessionControlContract.systemAudio] ?? "声"
+        return "\(short) \(model.meetingContext.channelAlias(model.meetingContext.systemAudio))"
+    }
+
+    /// 底栏小按钮:与顶部按钮同一套圆角与高度,不可点时变灰且不响应点击。
+    private func connectButton(_ title: String, enabled: Bool,
+                               action: @escaping () -> Void) -> some View {
+        Button(action: { if enabled { action() } }) {
+            Text(title)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(enabled ? Color.white : Color.primary)
+                .frame(width: 44, height: 24)
+                .background(RoundedRectangle(cornerRadius: 6)
+                    .fill(enabled ? Color.accentColor : Color.secondary.opacity(0.25)))
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+    }
+
     /// 「标签 + 短文本」横向排(网络/麦克风这类状态用)
     private func inlineText(_ label: String, _ value: String, _ color: Color) -> some View {
         HStack(spacing: 3) {
             Text(label).font(.system(size: 10)).foregroundStyle(.secondary)
             Text(value).font(.system(size: 10, weight: .medium)).foregroundStyle(color)
-        }
-        .fixedSize()
-    }
-
-    /// 「标签 + 数字」横向排(以前是标签一行、数字一行,占两行高度)
-    /// 「标签 + 两路数值」:`收 12|3` —— 左 = LivK,右 = RepK;某路无数据写 `-`(不是 0)。
-    private func inlinePair(_ label: String, _ left: Double, _ right: Double, digits: Int) -> some View {
-        func fmt(_ v: Double) -> String {
-            v > 0 ? String(format: "%.\(digits)f", v) : "-"
-        }
-        return HStack(spacing: 3) {
-            Text(label).font(.system(size: 10)).foregroundStyle(.secondary)
-            Text("\(fmt(left))|\(fmt(right))")
-                .font(.system(size: 10, weight: .medium))
-                .monospacedDigit()
-                .foregroundStyle(.primary)
-        }
-        .fixedSize()
-    }
-
-    private func inlineMetric(_ label: String, _ value: Double, _ color: Color) -> some View {
-        HStack(spacing: 3) {
-            Text(label).font(.system(size: 10)).foregroundStyle(.secondary)
-            Text(value > 0 ? String(format: "%.0f", value) : "—")
-                .font(.system(size: 10, weight: .medium))
-                .monospacedDigit()
-                .foregroundStyle(color)
         }
         .fixedSize()
     }

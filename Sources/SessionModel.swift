@@ -47,6 +47,10 @@ final class SessionModel: ObservableObject {
     // ---- 状态面板(规范见 notes/规范-状态显示.md;站 1 = App Group / 链路探测 / LiveKit)----
     /// 系统直播那一路的事实:扩展写过「=== 扩展启动」且没写「结束」。
     @Published var broadcastAlive = false
+
+    /// 电脑端总管状态的本机镜像(管家助手)。底栏的会议状态、连接状态与两个
+    /// 对接按钮的可用性都读它;没查到时保持上一次的值,断网不会把会议从屏幕上抹掉。
+    @Published private(set) var meetingContext = MeetingContext.empty
     /// 五列面板。**唯一写入点 = `syncBoard()` 与 `refreshNet()`**。
     @Published var board = StatusBoard()
     /// 兼容现有视图的派生读取口；状态事实只保存在 board，不再维护第二份布尔值。
@@ -302,11 +306,13 @@ final class SessionModel: ObservableObject {
             // ReplayKit may have exited before its stop request completed.
             try? await MeetingControlClient.flushPendingBroadcastStop()
             try? await MeetingControlClient.flushPendingMicStop()
-            if !isRecording {
-                do {
-                    let state = try await MeetingControlClient.deviceView(
-                        serverURL: cfg.url, deviceID: cfg.device)
-                    if !isRecording {
+            do {
+                let state = try await MeetingControlClient.deviceView(
+                    serverURL: cfg.url, deviceID: cfg.device)
+                // 管家助手:总管那边这场会现在算什么状态。录着的时候也要查 ——
+                // 底栏的会议状态与两个对接按钮都靠它,不查就永远显示"无会议"。
+                meetingContext = MeetingContext(view: state)
+                if !isRecording {
                         let systemActive = state.meeting?.channels["system_audio"]?.status == "active"
                         if systemActive, let receiver = state.view,
                            receiver.meetingID == state.meeting?.meetingID {
@@ -344,9 +350,8 @@ final class SessionModel: ObservableObject {
                             }
                         }
                     }
-                } catch {
-                    // Keep the last known meeting visible during a temporary network loss.
-                }
+            } catch {
+                // Keep the last known meeting visible during a temporary network loss.
             }
             try? await Task.sleep(nanoseconds: 5_000_000_000)
         }
@@ -410,6 +415,37 @@ final class SessionModel: ObservableObject {
     }
 
     func toggle() { isRecording ? stop() : start() }
+
+    /// 「另开」:先把这场会了结,再开新的一场。
+    /// 有未封场会议时总管会把它并回旧场(同设备只有一场未封场),所以按钮在那种情况下是灰的;
+    /// 这里再做一次守卫,避免程序化路径绕过界面。
+    func startNewMeeting() {
+        guard !isRecording else {
+            note("正在录音,先停止再另开")
+            return
+        }
+        guard meetingContext.canStartNew(recording: isRecording) else {
+            note(meetingContext.blockReason(recording: isRecording) ?? "还有未结束的会议")
+            return
+        }
+        sessionID = ""          // 不带会议号 → 总管创建新的一场
+        start()
+    }
+
+    /// 「重连」:回到总管手里这场还没结束的会议(带原会议号恢复,不新建)。
+    func reconnectMeeting() {
+        guard !isRecording else {
+            note("正在录音,不需要重连")
+            return
+        }
+        guard let meetingID = meetingContext.meetingID,
+              meetingContext.canReconnect(recording: isRecording) else {
+            note("没有可重连的会议")
+            return
+        }
+        sessionID = meetingID
+        start()
+    }
 
     /// 会中提要档位:自动 5 分钟 / 手动 10 分钟(手动更长 —— 在外面要等久一点才抓得到要点)。
     /// 切档 ≠ 立刻出一段:只是把下一次检查的周期换掉。
@@ -556,6 +592,12 @@ final class SessionModel: ObservableObject {
             if !stoppedMeetingID.isEmpty {
                 do {
                     try await MeetingControlClient.flushPendingMicStop()
+                    // 契约里 phone_observed 有 stopped:只发 publishing 的话总管永远等不到
+                    // "这台手机说它不采了",只能靠停止请求猜。这里补上,失败只记一行。
+                    try await MeetingControlClient.reportObservation(
+                        serverURL: stopConfig.url, meetingID: stoppedMeetingID,
+                        deviceID: stopConfig.device, channel: SessionControlContract.mic,
+                        generation: stoppedGeneration, observed: "stopped")
                 } catch {
                     self?.note("电脑端会议停止状态同步失败: \(error.localizedDescription)")
                 }

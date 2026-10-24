@@ -103,37 +103,6 @@ enum BroadcastProbe {
         return false
     }
 
-    /// 结构化观测行:`obs v=1 state=... [gen=N] [meeting=UUID] [reason=码] [audio_app=样本数]`。
-    /// 状态判定只认这一行;中文行留给人和排错,改文案不再改状态。
-    struct Observation {
-        let state: AppSharedContract.ChannelState
-        let generation: Int?
-        let meetingID: String?
-        let reason: String?
-        let audioApp: Int
-        let at: Date
-    }
-
-    static func observation(_ line: String.SubSequence) -> Observation? {
-        let parts = line.split(separator: " ", omittingEmptySubsequences: true)
-        guard let mark = parts.firstIndex(where: { $0 == "obs" }), mark + 1 < parts.count else { return nil }
-        var fields: [String: String] = [:]
-        for token in parts[(mark + 1)...] {
-            guard let eq = token.firstIndex(of: "=") else { continue }
-            fields[String(token[token.startIndex..<eq])] = String(token[token.index(after: eq)...])
-        }
-        guard fields["v"] == String(AppSharedContract.observationVersion),
-              let raw = fields["state"],
-              let state = AppSharedContract.channelState(raw) else { return nil }
-        let stamp = ISO8601DateFormatter().date(from: String(parts[0])) ?? Date.distantPast
-        return Observation(state: state,
-                           generation: fields["gen"].flatMap { Int($0) },
-                           meetingID: fields["meeting"],
-                           reason: fields["reason"],
-                           audioApp: fields["audio_app"].flatMap { Int($0) } ?? 0,
-                           at: stamp)
-    }
-
     /// 原因码只发码;码表在 `StatusBoard.LinkReason`。未认识的码按 bridgeFailed 报,不静默吞掉。
     private static func linkReason(_ code: String?) -> LinkReason? {
         switch code {
@@ -156,7 +125,7 @@ enum BroadcastProbe {
             Self.tailText(url: url, bytes: 512_000).split(separator: "\n")
         }.value
         guard let latest = lines.last(where: { $0.contains(" obs ") }),
-              let observation = Self.observation(latest) else {
+              let observation = SharedObservation.parse(latest) else {
             // 没有结构化观测:旧格式日志,或扩展从未启动。不猜,按未开播处理。
             return Status(phase: .stopped, isActive: false, appFrames: 0, reason: nil)
         }
