@@ -28,18 +28,30 @@ enum SharedObservation {
         }
         var fields: [String: String] = [:]
         for token in parts[(mark + 1)...] {
-            guard let eq = token.firstIndex(of: "=") else { continue }
-            fields[String(token[token.startIndex..<eq])] = String(token[token.index(after: eq)...])
+            guard let eq = token.firstIndex(of: "=") else { return nil }
+            let key = String(token[token.startIndex..<eq])
+            guard fields[key] == nil else { return nil }
+            fields[key] = String(token[token.index(after: eq)...])
         }
         guard fields["v"] == String(AppSharedContract.observationVersion),
               let raw = fields["state"],
               let state = AppSharedContract.channelState(raw) else { return nil }
-        let stamp = ISO8601DateFormatter().date(from: String(parts[0])) ?? Date.distantPast
+        let generation = fields["gen"].flatMap { Int($0) }
+        let meetingID = fields["meeting"]
+        let audioApp = fields["audio_app"].flatMap { Int($0) }
+        if let meetingID, UUID(uuidString: meetingID) == nil { return nil }
+        if let reason = fields["reason"], AppSharedContract.observationReason(reason) == nil {
+            return nil
+        }
+        guard (fields["gen"] == nil || (generation ?? 0) > 0),
+              (generation == nil) == (meetingID == nil),
+              (fields["audio_app"] == nil || (audioApp ?? -1) >= 0),
+              let stamp = ISO8601DateFormatter().date(from: String(parts[0])) else { return nil }
         return Parsed(state: state,
-                      generation: fields["gen"].flatMap { Int($0) },
-                      meetingID: fields["meeting"],
+                      generation: generation,
+                      meetingID: meetingID,
                       reason: fields["reason"],
-                      audioApp: fields["audio_app"].flatMap { Int($0) } ?? 0,
+                      audioApp: audioApp ?? 0,
                       at: stamp)
     }
 }

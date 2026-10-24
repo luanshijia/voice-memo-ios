@@ -82,7 +82,7 @@ enum BroadcastProbe {
     /// 注意:是否在直播只认扩展显式写的标记行(`=== 扩展启动` / `=== 扩展结束`),
     /// 不做"N 秒没写入就算停"的猜测 —— 静音期间扩展会按设计断开那条传输连接但仍在直播,
     /// 超时猜测会把静音时段误判成已停止(实测踩过,别再改回去)。
-    enum Phase { case stopped, waiting, receiving, error }
+    enum Phase { case stopped, waiting, receiving, error, unknown }
     struct Status { let phase: Phase; let isActive: Bool; let appFrames: Int
                     /// 这一轮判定为 error 时的原因码(只发码,句子在显示层)。
                     let reason: LinkReason? }
@@ -124,10 +124,13 @@ enum BroadcastProbe {
         let lines = await Task.detached(priority: .utility) {
             Self.tailText(url: url, bytes: 512_000).split(separator: "\n")
         }.value
-        guard let latest = lines.last(where: { $0.contains(" obs ") }),
-              let observation = SharedObservation.parse(latest) else {
-            // 没有结构化观测:旧格式日志,或扩展从未启动。不猜,按未开播处理。
-            return Status(phase: .stopped, isActive: false, appFrames: 0, reason: nil)
+        guard let latest = lines.last(where: { $0.contains(" obs ") }) else {
+            // 有日志却没有结构化行时无法判定;空日志才是从未启动。
+            return Status(phase: lines.isEmpty ? .stopped : .unknown,
+                          isActive: false, appFrames: 0, reason: nil)
+        }
+        guard let observation = SharedObservation.parse(latest) else {
+            return Status(phase: .unknown, isActive: false, appFrames: 0, reason: nil)
         }
         let heartbeatAge = Date().timeIntervalSince(observation.at)
         let audioFresh = Self.noteAppFrames(observation.audioApp)

@@ -4,7 +4,7 @@
 import Foundation
 
 enum AppSharedContract {
-    static let manifestSHA256 = "9de4a13c267223608d4c8bd610f37d2cfc0410c2fb22b88099fe630043bdad86"
+    static let manifestSHA256 = "21e88e7e610206a6860f152026c7f89da2b9139e595ea5e4c1474d6f36cbae44"
     static let observationPrefix = "obs"
     static let observationVersion = 1
     static let meetingLabel = "会议状态"
@@ -25,6 +25,16 @@ enum AppSharedContract {
         case interruptedPending = "interrupted_pending"
         case interrupted
         case stopped
+    }
+
+    enum ObservationReason: String, CaseIterable {
+        case grant_failed
+        case identity_mismatch
+        case connect_failed
+        case disconnected
+        case pcm_unavailable
+        case conversion_failed
+        case stopped_by_user
     }
 
     /// 底栏用的两字/单字代号,与总管的 channel 枚举一一对应。
@@ -58,6 +68,10 @@ enum AppSharedContract {
 
     static func channelState(_ raw: String) -> ChannelState? {
         ChannelState(rawValue: raw)
+    }
+
+    static func observationReason(_ raw: String) -> ObservationReason? {
+        ObservationReason(rawValue: raw)
     }
 
     static func meetingState(_ raw: String) -> MeetingState? {

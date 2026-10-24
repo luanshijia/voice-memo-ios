@@ -58,11 +58,9 @@ struct MeetingContext: Equatable {
         return [.preparing, .active, .interruptedPending, .finishing].contains(meeting)
     }
 
-    /// 「另开」:没有未封场会议时直接可用;有的话必须本机已经不在录、
-    /// 且系统声那一路也已停 —— 否则新会议会被总管并回旧会议(同设备只有一场未封场)。
+    /// 「另开」只能在旧会议封场后进行;总管会把新申请并回仍开放的会议。
     func canStartNew(recording: Bool) -> Bool {
-        guard hasOpenMeeting else { return true }
-        return !recording && systemAudio != .active
+        !recording && !hasOpenMeeting
     }
 
     /// 「重连」:有未结束的会议才有意义;本机正录着且这一路还在时不需要重连。
@@ -76,6 +74,6 @@ struct MeetingContext: Equatable {
         guard hasOpenMeeting else { return nil }
         if systemAudio == .active { return "系统声音直播还在,先在控制中心停止录屏" }
         if recording { return "正在录音,先停止再另开" }
-        return nil
+        return "这场会议尚未封场,请等电脑端完成收尾"
     }
 }

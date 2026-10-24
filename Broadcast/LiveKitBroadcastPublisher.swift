@@ -24,6 +24,10 @@ final class LiveKitBroadcastPublisher: NSObject, RoomDelegate {
     private var meeting: (id: String, url: String, device: String, generation: Int)?
     private var connectionTask: Task<Void, Never>?
     private var stopped = false
+    private var observedState: AppSharedContract.ChannelState = .starting
+    private var observedReason: String?
+    private var capturePaused = false
+    private var publishedSamples = 0
     private var ready = false                         // workQueue only
     private var pending: [CMSampleBuffer] = []         // bounded startup buffer; workQueue only
     private var converter: AVAudioConverter?           // workQueue only
@@ -41,16 +45,58 @@ final class LiveKitBroadcastPublisher: NSObject, RoomDelegate {
     /// 有授权就有代次与会议号;没有授权时只写 state,读方不得把缺省代次当成有效代次。
     private func observe(_ state: AppSharedContract.ChannelState, reason: String? = nil) {
         lock.lock()
+        if stopped && state != .stopped {
+            lock.unlock()
+            return
+        }
         let current = meeting
-        lock.unlock()
+        let effective = state == .active && capturePaused ? AppSharedContract.ChannelState.interruptedPending : state
+        observedState = effective
+        observedReason = reason
         var parts = ["obs", "v=\(AppSharedContract.observationVersion)",
-                     "state=\(state.rawValue)"]
+                     "state=\(effective.rawValue)"]
         if let current {
             parts.append("gen=\(current.generation)")
             parts.append("meeting=\(current.id)")
         }
         if let reason { parts.append("reason=\(reason)") }
         log(parts.joined(separator: " "))
+        lock.unlock()
+    }
+
+    /// SampleHandler reports counts, but cannot declare the LiveKit connection active.
+    /// Keep the last publisher-owned state and its meeting/generation on every heartbeat.
+    func sampleHeartbeat() {
+        lock.lock()
+        let current = meeting
+        let state = observedState
+        let reason = observedReason
+        let audioApp = publishedSamples
+        var parts = ["obs", "v=\(AppSharedContract.observationVersion)",
+                     "state=\(state.rawValue)", "audio_app=\(audioApp)"]
+        if let current {
+            parts.append("gen=\(current.generation)")
+            parts.append("meeting=\(current.id)")
+        }
+        if let reason { parts.append("reason=\(reason)") }
+        log(parts.joined(separator: " "))
+        lock.unlock()
+    }
+
+    func captureDidPause() {
+        lock.lock()
+        capturePaused = true
+        let wasActive = observedState == .active
+        lock.unlock()
+        if wasActive { observe(.interruptedPending) }
+    }
+
+    func captureDidResume() {
+        lock.lock()
+        capturePaused = false
+        let wasPaused = observedState == .interruptedPending
+        lock.unlock()
+        if wasPaused { observe(.active) }
     }
 
     // MARK: - RoomDelegate
@@ -308,6 +354,9 @@ final class LiveKitBroadcastPublisher: NSObject, RoomDelegate {
         guard output.frameLength > 0 else { return }
 
         AudioManager.shared.mixer.capture(appAudio: output)
+        lock.lock()
+        publishedSamples += Int(output.frameLength)
+        lock.unlock()
         chunks += 1
         if chunks == 1 || chunks % 250 == 0 { log("LiveKit 已送入系统声音 \(chunks) 块") }
     }

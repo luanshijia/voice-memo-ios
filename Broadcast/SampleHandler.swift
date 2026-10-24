@@ -5,6 +5,7 @@ import ReplayKit
 /// Replacement broadcast extension: system app audio enters LiveKit as its own participant.
 final class SampleHandler: RPBroadcastSampleHandler {
     private let fileName = "broadcast-probe.log"
+    private let logQueue = DispatchQueue(label: "voicememo.broadcast.probe-log")
     private var publisher: LiveKitBroadcastPublisher?
     private var appFrames = 0
     private var callbacks = 0
@@ -19,17 +20,19 @@ final class SampleHandler: RPBroadcastSampleHandler {
     ]
 
     private func log(_ line: String) {
-        guard let url = Self.groupCandidates
-            .compactMap({ FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: $0) })
-            .first?.appendingPathComponent(fileName) else { return }
-        let stamp = ISO8601DateFormatter().string(from: Date())
-        let data = Data("\(stamp) \(line)\n".utf8)
-        if let handle = try? FileHandle(forWritingTo: url) {
-            handle.seekToEndOfFile()
-            handle.write(data)
-            try? handle.close()
-        } else {
-            try? data.write(to: url, options: .atomic)
+        logQueue.sync {
+            guard let url = Self.groupCandidates
+                .compactMap({ FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: $0) })
+                .first?.appendingPathComponent(fileName) else { return }
+            let stamp = ISO8601DateFormatter().string(from: Date())
+            let data = Data("\(stamp) \(line)\n".utf8)
+            if let handle = try? FileHandle(forWritingTo: url) {
+                handle.seekToEndOfFile()
+                handle.write(data)
+                try? handle.close()
+            } else {
+                try? data.write(to: url, options: .atomic)
+            }
         }
     }
 
@@ -63,13 +66,12 @@ final class SampleHandler: RPBroadcastSampleHandler {
 
     override func broadcastPaused() {
         log("扩展暂停")
-        // 暂停期间不再有音频帧,心跳会停在最后一条 —— 显式写"待确认",读方据此不判进程死亡。
-        observe(.interruptedPending)
+        publisher?.captureDidPause()
     }
 
     override func broadcastResumed() {
         log("扩展恢复")
-        observe(.active)
+        publisher?.captureDidResume()
     }
 
     override func broadcastFinished() {
@@ -106,7 +108,7 @@ final class SampleHandler: RPBroadcastSampleHandler {
             lastStatus = now
             log("计数 回调 video=\(videoCallbacks) audioApp=\(callbacks) audioMic=\(micCallbacks) 样本=\(appFrames) 时长≈\(seconds())秒")
             // 心跳本身也是观测:主 App 用它判"扩展进程还活着、系统声还在进"。
-            observe(.active, audioApp: appFrames)
+            publisher?.sampleHeartbeat()
         }
     }
 
