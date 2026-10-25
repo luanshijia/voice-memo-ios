@@ -4,7 +4,7 @@ import UIKit
 /// 设置页:连接参数、黑匣子信息都收在这里,平时主界面干净
 struct SettingsView: View {
     @ObservedObject var model: SessionModel
-    @Environment(\.dismiss) private var dismiss
+    let worker: SettingsWorker
     @State private var copiedAt = ""
 
     var body: some View {
@@ -19,52 +19,48 @@ struct SettingsView: View {
 #endif
                 stateSection          // 固定信息(环境 / 身份 / 版本)—— 按用户口径放最上面
                 connectionSection     // 固定(可编辑)
-                if !model.finalReportText.isEmpty {
-                    Section("会后材料") {
-                        NavigationLink("查看已保存的纪要和逐字稿") {
-                            ScrollView {
-                                Text(model.finalReportText)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .padding()
-                            }
-                            .navigationTitle("会后材料")
-                        }
-                    }
-                }
                 logSection            // 日志:主 App 步骤 + 扩展日志 + 一键复制(用户口径 2026-10-19 合并)
                 crashSection          // 有才显示
             }
             .navigationTitle("设置")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } }
-            }
         }
     }
 
     private var connectionSection: some View {
         Section {
-            TextField("wss://100.64.0.2:7443", text: $model.serverURL)
+            TextField("wss://100.64.0.2:7443", text: configurationBinding(.serverURL, value: model.serverURL))
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
                 .keyboardType(.URL)
                 .font(.system(size: 14, design: .monospaced))
-            TextField("设备名", text: $model.deviceID)
+            TextField("控制手机", text: configurationBinding(.deviceID, value: model.deviceID))
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
                 .disabled(model.isRecording)
-            TextField("使用者", text: $model.userID)
+            TextField("使用者", text: configurationBinding(.userID, value: model.userID))
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
                 .disabled(model.isRecording)
-            SecureField("设备登记凭据", text: $model.deviceToken)
+            SecureField("设备登记凭据", text: configurationBinding(.credential, value: model.deviceToken))
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
                 .disabled(model.isRecording)
-            Button("恢复默认连接参数") { model.resetToDefaults() }
+            Button("恢复默认连接参数") { worker.reset() }
+            if let reason = worker.lockReason {
+                Text(reason).font(.footnote).foregroundStyle(.secondary)
+            }
+            ForEach(worker.snapshot.problems, id: \.self) { problem in
+                Text(problem).font(.footnote).foregroundStyle(.orange)
+            }
         } header: {
             Text("连接参数")
         }
+        .disabled(worker.isLocked)
+    }
+
+    private func configurationBinding(_ field: ConfigurationField, value: String) -> Binding<String> {
+        Binding(get: { value }, set: { worker.update(field, value: $0) })
     }
 
     /// 复制走的内容:一眼能看全「这台手机现在是什么状态」

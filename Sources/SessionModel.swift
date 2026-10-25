@@ -108,27 +108,45 @@ final class SessionModel: ObservableObject {
     var serverURL: String {
         get { cfg.url }
         set {
+            guard !configurationLocked else { return }
             cfg.url = newValue
             cfg.save()
+            AppStorage.configurationChanged()
             syncConfigStatus()
+            objectWillChange.send()
         }
     }
     var deviceID: String {
         get { cfg.device }
-        set { cfg.device = newValue; cfg.save(); objectWillChange.send() }
+        set {
+            guard !configurationLocked else { return }
+            cfg.device = newValue; cfg.save(); AppStorage.configurationChanged(); objectWillChange.send()
+        }
     }
     var userID: String {
         get { cfg.userID }
-        set { cfg.userID = newValue; cfg.save(); objectWillChange.send() }
+        set {
+            guard !configurationLocked else { return }
+            cfg.userID = newValue; cfg.save(); AppStorage.configurationChanged(); objectWillChange.send()
+        }
     }
     var deviceToken: String {
         get { MeetingClient.sharedDefaults()?.string(forKey: "vm.deviceToken") ?? "" }
         set {
+            guard !configurationLocked else { return }
             MeetingClient.sharedDefaults()?.set(newValue, forKey: "vm.deviceToken")
+            AppStorage.configurationChanged()
             objectWillChange.send()
         }
     }
     var identity: String { cfg.identity }
+
+    /// Includes unresolved actions and the last known recoverable meeting, even
+    /// when its observation has gone stale. A stale view cannot unlock a binding.
+    var configurationLocked: Bool {
+        isRecording || intent == .wanted || terminating ||
+        meetingContext.meetingAcceptsRecovery || AppStorage.hasPendingControl()
+    }
 
     /// 读一次当前麦克风模式。未授权时不碰这个 API(iOS 17 起未授权访问有风险)。
     /// 官方口径:iOS 会按 App 记住用户选过的模式(Apple 支持文档 101993)→ 用户选一次宽谱
@@ -180,9 +198,11 @@ final class SessionModel: ObservableObject {
     var notesText: String { notes.joined(separator: "\n") }
 
     func resetToDefaults() {
+        guard !configurationLocked else { return }
         cfg = LiveKitConfig(url: LiveKitConfig.defaultURL, device: LiveKitConfig.defaultDevice,
                             userID: MeetingClient.defaultUserID)
         cfg.save()
+        AppStorage.configurationChanged()
         objectWillChange.send()
     }
 
@@ -496,6 +516,17 @@ final class SessionModel: ObservableObject {
     func toggle() {
         guard !terminating else { return }
         isRecording ? stop() : start()
+    }
+
+    // Explicit S2 seam: never use a toggle to implement an idempotent intent.
+    func legacyStartCapture() {
+        guard !isRecording, !terminating else { return }
+        start()
+    }
+
+    func legacyStopCapture() {
+        guard isRecording || intent == .wanted else { return }
+        stop()
     }
 
     /// 「主动终止」:结束这场会,并清掉本机这一轮的会议身份。
