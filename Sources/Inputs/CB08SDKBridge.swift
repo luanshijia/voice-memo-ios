@@ -92,8 +92,15 @@ final class CB08SDKBridge: NSObject, ObservableObject {
                                     productType: payload["productType"] as? String ?? "")
             if !devices.contains(device) { devices.append(device) }
         } else if cmd == "2" {
-            connected = (payload["connect_state"] as? Int == 1)
-            status = connected ? "已连接" : "已断开"
+            let connectionState = integerValue(payload["connect_state"])
+            eventSummary = "cmd=2, state=\(state), connect_state=\(connectionState.map { String($0) } ?? "?")"
+            if let connectionState {
+                connected = (connectionState == 1)
+                status = connected ? "已连接" : "已断开"
+            } else {
+                connected = node.isDeviceConnected()
+                status = connected ? "已连接" : "连接事件缺少有效 connect_state"
+            }
         } else if cmd == "8", let event = Int(String(describing: payload["event"] ?? "")) {
             hardwareButtonEvents[event, default: 0] += 1
             switch event {
@@ -111,6 +118,12 @@ final class CB08SDKBridge: NSObject, ObservableObject {
         packetBytes += data.count
         packetSizes[data.count, default: 0] += 1
         latestPacket = data
+    }
+
+    private func integerValue(_ value: Any?) -> Int? {
+        if let number = value as? NSNumber { return number.intValue }
+        if let string = value as? String { return Int(string) }
+        return nil
     }
 }
 
