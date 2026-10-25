@@ -22,7 +22,7 @@ final class CB08SDKBridge: NSObject, ObservableObject {
     @Published private(set) var latestPacket: Data?
     @Published private(set) var hardwareButtonEvents: [Int: Int] = [:]
 
-    private let node = PNode.shared()
+    private let node = PNode.shared()!
     private var isScanning = false
 
     override init() {
@@ -119,7 +119,7 @@ extension CB08SDKBridge: WindBleDelegate {
         Task { @MainActor [weak self] in self?.receiveEvent(data) }
     }
 
-    nonisolated func deviceRecordData(_ recordData: Data) {
+    nonisolated func deviceRecord(_ recordData: Data) {
         let packet = Data(recordData)
         Task { @MainActor [weak self] in self?.receivePacket(packet) }
     }
