@@ -28,7 +28,7 @@ struct SessionPresentation {
 
     init(isRecording: Bool, wantsToContinue: Bool, networkOK: Bool?,
          terminating: Bool, meeting: MeetingContext) {
-        let detached = meeting.isDetachedBranch(
+        let detached = meeting.meetingAcceptsRecovery && meeting.isDetachedBranch(
             wantsToContinue: wantsToContinue,
             recording: isRecording,
             networkOK: networkOK)
@@ -51,7 +51,7 @@ struct SessionPresentation {
             title: title,
             icon: (detached || !isRecording) ? "record.circle" : "stop.circle.fill",
             tone: tone,
-            enabled: !detached || reconnecting,
+            enabled: !terminating && (!detached || reconnecting),
             hint: hint)
 
         terminateAction = TerminateAction(

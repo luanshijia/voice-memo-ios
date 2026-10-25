@@ -15,6 +15,10 @@ final class MeetingContextTests: XCTestCase {
         XCTAssertTrue(meeting.hasOpenMeeting)
         XCTAssertTrue(meeting.canStartNew())
         XCTAssertFalse(meeting.meetingAcceptsRecovery)
+        let action = SessionPresentation(isRecording: false, wantsToContinue: true,
+            networkOK: true, terminating: false, meeting: meeting).primaryAction
+        XCTAssertEqual(action.title, "开启")
+        XCTAssertTrue(action.enabled)
     }
 
     func testActiveMeetingJoinsExistingCapture() throws {
@@ -25,5 +29,12 @@ final class MeetingContextTests: XCTestCase {
 
     func testUnknownMeetingStateDoesNotInventRecoveryPermission() throws {
         XCTAssertFalse(try context("future_state").meetingAcceptsRecovery)
+    }
+
+    func testTerminationDisablesPrimaryAndRepeatedTermination() throws {
+        let state = SessionPresentation(isRecording: false, wantsToContinue: true,
+            networkOK: true, terminating: true, meeting: try context("active"))
+        XCTAssertFalse(state.primaryAction.enabled)
+        XCTAssertFalse(state.terminateAction.enabled)
     }
 }

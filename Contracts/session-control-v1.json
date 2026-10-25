@@ -102,6 +102,427 @@
     "created_at": "computer_first_receipt_utc",
     "state_revision": "coordinator"
   },
+  "response_schemas": {
+    "grant": {
+      "kind": "object",
+      "fields": [
+        {
+          "name": "meeting_id",
+          "kind": "string",
+          "format": "uuid"
+        },
+        {
+          "name": "room",
+          "kind": "string"
+        },
+        {
+          "name": "status",
+          "kind": "string",
+          "enum": [
+            "active"
+          ]
+        },
+        {
+          "name": "channel",
+          "kind": "string",
+          "enum_ref": "start_request.properties.channel.enum"
+        },
+        {
+          "name": "generation",
+          "kind": "integer",
+          "minimum": 0,
+          "exclusive_minimum": 0
+        },
+        {
+          "name": "state_revision",
+          "kind": "integer",
+          "minimum": 0
+        },
+        {
+          "name": "created_at",
+          "kind": "string",
+          "format": "instant"
+        },
+        {
+          "name": "url",
+          "kind": "string"
+        },
+        {
+          "name": "token",
+          "kind": "string",
+          "nonempty": true
+        },
+        {
+          "name": "identity",
+          "kind": "string",
+          "nonempty": true
+        },
+        {
+          "name": "ttl",
+          "kind": "integer",
+          "minimum": 0,
+          "exclusive_minimum": 0,
+          "maximum": 86400
+        }
+      ]
+    },
+    "channel": {
+      "kind": "object",
+      "fields": [
+        {
+          "name": "status",
+          "kind": "string",
+          "enum_ref": "lifecycle.channel"
+        },
+        {
+          "name": "generation",
+          "kind": "integer",
+          "minimum": 0,
+          "exclusive_minimum": 0
+        }
+      ]
+    },
+    "meeting": {
+      "kind": "object",
+      "fields": [
+        {
+          "name": "meeting_id",
+          "kind": "string",
+          "format": "uuid"
+        },
+        {
+          "name": "user_id",
+          "kind": "string"
+        },
+        {
+          "name": "device_id",
+          "kind": "string"
+        },
+        {
+          "name": "created_at",
+          "kind": "string",
+          "format": "instant"
+        },
+        {
+          "name": "room",
+          "kind": "string"
+        },
+        {
+          "name": "status",
+          "kind": "string",
+          "enum_ref": "lifecycle.meeting"
+        },
+        {
+          "name": "channels",
+          "kind": "map",
+          "values": {
+            "ref": "channel"
+          },
+          "keys_ref": "start_request.properties.channel.enum"
+        },
+        {
+          "name": "input_count",
+          "kind": "integer",
+          "minimum": 0,
+          "optional": true
+        },
+        {
+          "name": "recovery_deadline",
+          "kind": "string",
+          "format": "instant",
+          "nullable": true,
+          "optional": true
+        }
+      ]
+    },
+    "report_ref": {
+      "kind": "object",
+      "fields": [
+        {
+          "name": "meeting_id",
+          "kind": "string",
+          "format": "uuid"
+        },
+        {
+          "name": "sha256",
+          "kind": "string",
+          "format": "sha256"
+        }
+      ]
+    },
+    "receiver": {
+      "kind": "object",
+      "fields": [
+        {
+          "name": "url",
+          "kind": "string"
+        },
+        {
+          "name": "token",
+          "kind": "string",
+          "nonempty": true
+        },
+        {
+          "name": "identity",
+          "kind": "string",
+          "nonempty": true
+        },
+        {
+          "name": "meeting_id",
+          "kind": "string",
+          "format": "uuid"
+        }
+      ]
+    },
+    "device_view": {
+      "kind": "object",
+      "fields": [
+        {
+          "name": "state_revision",
+          "kind": "integer",
+          "minimum": 0
+        },
+        {
+          "name": "meeting",
+          "ref": "meeting",
+          "nullable": true
+        },
+        {
+          "name": "pending_reports",
+          "kind": "array",
+          "items": {
+            "ref": "report_ref"
+          }
+        },
+        {
+          "name": "view",
+          "ref": "receiver",
+          "nullable": true,
+          "optional": true
+        }
+      ]
+    },
+    "item": {
+      "kind": "object",
+      "fields": [
+        {
+          "name": "seq",
+          "kind": "integer",
+          "minimum": 0,
+          "exclusive_minimum": 0
+        },
+        {
+          "name": "who",
+          "kind": "string"
+        },
+        {
+          "name": "source",
+          "kind": "string"
+        },
+        {
+          "name": "text",
+          "kind": "string"
+        },
+        {
+          "name": "audio_s",
+          "kind": "number",
+          "minimum": 0
+        },
+        {
+          "name": "gap_s",
+          "kind": "number",
+          "minimum": 0,
+          "nullable": true
+        },
+        {
+          "name": "ts",
+          "kind": "number",
+          "minimum": 0,
+          "exclusive_minimum": 0
+        }
+      ]
+    },
+    "transcript": {
+      "kind": "object",
+      "fields": [
+        {
+          "name": "meeting_id",
+          "kind": "string",
+          "format": "uuid"
+        },
+        {
+          "name": "after",
+          "kind": "integer",
+          "minimum": 0
+        },
+        {
+          "name": "items",
+          "kind": "array",
+          "items": {
+            "ref": "item"
+          }
+        },
+        {
+          "name": "latest",
+          "kind": "integer",
+          "minimum": 0
+        },
+        {
+          "name": "oldest",
+          "kind": "integer",
+          "minimum": 0
+        },
+        {
+          "name": "truncated",
+          "kind": "boolean"
+        },
+        {
+          "name": "capacity",
+          "kind": "integer",
+          "minimum": 0,
+          "exclusive_minimum": 0
+        },
+        {
+          "name": "epoch",
+          "kind": "string",
+          "format": "uuid",
+          "optional": true
+        },
+        {
+          "name": "reset",
+          "kind": "boolean",
+          "optional": true
+        }
+      ]
+    },
+    "stop": {
+      "kind": "object",
+      "fields": [
+        {
+          "name": "meeting_id",
+          "kind": "string",
+          "format": "uuid"
+        },
+        {
+          "name": "status",
+          "kind": "string",
+          "enum_ref": "lifecycle.meeting"
+        },
+        {
+          "name": "state_revision",
+          "kind": "integer",
+          "minimum": 0
+        }
+      ]
+    },
+    "observation": {
+      "kind": "object",
+      "fields": [
+        {
+          "name": "meeting_id",
+          "kind": "string",
+          "format": "uuid"
+        },
+        {
+          "name": "state_revision",
+          "kind": "integer",
+          "minimum": 0
+        }
+      ]
+    },
+    "artifact": {
+      "kind": "object",
+      "fields": [
+        {
+          "name": "meeting_id",
+          "kind": "string",
+          "format": "uuid"
+        },
+        {
+          "name": "sha256",
+          "kind": "string",
+          "format": "sha256"
+        },
+        {
+          "name": "report",
+          "kind": "object",
+          "fields": []
+        },
+        {
+          "name": "report_json_base64",
+          "kind": "string",
+          "nonempty": true
+        }
+      ]
+    },
+    "start_internal": {
+      "kind": "object",
+      "fields": [
+        {
+          "name": "meeting_id",
+          "kind": "string",
+          "format": "uuid"
+        },
+        {
+          "name": "room",
+          "kind": "string"
+        },
+        {
+          "name": "status",
+          "kind": "string",
+          "enum": [
+            "active"
+          ]
+        },
+        {
+          "name": "channel",
+          "kind": "string",
+          "enum_ref": "start_request.properties.channel.enum"
+        },
+        {
+          "name": "generation",
+          "kind": "integer",
+          "minimum": 0,
+          "exclusive_minimum": 0
+        },
+        {
+          "name": "state_revision",
+          "kind": "integer",
+          "minimum": 0
+        },
+        {
+          "name": "created_at",
+          "kind": "string",
+          "format": "instant"
+        }
+      ]
+    },
+    "artifact_ack": {
+      "kind": "object",
+      "fields": [
+        {
+          "name": "meeting_id",
+          "kind": "string",
+          "format": "uuid"
+        },
+        {
+          "name": "sha256",
+          "kind": "string",
+          "format": "sha256"
+        },
+        {
+          "name": "generated",
+          "kind": "boolean",
+          "const": true
+        },
+        {
+          "name": "delivered",
+          "kind": "boolean",
+          "const": true
+        }
+      ]
+    }
+  },
   "rules": {
     "format": "R-<DOMAIN>-<NN>",
     "scope": "只给不可逆或两端必须对齐的规则编号; 实现细节不编号, 编号一多就没人数",

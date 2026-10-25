@@ -20,7 +20,11 @@ targets:
     type: bundle.unit-test
     platform: iOS
     sources:
-      - Tests
+      - path: Tests
+        excludes:
+          - ControlResponseFixtures.json
+      - path: Tests/ControlResponseFixtures.json
+        buildPhase: resources
     dependencies:
       - target: VoiceMemo
     settings:

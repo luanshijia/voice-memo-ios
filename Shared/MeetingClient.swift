@@ -4,6 +4,7 @@ import CryptoKit
 /// Shared control contract for the main App and ReplayKit extension.
 /// The computer creates the meeting id and returns it with the media grant.
 struct MeetingGrant: Decodable {
+    var requestID: String? = nil // local correlation; never decoded from the server
     let url: String
     let token: String
     let identity: String
@@ -37,8 +38,7 @@ struct DeviceMeetingView: Decodable {
         /// nil 有两种来源，两种都等价于「此刻没有截止线」：
         ///   ① 还没开始计时（总管没标 interrupted_pending）；
         ///   ② 旧版电脑端根本不发这个字段。
-        /// 格式坏的也落 nil —— 后果只可能是「多试一次带号」，被拒后由
-        /// 409 回落拿新号，不会造成状态分叉。
+        /// 格式错误由控制回包契约拒绝；此处仅解析已校验的可选字段。
         let recoveryDeadline: Date?
         enum CodingKeys: String, CodingKey {
             case meetingID = "meeting_id", status, channels
@@ -114,6 +114,8 @@ enum MeetingClient {
         let channel: String
         let requestID: String
         let meetingID: String?
+        var grantedMeetingID: String? = nil
+        var grantedGeneration: Int? = nil
     }
     private struct PendingStop: Codable {
         let serverURL: String
@@ -150,6 +152,23 @@ enum MeetingClient {
             if let defaults = UserDefaults(suiteName: group) { return defaults }
         }
         return nil
+    }
+
+    private static func pendingStore() throws -> PendingRequestStore {
+        guard let root = appGroupCandidates.compactMap({
+            FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: $0)
+        }).first else { throw failure(13, "App Group 不可用，无法保存控制请求") }
+        return PendingRequestStore(root: root.appendingPathComponent("pending-control"), legacy: sharedDefaults())
+    }
+
+    private static func validatedResponse(_ data: Data, kind: String) throws -> [String: Any] {
+        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw failure(16, "控制回包不是 JSON 对象")
+        }
+        if let problem = SessionControlContract.responseProblem(kind, object: object) {
+            throw failure(16, "控制回包不符合契约：\(problem)")
+        }
+        return object
     }
 
     static func credential() throws -> String {
@@ -203,10 +222,10 @@ enum MeetingClient {
                           "电脑端拒绝会议申请(\(http.statusCode))\(body.isEmpty ? "" : ":" + body)",
                           controlErrorCode: errorCode)
         }
-        let grant: MeetingGrant
+        var grant: MeetingGrant
         do {
-            guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  SessionControlContract.startRequiredFields.isSubset(of: Set(object.keys)) else {
+            let object = try validatedResponse(data, kind: "grant")
+            guard SessionControlContract.startRequiredFields.isSubset(of: Set(object.keys)) else {
                 throw failure(4, "会议授权回包缺少契约字段")
             }
             grant = try JSONDecoder().decode(MeetingGrant.self, from: data)
@@ -223,12 +242,20 @@ enum MeetingClient {
               grant.generation > 0 else {
             throw failure(5, "会议授权回包身份、会议号、地址或有效期无效")
         }
+        grant.requestID = pending.requestID
+        try pendingStore().transaction(try pendingStartKey(channel)) { data in
+            guard let data, var saved = try? JSONDecoder().decode(PendingStart.self, from: data),
+                  saved.requestID == pending.requestID else { return (data, ()) }
+            saved.grantedMeetingID = grant.meetingID
+            saved.grantedGeneration = grant.generation
+            return (try JSONEncoder().encode(saved), ())
+        }
         return grant
     }
 
     static func reportObservation(serverURL: String, meetingID: String, deviceID: String,
                                   channel: String, generation: Int,
-                                  observed: String) async throws {
+                                  observed: String, requestID: String? = nil) async throws {
         guard UUID(uuidString: meetingID) != nil,
               generation > 0, var components = URLComponents(string: serverURL) else {
             throw failure(14, "采集状态参数无效")
@@ -247,12 +274,14 @@ enum MeetingClient {
             "generation": generation, "observed": observed
         ])
         request.timeoutInterval = 8
-        let (_, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
             throw failure(14, "电脑端未确认采集状态")
         }
-        if observed == "publishing" {
-            clearPendingStart(channel: channel, deviceID: deviceID)
+        let confirmation = try validatedResponse(data, kind: "observation")
+        guard confirmation["meeting_id"] as? String == meetingID else { throw failure(14, "采集回执会议号不一致") }
+        if observed == "publishing", let requestID {
+            try clearPendingStart(channel: channel, deviceID: deviceID, requestID: requestID)
         }
     }
 
@@ -284,7 +313,17 @@ enum MeetingClient {
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
             throw failure(9, "电脑端会议查询失败")
         }
-        return try JSONDecoder().decode(DeviceMeetingView.self, from: data)
+        _ = try validatedResponse(data, kind: "device_view")
+        let view = try JSONDecoder().decode(DeviceMeetingView.self, from: data)
+        if let receiver = view.view {
+            guard receiver.meetingID == view.meeting?.meetingID,
+                  receiver.identity == deviceID + "-view",
+                  let media = URL(string: receiver.url), media.scheme == "wss",
+                  media.host?.caseInsensitiveCompare(components.host ?? "") == .orderedSame else {
+                throw failure(9, "会议查看授权与设备或地址不一致")
+            }
+        }
+        return view
     }
 
     static func fetchTranscript(serverURL: String, meetingID: String, deviceID: String,
@@ -308,8 +347,8 @@ enum MeetingClient {
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
             throw failure(12, "电脑端补取失败")
         }
-        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              SessionControlContract.transcriptRequiredFields.isSubset(of: Set(object.keys)) else {
+        let object = try validatedResponse(data, kind: "transcript")
+        guard SessionControlContract.transcriptRequiredFields.isSubset(of: Set(object.keys)) else {
             throw failure(12, "补取回包缺少契约字段")
         }
         let page = try JSONDecoder().decode(TranscriptPage.self, from: data)
@@ -340,9 +379,11 @@ enum MeetingClient {
         request.setValue(try credential(), forHTTPHeaderField: "X-VM-Device-Token")
         request.timeoutInterval = 15
         let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse, http.statusCode == 200,
-              let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              object["meeting_id"] as? String == meetingID,
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            throw failure(11, "报告尚未生成或回包无效")
+        }
+        let object = try validatedResponse(data, kind: "artifact")
+        guard object["meeting_id"] as? String == meetingID,
               let sha256 = object["sha256"] as? String, sha256.count == 64,
               let report = object["report"] as? [String: Any],
               let encoded = object["report_json_base64"] as? String,
@@ -374,10 +415,13 @@ enum MeetingClient {
             "device_id": deviceID, "sha256": sha256
         ])
         request.timeoutInterval = 8
-        let (_, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
             throw failure(12, "电脑端未确认报告送达")
         }
+        let confirmation = try validatedResponse(data, kind: "artifact_ack")
+        guard confirmation["meeting_id"] as? String == meetingID,
+              confirmation["sha256"] as? String == sha256 else { throw failure(12, "报告回执版本不一致") }
     }
 
     static func requestBroadcastGrant() async throws -> MeetingGrant {
@@ -391,6 +435,10 @@ enum MeetingClient {
         let meetingID = view.meeting.flatMap { meeting in
             SessionControlContract.recoveryEligibleMeetingStates.contains(meeting.status)
                 ? meeting.meetingID : nil
+        }
+        if meetingID == nil, let closedID = view.meeting?.meetingID {
+            try retireClosedStart(channel: SessionControlContract.systemAudio,
+                                  deviceID: registration.deviceID, meetingID: closedID)
         }
         let grant = try await requestGrant(serverURL: registration.serverURL,
                                            identity: identity,
@@ -431,10 +479,12 @@ enum MeetingClient {
             if let generation { payload["generation"] = generation }
             request.httpBody = try JSONSerialization.data(withJSONObject: payload)
             request.timeoutInterval = 8
-            let (_, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
                 throw failure(8, "电脑端未确认会议停止")
             }
+            let confirmation = try validatedResponse(data, kind: "stop")
+            guard confirmation["meeting_id"] as? String == meetingID else { throw failure(8, "停止回执会议号不一致") }
         }
     }
 
@@ -453,8 +503,17 @@ enum MeetingClient {
     /// 丢掉这个通道的待确认申请。
     /// 为什么必须丢:同一个通道会复用原 requestID 与原请求体(见 `pendingStart`),
     /// 不清就会把"带号恢复"那条请求原样重放,永远拿不到新会。
-    static func discardPendingStart(channel: String, deviceID: String) {
-        clearPendingStart(channel: channel, deviceID: deviceID)
+    static func discardPendingStart(channel: String, deviceID: String) throws {
+        try clearPendingStart(channel: channel, deviceID: deviceID, discard: true)
+    }
+
+    static func retireClosedStart(channel: String, deviceID: String, meetingID: String) throws {
+        try pendingStore().transaction(try pendingStartKey(channel)) { data in
+            guard let data, let saved = try? JSONDecoder().decode(PendingStart.self, from: data),
+                  saved.deviceID == deviceID,
+                  saved.grantedMeetingID == meetingID || saved.meetingID == meetingID else { return (data, ()) }
+            return (nil, ())
+        }
     }
 
     static func queueBroadcastStop(serverURL: String, meetingID: String, deviceID: String,
@@ -475,23 +534,18 @@ enum MeetingClient {
 
     private static func queueStop(serverURL: String, meetingID: String, deviceID: String,
                                   channel: String, generation: Int, key: String) throws {
-        guard let defaults = sharedDefaults() else {
-            throw failure(13, "App Group 不可用，无法保存停止请求")
+        try pendingStore().transaction(key) { data in
+            if let data, let existing = try? JSONDecoder().decode(PendingStop.self, from: data),
+               existing.serverURL == serverURL, existing.meetingID == meetingID,
+               existing.deviceID == deviceID, existing.channel == channel,
+               existing.generation == generation { return (data, ()) }
+            let pending = PendingStop(serverURL: serverURL, meetingID: meetingID,
+                deviceID: deviceID, channel: channel, requestID: UUID().uuidString.lowercased(),
+                generation: generation)
+            return (try JSONEncoder().encode(pending), ())
         }
-        if let data = defaults.data(forKey: key),
-           let existing = try? JSONDecoder().decode(PendingStop.self, from: data),
-           existing.meetingID == meetingID && existing.deviceID == deviceID &&
-           existing.channel == channel && existing.generation == generation {
-            clearPendingStart(channel: channel, deviceID: deviceID)
-            return // Keep the idempotency key across retries and extension shutdown races.
-        }
-        let pending = PendingStop(serverURL: serverURL, meetingID: meetingID,
-                                  deviceID: deviceID, channel: channel,
-                                  requestID: UUID().uuidString.lowercased(),
-                                  generation: generation)
-        defaults.set(try JSONEncoder().encode(pending), forKey: key)
-        defaults.synchronize()
-        clearPendingStart(channel: channel, deviceID: deviceID)
+        try clearPendingStart(channel: channel, deviceID: deviceID,
+                              meetingID: meetingID, generation: generation)
     }
 
     private static func pendingStartKey(_ channel: String) throws -> String {
@@ -505,41 +559,34 @@ enum MeetingClient {
     private static func pendingStart(serverURL: String, userID: String,
                                      deviceID: String, channel: String,
                                      meetingID: String?) throws -> PendingStart {
-        guard let defaults = sharedDefaults() else {
-            throw failure(13, "App Group 不可用，无法保存会议申请")
-        }
-        let key = try pendingStartKey(channel)
-        if let data = defaults.data(forKey: key) {
-            let pending = try JSONDecoder().decode(PendingStart.self, from: data)
-            if pending.serverURL == serverURL, pending.userID == userID,
-               pending.deviceID == deviceID, pending.channel == channel {
-                // A retry must keep the original request body as well as its ID.
-                // A newly observed meeting cannot be inserted into that fingerprint.
-                return pending
-            }
-            // 这一条属于上一套设备登记或上一个地址,不是"丢失的回包"。
-            // 以前这里抛错,结果是一次失败尝试(比如还没来得及填凭据)就能把 App 永久锁死:
-            // 用户改了登记之后没有任何入口能清掉它,只能删 App 重装。
-            defaults.removeObject(forKey: key)
-        }
         if let meetingID, UUID(uuidString: meetingID) == nil {
             throw failure(15, "待恢复会议号无效")
         }
-        let pending = PendingStart(serverURL: serverURL, userID: userID,
-                                   deviceID: deviceID, channel: channel,
-                                   requestID: UUID().uuidString.lowercased(),
-                                   meetingID: meetingID)
-        defaults.set(try JSONEncoder().encode(pending), forKey: key)
-        defaults.synchronize()
-        return pending
+        return try pendingStore().transaction(try pendingStartKey(channel)) { data in
+            if let data {
+                let pending = try JSONDecoder().decode(PendingStart.self, from: data)
+                if pending.serverURL == serverURL, pending.userID == userID,
+                   pending.deviceID == deviceID, pending.channel == channel {
+                    return (data, pending) // replay the original id and fingerprint
+                }
+            }
+            let pending = PendingStart(serverURL: serverURL, userID: userID, deviceID: deviceID,
+                channel: channel, requestID: UUID().uuidString.lowercased(), meetingID: meetingID)
+            return (try JSONEncoder().encode(pending), pending)
+        }
     }
 
-    private static func clearPendingStart(channel: String, deviceID: String) {
-        guard let key = try? pendingStartKey(channel),
-              let defaults = sharedDefaults(), let data = defaults.data(forKey: key),
-              let pending = try? JSONDecoder().decode(PendingStart.self, from: data),
-              pending.deviceID == deviceID else { return }
-        defaults.removeObject(forKey: key)
+    private static func clearPendingStart(channel: String, deviceID: String,
+                                          requestID: String? = nil, meetingID: String? = nil,
+                                          generation: Int? = nil, discard: Bool = false) throws {
+        try pendingStore().transaction(try pendingStartKey(channel)) { data in
+            guard let data, let saved = try? JSONDecoder().decode(PendingStart.self, from: data),
+                  saved.deviceID == deviceID else { return (data, ()) }
+            let sameRequest = requestID != nil && saved.requestID == requestID
+            let sameGrant = meetingID != nil && saved.grantedMeetingID == meetingID &&
+                saved.grantedGeneration == generation
+            return (discard || sameRequest || sameGrant ? nil : data, ())
+        }
     }
 
     static func flushPendingBroadcastStop() async throws {
@@ -551,17 +598,13 @@ enum MeetingClient {
     }
 
     private static func flushPendingStop(key: String) async throws {
-        guard let defaults = sharedDefaults(),
-              let data = defaults.data(forKey: key) else { return }
+        let store = try pendingStore()
+        guard let data = try store.read(key) else { return }
         let pending = try JSONDecoder().decode(PendingStop.self, from: data)
         try await stopChannel(serverURL: pending.serverURL, meetingID: pending.meetingID,
                               deviceID: pending.deviceID, channel: pending.channel,
-                              generation: pending.generation,
-                              requestID: pending.requestID)
-        // Another process may have replaced the record while this request was in flight.
-        if defaults.data(forKey: key) == data {
-            defaults.removeObject(forKey: key)
-        }
+                              generation: pending.generation, requestID: pending.requestID)
+        try store.transaction(key) { current in (current == data ? nil : current, ()) }
     }
 
     private static func failure(_ code: Int, _ message: String,

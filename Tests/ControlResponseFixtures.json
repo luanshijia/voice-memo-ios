@@ -1,0 +1,622 @@
+[
+  {
+    "name": "valid_grant",
+    "kind": "grant",
+    "body": {
+      "meeting_id": "7d444840-9dc0-11d1-b245-5ffdce74fad2",
+      "room": "vm-7d444840-9dc0-11d1-b245-5ffdce74fad2",
+      "status": "active",
+      "channel": "mic",
+      "generation": 1,
+      "state_revision": 1,
+      "created_at": "2026-10-25T00:00:00.000Z",
+      "url": "wss://home",
+      "token": "jwt",
+      "identity": "phone-livekit",
+      "ttl": 900
+    },
+    "valid": true
+  },
+  {
+    "name": "valid_view",
+    "kind": "device_view",
+    "body": {
+      "state_revision": 1,
+      "meeting": {
+        "meeting_id": "7d444840-9dc0-11d1-b245-5ffdce74fad2",
+        "user_id": "owner",
+        "device_id": "phone",
+        "created_at": "2026-10-25T00:00:00.000Z",
+        "room": "vm-7d444840-9dc0-11d1-b245-5ffdce74fad2",
+        "status": "active",
+        "channels": {
+          "mic": {
+            "status": "active",
+            "generation": 1
+          }
+        },
+        "input_count": 0,
+        "recovery_deadline": null
+      },
+      "pending_reports": []
+    },
+    "valid": true
+  },
+  {
+    "name": "valid_transcript",
+    "kind": "transcript",
+    "body": {
+      "meeting_id": "7d444840-9dc0-11d1-b245-5ffdce74fad2",
+      "after": 0,
+      "items": [
+        {
+          "seq": 1,
+          "who": "speaker",
+          "source": "phone-livekit",
+          "text": "test",
+          "audio_s": 1.0,
+          "gap_s": null,
+          "ts": 1
+        }
+      ],
+      "latest": 1,
+      "oldest": 1,
+      "truncated": false,
+      "capacity": 200,
+      "epoch": "7d444840-9dc0-11d1-b245-5ffdce74fad2",
+      "reset": false
+    },
+    "valid": true
+  },
+  {
+    "name": "bad_grant_generation_0",
+    "kind": "grant",
+    "body": {
+      "meeting_id": "7d444840-9dc0-11d1-b245-5ffdce74fad2",
+      "room": "vm-7d444840-9dc0-11d1-b245-5ffdce74fad2",
+      "status": "active",
+      "channel": "mic",
+      "generation": 0,
+      "state_revision": 1,
+      "created_at": "2026-10-25T00:00:00.000Z",
+      "url": "wss://home",
+      "token": "jwt",
+      "identity": "phone-livekit",
+      "ttl": 900
+    },
+    "valid": false
+  },
+  {
+    "name": "bad_grant_generation_True",
+    "kind": "grant",
+    "body": {
+      "meeting_id": "7d444840-9dc0-11d1-b245-5ffdce74fad2",
+      "room": "vm-7d444840-9dc0-11d1-b245-5ffdce74fad2",
+      "status": "active",
+      "channel": "mic",
+      "generation": true,
+      "state_revision": 1,
+      "created_at": "2026-10-25T00:00:00.000Z",
+      "url": "wss://home",
+      "token": "jwt",
+      "identity": "phone-livekit",
+      "ttl": 900
+    },
+    "valid": false
+  },
+  {
+    "name": "bad_grant_ttl_86401",
+    "kind": "grant",
+    "body": {
+      "meeting_id": "7d444840-9dc0-11d1-b245-5ffdce74fad2",
+      "room": "vm-7d444840-9dc0-11d1-b245-5ffdce74fad2",
+      "status": "active",
+      "channel": "mic",
+      "generation": 1,
+      "state_revision": 1,
+      "created_at": "2026-10-25T00:00:00.000Z",
+      "url": "wss://home",
+      "token": "jwt",
+      "identity": "phone-livekit",
+      "ttl": 86401
+    },
+    "valid": false
+  },
+  {
+    "name": "bad_grant_ttl_1.5",
+    "kind": "grant",
+    "body": {
+      "meeting_id": "7d444840-9dc0-11d1-b245-5ffdce74fad2",
+      "room": "vm-7d444840-9dc0-11d1-b245-5ffdce74fad2",
+      "status": "active",
+      "channel": "mic",
+      "generation": 1,
+      "state_revision": 1,
+      "created_at": "2026-10-25T00:00:00.000Z",
+      "url": "wss://home",
+      "token": "jwt",
+      "identity": "phone-livekit",
+      "ttl": 1.5
+    },
+    "valid": false
+  },
+  {
+    "name": "bad_grant_meeting_id_bad",
+    "kind": "grant",
+    "body": {
+      "meeting_id": "bad",
+      "room": "vm-7d444840-9dc0-11d1-b245-5ffdce74fad2",
+      "status": "active",
+      "channel": "mic",
+      "generation": 1,
+      "state_revision": 1,
+      "created_at": "2026-10-25T00:00:00.000Z",
+      "url": "wss://home",
+      "token": "jwt",
+      "identity": "phone-livekit",
+      "ttl": 900
+    },
+    "valid": false
+  },
+  {
+    "name": "bad_grant_created_at_yesterday",
+    "kind": "grant",
+    "body": {
+      "meeting_id": "7d444840-9dc0-11d1-b245-5ffdce74fad2",
+      "room": "vm-7d444840-9dc0-11d1-b245-5ffdce74fad2",
+      "status": "active",
+      "channel": "mic",
+      "generation": 1,
+      "state_revision": 1,
+      "created_at": "yesterday",
+      "url": "wss://home",
+      "token": "jwt",
+      "identity": "phone-livekit",
+      "ttl": 900
+    },
+    "valid": false
+  },
+  {
+    "name": "bad_grant_token_",
+    "kind": "grant",
+    "body": {
+      "meeting_id": "7d444840-9dc0-11d1-b245-5ffdce74fad2",
+      "room": "vm-7d444840-9dc0-11d1-b245-5ffdce74fad2",
+      "status": "active",
+      "channel": "mic",
+      "generation": 1,
+      "state_revision": 1,
+      "created_at": "2026-10-25T00:00:00.000Z",
+      "url": "wss://home",
+      "token": "",
+      "identity": "phone-livekit",
+      "ttl": 900
+    },
+    "valid": false
+  },
+  {
+    "name": "bad_grant_state_revision_9007199254740992",
+    "kind": "grant",
+    "body": {
+      "meeting_id": "7d444840-9dc0-11d1-b245-5ffdce74fad2",
+      "room": "vm-7d444840-9dc0-11d1-b245-5ffdce74fad2",
+      "status": "active",
+      "channel": "mic",
+      "generation": 1,
+      "state_revision": 9007199254740992,
+      "created_at": "2026-10-25T00:00:00.000Z",
+      "url": "wss://home",
+      "token": "jwt",
+      "identity": "phone-livekit",
+      "ttl": 900
+    },
+    "valid": false
+  },
+  {
+    "name": "bad_grant_status_finishing",
+    "kind": "grant",
+    "body": {
+      "meeting_id": "7d444840-9dc0-11d1-b245-5ffdce74fad2",
+      "room": "vm-7d444840-9dc0-11d1-b245-5ffdce74fad2",
+      "status": "finishing",
+      "channel": "mic",
+      "generation": 1,
+      "state_revision": 1,
+      "created_at": "2026-10-25T00:00:00.000Z",
+      "url": "wss://home",
+      "token": "jwt",
+      "identity": "phone-livekit",
+      "ttl": 900
+    },
+    "valid": false
+  },
+  {
+    "name": "missing_channel",
+    "kind": "grant",
+    "body": {
+      "meeting_id": "7d444840-9dc0-11d1-b245-5ffdce74fad2",
+      "room": "vm-7d444840-9dc0-11d1-b245-5ffdce74fad2",
+      "status": "active",
+      "generation": 1,
+      "state_revision": 1,
+      "created_at": "2026-10-25T00:00:00.000Z",
+      "url": "wss://home",
+      "token": "jwt",
+      "identity": "phone-livekit",
+      "ttl": 900
+    },
+    "valid": false
+  },
+  {
+    "name": "forward_optional",
+    "kind": "grant",
+    "body": {
+      "meeting_id": "7d444840-9dc0-11d1-b245-5ffdce74fad2",
+      "room": "vm-7d444840-9dc0-11d1-b245-5ffdce74fad2",
+      "status": "active",
+      "channel": "mic",
+      "generation": 1,
+      "state_revision": 1,
+      "created_at": "2026-10-25T00:00:00.000Z",
+      "url": "wss://home",
+      "token": "jwt",
+      "identity": "phone-livekit",
+      "ttl": 900,
+      "future_optional": "accepted"
+    },
+    "valid": true
+  },
+  {
+    "name": "bad_channel_generation",
+    "kind": "device_view",
+    "body": {
+      "state_revision": 1,
+      "meeting": {
+        "meeting_id": "7d444840-9dc0-11d1-b245-5ffdce74fad2",
+        "user_id": "owner",
+        "device_id": "phone",
+        "created_at": "2026-10-25T00:00:00.000Z",
+        "room": "vm-7d444840-9dc0-11d1-b245-5ffdce74fad2",
+        "status": "active",
+        "channels": {
+          "mic": {
+            "status": "active",
+            "generation": 0
+          }
+        },
+        "input_count": 0,
+        "recovery_deadline": null
+      },
+      "pending_reports": []
+    },
+    "valid": false
+  },
+  {
+    "name": "bad_channel_status",
+    "kind": "device_view",
+    "body": {
+      "state_revision": 1,
+      "meeting": {
+        "meeting_id": "7d444840-9dc0-11d1-b245-5ffdce74fad2",
+        "user_id": "owner",
+        "device_id": "phone",
+        "created_at": "2026-10-25T00:00:00.000Z",
+        "room": "vm-7d444840-9dc0-11d1-b245-5ffdce74fad2",
+        "status": "active",
+        "channels": {
+          "mic": {
+            "status": "invented",
+            "generation": 1
+          }
+        },
+        "input_count": 0,
+        "recovery_deadline": null
+      },
+      "pending_reports": []
+    },
+    "valid": false
+  },
+  {
+    "name": "bad_deadline",
+    "kind": "device_view",
+    "body": {
+      "state_revision": 1,
+      "meeting": {
+        "meeting_id": "7d444840-9dc0-11d1-b245-5ffdce74fad2",
+        "user_id": "owner",
+        "device_id": "phone",
+        "created_at": "2026-10-25T00:00:00.000Z",
+        "room": "vm-7d444840-9dc0-11d1-b245-5ffdce74fad2",
+        "status": "active",
+        "channels": {
+          "mic": {
+            "status": "active",
+            "generation": 1
+          }
+        },
+        "input_count": 0,
+        "recovery_deadline": "bad"
+      },
+      "pending_reports": []
+    },
+    "valid": false
+  },
+  {
+    "name": "bad_report_digest",
+    "kind": "device_view",
+    "body": {
+      "state_revision": 1,
+      "meeting": {
+        "meeting_id": "7d444840-9dc0-11d1-b245-5ffdce74fad2",
+        "user_id": "owner",
+        "device_id": "phone",
+        "created_at": "2026-10-25T00:00:00.000Z",
+        "room": "vm-7d444840-9dc0-11d1-b245-5ffdce74fad2",
+        "status": "active",
+        "channels": {
+          "mic": {
+            "status": "active",
+            "generation": 1
+          }
+        },
+        "input_count": 0,
+        "recovery_deadline": null
+      },
+      "pending_reports": [
+        {
+          "meeting_id": "7d444840-9dc0-11d1-b245-5ffdce74fad2",
+          "sha256": "not-a-hash"
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "no_meeting",
+    "kind": "device_view",
+    "body": {
+      "state_revision": 1,
+      "meeting": null,
+      "pending_reports": []
+    },
+    "valid": true
+  },
+  {
+    "name": "bad_item_seq_0",
+    "kind": "transcript",
+    "body": {
+      "meeting_id": "7d444840-9dc0-11d1-b245-5ffdce74fad2",
+      "after": 0,
+      "items": [
+        {
+          "seq": 0,
+          "who": "speaker",
+          "source": "phone-livekit",
+          "text": "test",
+          "audio_s": 1.0,
+          "gap_s": null,
+          "ts": 1
+        }
+      ],
+      "latest": 1,
+      "oldest": 1,
+      "truncated": false,
+      "capacity": 200,
+      "epoch": "7d444840-9dc0-11d1-b245-5ffdce74fad2",
+      "reset": false
+    },
+    "valid": false
+  },
+  {
+    "name": "bad_item_seq_True",
+    "kind": "transcript",
+    "body": {
+      "meeting_id": "7d444840-9dc0-11d1-b245-5ffdce74fad2",
+      "after": 0,
+      "items": [
+        {
+          "seq": true,
+          "who": "speaker",
+          "source": "phone-livekit",
+          "text": "test",
+          "audio_s": 1.0,
+          "gap_s": null,
+          "ts": 1
+        }
+      ],
+      "latest": 1,
+      "oldest": 1,
+      "truncated": false,
+      "capacity": 200,
+      "epoch": "7d444840-9dc0-11d1-b245-5ffdce74fad2",
+      "reset": false
+    },
+    "valid": false
+  },
+  {
+    "name": "bad_item_audio_s_-1",
+    "kind": "transcript",
+    "body": {
+      "meeting_id": "7d444840-9dc0-11d1-b245-5ffdce74fad2",
+      "after": 0,
+      "items": [
+        {
+          "seq": 1,
+          "who": "speaker",
+          "source": "phone-livekit",
+          "text": "test",
+          "audio_s": -1,
+          "gap_s": null,
+          "ts": 1
+        }
+      ],
+      "latest": 1,
+      "oldest": 1,
+      "truncated": false,
+      "capacity": 200,
+      "epoch": "7d444840-9dc0-11d1-b245-5ffdce74fad2",
+      "reset": false
+    },
+    "valid": false
+  },
+  {
+    "name": "bad_item_gap_s_-1",
+    "kind": "transcript",
+    "body": {
+      "meeting_id": "7d444840-9dc0-11d1-b245-5ffdce74fad2",
+      "after": 0,
+      "items": [
+        {
+          "seq": 1,
+          "who": "speaker",
+          "source": "phone-livekit",
+          "text": "test",
+          "audio_s": 1.0,
+          "gap_s": -1,
+          "ts": 1
+        }
+      ],
+      "latest": 1,
+      "oldest": 1,
+      "truncated": false,
+      "capacity": 200,
+      "epoch": "7d444840-9dc0-11d1-b245-5ffdce74fad2",
+      "reset": false
+    },
+    "valid": false
+  },
+  {
+    "name": "bad_item_ts_0",
+    "kind": "transcript",
+    "body": {
+      "meeting_id": "7d444840-9dc0-11d1-b245-5ffdce74fad2",
+      "after": 0,
+      "items": [
+        {
+          "seq": 1,
+          "who": "speaker",
+          "source": "phone-livekit",
+          "text": "test",
+          "audio_s": 1.0,
+          "gap_s": null,
+          "ts": 0
+        }
+      ],
+      "latest": 1,
+      "oldest": 1,
+      "truncated": false,
+      "capacity": 200,
+      "epoch": "7d444840-9dc0-11d1-b245-5ffdce74fad2",
+      "reset": false
+    },
+    "valid": false
+  },
+  {
+    "name": "bad_reset",
+    "kind": "transcript",
+    "body": {
+      "meeting_id": "7d444840-9dc0-11d1-b245-5ffdce74fad2",
+      "after": 0,
+      "items": [
+        {
+          "seq": 1,
+          "who": "speaker",
+          "source": "phone-livekit",
+          "text": "test",
+          "audio_s": 1.0,
+          "gap_s": null,
+          "ts": 1
+        }
+      ],
+      "latest": 1,
+      "oldest": 1,
+      "truncated": false,
+      "capacity": 200,
+      "epoch": "7d444840-9dc0-11d1-b245-5ffdce74fad2",
+      "reset": "true"
+    },
+    "valid": false
+  },
+  {
+    "name": "legacy_page",
+    "kind": "transcript",
+    "body": {
+      "meeting_id": "7d444840-9dc0-11d1-b245-5ffdce74fad2",
+      "after": 0,
+      "items": [
+        {
+          "seq": 1,
+          "who": "speaker",
+          "source": "phone-livekit",
+          "text": "test",
+          "audio_s": 1.0,
+          "gap_s": null,
+          "ts": 1
+        }
+      ],
+      "latest": 1,
+      "oldest": 1,
+      "truncated": false,
+      "capacity": 200
+    },
+    "valid": true
+  },
+  {
+    "name": "valid_ack",
+    "kind": "artifact_ack",
+    "body": {
+      "meeting_id": "7d444840-9dc0-11d1-b245-5ffdce74fad2",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "generated": true,
+      "delivered": true
+    },
+    "valid": true
+  },
+  {
+    "name": "unconfirmed_delivery",
+    "kind": "artifact_ack",
+    "body": {
+      "meeting_id": "7d444840-9dc0-11d1-b245-5ffdce74fad2",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "generated": true,
+      "delivered": false
+    },
+    "valid": false
+  },
+  {
+    "name": "integer_as_float",
+    "kind": "grant",
+    "body": {
+      "meeting_id": "7d444840-9dc0-11d1-b245-5ffdce74fad2",
+      "room": "vm-7d444840-9dc0-11d1-b245-5ffdce74fad2",
+      "status": "active",
+      "channel": "mic",
+      "generation": 1.0,
+      "state_revision": 1,
+      "created_at": "2026-10-25T00:00:00.000Z",
+      "url": "wss://home",
+      "token": "jwt",
+      "identity": "phone-livekit",
+      "ttl": 900
+    },
+    "valid": false
+  },
+  {
+    "name": "uuid_trailing_newline",
+    "kind": "grant",
+    "body": {
+      "meeting_id": "7d444840-9dc0-11d1-b245-5ffdce74fad2\n",
+      "room": "vm-7d444840-9dc0-11d1-b245-5ffdce74fad2",
+      "status": "active",
+      "channel": "mic",
+      "generation": 1,
+      "state_revision": 1,
+      "created_at": "2026-10-25T00:00:00.000Z",
+      "url": "wss://home",
+      "token": "jwt",
+      "identity": "phone-livekit",
+      "ttl": 900
+    },
+    "valid": false
+  }
+]

@@ -13,6 +13,7 @@ final class LiveKitBroadcastPublisher: NSObject, RoomDelegate {
         let token: String
         let session: String?
         let generation: Int
+        let requestID: String?
     }
 
     private let log: (String) -> Void
@@ -131,7 +132,7 @@ final class LiveKitBroadcastPublisher: NSObject, RoomDelegate {
                 let grant = try await MeetingClient.requestBroadcastGrant()
                 configuration = Configuration(url: grant.url, identity: grant.identity,
                                                token: grant.token, session: grant.meetingID,
-                                               generation: grant.generation)
+                                               generation: grant.generation, requestID: grant.requestID)
                 self.lock.lock()
                 let alreadyStopped = self.stopped
                 self.meeting = (grant.meetingID, grant.url,
@@ -301,12 +302,20 @@ final class LiveKitBroadcastPublisher: NSObject, RoomDelegate {
                     try await MeetingClient.reportObservation(
                         serverURL: configuration.url, meetingID: session,
                         deviceID: device, channel: SessionControlContract.systemAudio,
-                        generation: configuration.generation, observed: "publishing")
+                        generation: configuration.generation, observed: "publishing", requestID: configuration.requestID)
                 } catch {
                     log("系统声音采集状态待同步: \(error.localizedDescription)")
                 }
             }
+            lock.lock()
+            let stillCurrent = !stopped && room === newRoom
+            lock.unlock()
+            guard stillCurrent, !Task.isCancelled else { return false }
             workQueue.async {
+                self.lock.lock()
+                let allowed = !self.stopped && self.room === newRoom
+                self.lock.unlock()
+                guard allowed else { return }
                 self.ready = true
                 self.overflowLogged = false
                 let buffered = self.pending

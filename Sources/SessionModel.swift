@@ -493,7 +493,10 @@ final class SessionModel: ObservableObject {
         finalReportMeetingID = meetingID
     }
 
-    func toggle() { isRecording ? stop() : start() }
+    func toggle() {
+        guard !terminating else { return }
+        isRecording ? stop() : start()
+    }
 
     /// 「主动终止」:结束这场会,并清掉本机这一轮的会议身份。
     ///
@@ -508,10 +511,16 @@ final class SessionModel: ObservableObject {
     func terminateMeeting() {
         guard !terminating else { return }
         terminating = true
+        connectionGeneration += 1
+        let generation = connectionGeneration
+        let terminationConfig = cfg
+        let operation = SessionOperation(generation: generation, config: terminationConfig)
         Task { @MainActor in
             defer { terminating = false }
             do {
-                let view = try await MeetingClient.deviceView(serverURL: cfg.url, deviceID: cfg.device)
+                let view = try await MeetingClient.deviceView(serverURL: terminationConfig.url,
+                                                               deviceID: terminationConfig.device)
+                guard operation.isCurrent(generation: connectionGeneration, config: cfg) else { return }
                 let fresh = MeetingContext(view: view)
                 meetingContext = fresh
                 guard let meetingID = fresh.meetingID, fresh.hasOpenMeeting else {
@@ -526,15 +535,17 @@ final class SessionModel: ObservableObject {
                         return
                     }
                     try await MeetingClient.stopChannel(
-                        serverURL: cfg.url, meetingID: meetingID, deviceID: cfg.device,
+                        serverURL: terminationConfig.url, meetingID: meetingID, deviceID: terminationConfig.device,
                         channel: SessionControlContract.systemAudio,
                         generation: fresh.systemAudioGeneration)
+                    guard operation.isCurrent(generation: connectionGeneration, config: cfg) else { return }
                 }
                 if fresh.isChannelOpen(fresh.mic) {
                     try await MeetingClient.stopChannel(
-                        serverURL: cfg.url, meetingID: meetingID, deviceID: cfg.device,
+                        serverURL: terminationConfig.url, meetingID: meetingID, deviceID: terminationConfig.device,
                         channel: SessionControlContract.mic,
                         generation: fresh.micGeneration)
+                    guard operation.isCurrent(generation: connectionGeneration, config: cfg) else { return }
                 }
                 // 两路都已在电脑端停干净:先清本机会议号,`stop()` 见号为空就只做
                 // 断连接与清屏,不会再去打扰电脑端(否则会拿旧代次重发一次多余请求)。
@@ -570,18 +581,19 @@ final class SessionModel: ObservableObject {
     /// 丢掉那条待确认申请,再以不带号重发一次。
     /// 为什么必须清 pending:同一个通道会复用原请求号与原请求体(MeetingClient.pendingStart),
     /// 不清就会把同一个带号请求原样重放,永远拿不到新会。
-    private func requestMicToken(recoveryMeetingID: String?) async throws -> MeetingGrant {
+    private func requestMicToken(config: LiveKitConfig, operation: SessionOperation, recoveryMeetingID: String?) async throws -> MeetingGrant {
         do {
-            return try await cfg.requestToken(identity: cfg.identity,
+            return try await config.requestToken(identity: config.identity,
                                               channel: SessionControlContract.mic,
                                               meetingID: recoveryMeetingID)
         } catch {
+            guard operation.isCurrent(generation: connectionGeneration, config: cfg) else { throw CancellationError() }
             guard recoveryMeetingID != nil,
                   MeetingClient.isClosedMeetingRefusal(error) else { throw error }
-            MeetingClient.discardPendingStart(channel: SessionControlContract.mic,
-                                              deviceID: cfg.device)
+            try MeetingClient.discardPendingStart(channel: SessionControlContract.mic,
+                                              deviceID: config.device)
             note("原会议已结束,改为新开一场")
-            return try await cfg.requestToken(identity: cfg.identity,
+            return try await config.requestToken(identity: config.identity,
                                               channel: SessionControlContract.mic,
                                               meetingID: nil)
         }
@@ -637,7 +649,9 @@ final class SessionModel: ObservableObject {
     }
 
     private func start() {
-        let recoveryMeetingID = sessionID.isEmpty ? nil : sessionID
+        guard !terminating else { return }
+        let recoveryMeetingID = meetingContext.isFresh() && meetingContext.canStartNew()
+            ? nil : (sessionID.isEmpty ? nil : sessionID)
         connectionGeneration += 1
         let generation = connectionGeneration
         resetCurrentMeetingData()
@@ -646,6 +660,7 @@ final class SessionModel: ObservableObject {
         syncBoard()
         syncProtocolStatus()
         let cfg = self.cfg
+        let operation = SessionOperation(generation: generation, config: cfg)
         connecting = Task {
             // 先取走再等:await 期间用户可能又点了一次停止,stop() 会写入"新的一条" pendingDisconnect,
             // 这里若无条件置 nil 就把它的引用抹掉了(同身份双连就是在那个窗口发生的,2026-10-18 审计)。
@@ -660,11 +675,18 @@ final class SessionModel: ObservableObject {
             var grantedServerGeneration = 0
             do {
                 try await MeetingClient.flushPendingMicStop()
-                let card = try await self.requestMicToken(recoveryMeetingID: recoveryMeetingID)
+                guard operation.isCurrent(generation: self.connectionGeneration, config: self.cfg) else { return }
+                if recoveryMeetingID == nil, self.meetingContext.isFresh(), self.meetingContext.canStartNew(),
+                   let closedID = self.meetingContext.meetingID {
+                    try MeetingClient.retireClosedStart(channel: SessionControlContract.mic,
+                                                        deviceID: cfg.device, meetingID: closedID)
+                }
+                let card = try await self.requestMicToken(config: cfg, operation: operation, recoveryMeetingID: recoveryMeetingID)
                 grantedMeetingID = card.meetingID
                 grantedServerGeneration = card.generation
+                guard operation.isCurrent(generation: self.connectionGeneration, config: self.cfg) else { throw CancellationError() }
                 let live = try await room.connect(url: card.url, token: card.token, identity: cfg.identity)
-                guard generation == self.connectionGeneration else {   // 这一轮已被停止/重开取代
+                guard operation.isCurrent(generation: self.connectionGeneration, config: self.cfg) else {   // 这一轮已被停止/重开取代
                     await self.room.disconnect(live)                   // 只断自己这条,不碰新会话
                     do {
                         try MeetingClient.queueMicStop(serverURL: cfg.url,
@@ -684,11 +706,13 @@ final class SessionModel: ObservableObject {
                     try await MeetingClient.reportObservation(
                         serverURL: cfg.url, meetingID: card.meetingID,
                         deviceID: cfg.device, channel: SessionControlContract.mic,
-                        generation: card.generation, observed: "publishing")
+                        generation: card.generation, observed: "publishing", requestID: card.requestID)
                 } catch {
                     self.note("手机采集状态待同步: \(error.localizedDescription)")
                 }
+                guard operation.isCurrent(generation: self.connectionGeneration, config: self.cfg) else { return }
                 await room.send(self.summodePayload(self.sumMode))   // 让家里跟上本机档位
+                guard operation.isCurrent(generation: self.connectionGeneration, config: self.cfg) else { return }
                 self.startTimer()
                 self.syncBoard()
             } catch {
@@ -704,7 +728,7 @@ final class SessionModel: ObservableObject {
                         self.note("连接失败后的会议停止待同步: \(error.localizedDescription)")
                     }
                 }
-                guard generation == self.connectionGeneration else { return }
+                guard operation.isCurrent(generation: self.connectionGeneration, config: self.cfg) else { return }
                 self.note("连接异常:\(error.localizedDescription)")
                 self.note("连接失败:\(error.localizedDescription)")
                 self.isRecording = false
