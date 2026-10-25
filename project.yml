@@ -124,6 +124,7 @@ targets:
         UIBackgroundModes:
           - audio
         NSMicrophoneUsageDescription: 用于会议录音与实时转写
+        NSBluetoothAlwaysUsageDescription: 用于连接 CB08 外置录音设备
         # 走 wss:// + 自家 CA 签发的证书,ATS 保持 iOS 默认的严格策略(不加任何豁免)。
         NSLocalNetworkUsageDescription: 连接你家里的转写服务(xEdge 私网)
     settings:
@@ -149,6 +150,18 @@ targets:
         CODE_SIGNING_ALLOWED: NO
         CODE_SIGN_IDENTITY: ""
         CODE_SIGNING_REQUIRED: NO
+        HEADER_SEARCH_PATHS:
+          - $(inherited)
+          - $(SRCROOT)/Vendor/CB08
+        SWIFT_INCLUDE_PATHS:
+          - $(inherited)
+          - $(SRCROOT)/Vendor/CB08
+        LIBRARY_SEARCH_PATHS[sdk=iphoneos*]:
+          - $(inherited)
+          - $(SRCROOT)/Vendor/CB08
+        OTHER_LDFLAGS[sdk=iphoneos*]:
+          - $(inherited)
+          - -lPNote
 
 schemes:
   VoiceMemo:

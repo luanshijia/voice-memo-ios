@@ -1,0 +1,4 @@
+module CB08SDK {
+    header "PNode.h"
+    export *
+}

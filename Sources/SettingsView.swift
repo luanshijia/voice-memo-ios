@@ -10,6 +10,13 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+#if CB08_PROBE
+                Section("诊断") {
+                    NavigationLink("CB08 设备与 Opus 探测") {
+                        CB08ProbeView()
+                    }
+                }
+#endif
                 stateSection          // 固定信息(环境 / 身份 / 版本)—— 按用户口径放最上面
                 connectionSection     // 固定(可编辑)
                 if !model.finalReportText.isEmpty {
