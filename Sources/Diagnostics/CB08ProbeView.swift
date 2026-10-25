@@ -9,11 +9,18 @@ struct CB08ProbeView: View {
         Form {
             Section("CB08 设备探测") {
                 Text(probe.device.status)
-                HStack {
-                    Button("扫描") { probe.device.scan() }
-                    Button("停止扫描") { probe.device.stopScan() }
-                    Button("刷新状态") { probe.device.refreshStatus() }
+                Button { probe.device.scan() } label: {
+                    Text("扫描").frame(maxWidth: .infinity, alignment: .leading)
                 }
+                .buttonStyle(.borderedProminent)
+                Button { probe.device.stopScan() } label: {
+                    Text("停止扫描").frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.bordered)
+                Button { probe.device.refreshStatus() } label: {
+                    Text("刷新状态").frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.bordered)
                 ForEach(probe.device.devices) { device in
                     Button("连接 \(device.name) · \(device.productType)") {
                         probe.device.connect(device)

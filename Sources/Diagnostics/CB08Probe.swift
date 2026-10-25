@@ -14,6 +14,10 @@ final class CB08Probe: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
 
     init() {
+        device.objectWillChange
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &cancellables)
+
         device.$latestPacket
             .compactMap { $0 }
             .sink { [weak self] packet in self?.decode(packet) }
