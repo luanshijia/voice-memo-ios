@@ -3,19 +3,13 @@ import SwiftUI
 /// Four pages share one root model and one dispatcher. Tab changes do no IO.
 @MainActor
 struct ContentView: View {
-    @StateObject private var model: SessionModel
-    @StateObject private var assistant: MeetingAssistant
+    @StateObject private var workspace = MeetingWorkspace()
     @Environment(\.scenePhase) private var scenePhase
-
-    init() {
-        let session = SessionModel()
-        _model = StateObject(wrappedValue: session)
-        _assistant = StateObject(wrappedValue: MeetingAssistant(
-            port: LegacySessionAdapter(model: session), changes: session.objectWillChange))
-    }
+    private var model: SessionModel { workspace.model }
+    private var assistant: MeetingAssistant { workspace.assistant }
 
     var body: some View {
-        TabView(selection: $assistant.page) {
+        TabView(selection: Binding(get: { assistant.page }, set: { assistant.page = $0 })) {
             SettingsView(model: model, worker: assistant.settings)
                 .tabItem { Label("设置", systemImage: "gearshape") }.tag(WorkspacePage.settings)
             InputView(assistant: assistant)

@@ -1,6 +1,20 @@
 import Combine
 import Foundation
 
+/// StateObject's deferred initializer constructs this graph once. Do not create
+/// SessionModel in a View initializer: SwiftUI can recreate value views freely.
+@MainActor final class MeetingWorkspace: ObservableObject {
+    let model: SessionModel
+    let assistant: MeetingAssistant
+    private var subscription: AnyCancellable?
+    init() {
+        let session = SessionModel()
+        model = session
+        assistant = MeetingAssistant(port: LegacySessionAdapter(model: session), changes: session.objectWillChange)
+        subscription = assistant.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+    }
+}
+
 /// One root dispatcher. Navigation changes never invoke an IO port.
 @MainActor final class MeetingAssistant: ObservableObject {
     @Published var page: WorkspacePage = .meeting
