@@ -34,9 +34,16 @@ struct CB08ProbeView: View {
                         Button("继续") { probe.device.resumeRecording() }
                         Button("停止") { probe.device.stopRecording() }
                     }
+                    .buttonStyle(.bordered)
+                    .controlSize(.large)
                     Button("断开") { probe.device.disconnect() }
                 }
                 Text(probe.device.eventSummary).font(.caption.monospaced())
+                if !probe.device.connectionEvents.isEmpty {
+                    Text("最近连接事件（保留，不被电量回调覆盖）").font(.caption)
+                    Text(probe.device.connectionEvents.joined(separator: "\n"))
+                        .font(.caption.monospaced()).textSelection(.enabled)
+                }
                 LabeledContent("实体键事件", value: probe.device.hardwareButtonEvents
                     .sorted { $0.key < $1.key }
                     .map { "\($0.key):\($0.value)" }.joined(separator: ", "))

@@ -16,6 +16,7 @@ final class CB08SDKBridge: NSObject, ObservableObject {
     @Published private(set) var connected = false
     @Published private(set) var status = "未连接"
     @Published private(set) var eventSummary = ""
+    @Published private(set) var connectionEvents: [String] = []
     @Published private(set) var packetCount = 0
     @Published private(set) var packetBytes = 0
     @Published private(set) var packetSizes: [Int: Int] = [:]
@@ -94,6 +95,8 @@ final class CB08SDKBridge: NSObject, ObservableObject {
         } else if cmd == "2" {
             let connectionState = integerValue(payload["connect_state"])
             eventSummary = "cmd=2, state=\(state), connect_state=\(connectionState.map { String($0) } ?? "?")"
+            connectionEvents.append(eventSummary)
+            if connectionEvents.count > 8 { connectionEvents.removeFirst() }
             if let connectionState {
                 connected = (connectionState == 1)
                 status = connected ? "已连接" : "已断开"
