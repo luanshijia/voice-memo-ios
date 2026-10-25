@@ -16,8 +16,11 @@ struct PendingRequestStore {
                              O_CREAT | O_RDWR, S_IRUSR | S_IWUSR)
         guard fd >= 0 else { throw posixError() }
         defer { Darwin.close(fd) }
-        guard Darwin.flock(fd, LOCK_EX) == 0 else { throw posixError() }
-        defer { _ = Darwin.flock(fd, LOCK_UN) }
+        // Darwin also imports a struct named flock. An explicit function type
+        // selects the POSIX function instead of the struct initializer.
+        let fileLock: (Int32, Int32) -> Int32 = Darwin.flock
+        guard fileLock(fd, LOCK_EX) == 0 else { throw posixError() }
+        defer { _ = fileLock(fd, LOCK_UN) }
         let file = root.appendingPathComponent(key + ".json")
         let exists = FileManager.default.fileExists(atPath: file.path)
         legacy?.synchronize()
