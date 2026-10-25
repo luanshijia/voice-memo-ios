@@ -2,7 +2,7 @@ import XCTest
 @testable import VoiceMemo
 
 @MainActor final class MeetingAssistantTests: XCTestCase {
-    func testDuplicateStartAndEndDoNotToggleCaptureBackOn() {
+    func testDuplicateStartAndEndDoNotToggleCaptureBackOn() async {
         let port = TestSessionPort()
         let assistant = MeetingAssistant(port: port)
         XCTAssertEqual(assistant.accept(.start), .submitted)
@@ -15,7 +15,7 @@ import XCTest
         XCTAssertFalse(port.isRecording)
     }
 
-    func testUnsupportedPauseCannotStopOrEndMeeting() {
+    func testUnsupportedPauseCannotStopOrEndMeeting() async {
         let port = TestSessionPort()
         let assistant = MeetingAssistant(port: port)
         assistant.accept(.start)
@@ -27,7 +27,7 @@ import XCTest
         XCTAssertEqual(port.ends, 0)
     }
 
-    func testInvalidConfigurationFailsBeforeAnyCaptureCommand() {
+    func testInvalidConfigurationFailsBeforeAnyCaptureCommand() async {
         let port = TestSessionPort()
         port.configuration = ConfigSnapshot(serverURL: "http://example.test", deviceID: "phone",
             userID: "user", revision: 2, hasCredential: false)
@@ -36,7 +36,7 @@ import XCTest
         XCTAssertEqual(port.starts, 0)
     }
 
-    func testLateLegacyObservationProjectsWithoutAnotherStart() {
+    func testLateLegacyObservationProjectsWithoutAnotherStart() async {
         let port = TestSessionPort()
         let assistant = MeetingAssistant(port: port, changes: port.objectWillChange)
         assistant.accept(.start)
@@ -46,7 +46,7 @@ import XCTest
         XCTAssertEqual(port.starts, 1)
     }
 
-    func testRecoveryCannotCreateMeetingWhenNoOriginalMeetingExists() {
+    func testRecoveryCannotCreateMeetingWhenNoOriginalMeetingExists() async {
         let port = TestSessionPort()
         let assistant = MeetingAssistant(port: port)
         if case .rejected = assistant.accept(.recover) {} else { XCTFail("recovery created meeting") }

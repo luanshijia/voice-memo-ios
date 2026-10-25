@@ -42,7 +42,7 @@ import XCTest
         XCTAssertEqual(port.ends, 0)
     }
 
-    func testLockedConfigurationRejectsAllEditsAndReset() {
+    func testLockedConfigurationRejectsAllEditsAndReset() async {
         let port = TestSessionPort()
         let settings = SettingsWorker(port: port)
         port.configurationLocked = true
@@ -56,7 +56,7 @@ import XCTest
         XCTAssertEqual(port.writes, 1)
     }
 
-    func testExternalSelectionIsHonestAndPreservesPhoneBinding() {
+    func testExternalSelectionIsHonestAndPreservesPhoneBinding() async {
         let port = TestSessionPort()
         let assistant = MeetingAssistant(port: port)
         assistant.selectInput(.external)
@@ -65,7 +65,7 @@ import XCTest
         XCTAssertEqual(port.starts, 0)
     }
 
-    func testConnectionProjectionCannotInventRawAudioReceipt() {
+    func testConnectionProjectionCannotInventRawAudioReceipt() async {
         let port = TestSessionPort()
         let worker = ConnectionWorker(port: port)
         port.board.received.observed = MetricValue(value: 120, unit: "秒")
