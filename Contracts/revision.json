@@ -2,11 +2,15 @@
   "sha256": {
     "Contracts/app-shared-v1.json": "080ed02b24ced0103aaf267f6ddbd5a7641f256367df03668177885b4d5b6059",
     "Contracts/artifacts-v1.json": "7d23e88ee6d19999b01d7869a218aa652e4702494965d8aa41cfd195f6697ffe",
+    "Contracts/control-v2-response-fixtures.json": "6a4dce2b409ef5ce9c9969a3017e875ef81806f70ba346cbd4b82939470246eb",
+    "Contracts/input-manifest-v1.json": "407faad663ac1a2f21951247398f2983a5281f34c516385aa25c30d6e543af7c",
     "Contracts/session-control-v1.json": "320065c6851268f507020cd2cda37e097293ae7c15005027258f127121208265",
+    "Contracts/session-control-v2.json": "19f8f051fd27576d43454ac380a63645f0023e608d21d7e307790598b98614de",
     "Contracts/wire-v2.json": "f332a3d64aca2fea25fc63373267ce6e02adc101da91b95939fc7a4174bab009",
     "Contracts/workflow-v1.json": "40165471b33dc528793ebcd52cf7e5dc2df43480d7d8bb0ac8ce1b9d16966371",
     "Shared/AppShared.generated.swift": "c1fb88cc75467f928f6a02577522a2f23674b2acf559ddc636512c5ef7b99013",
     "Shared/SessionControl.generated.swift": "066f5f11b2c95a3e7e8e4e9069f1d7503b1c0be872018d97329502ef69910cda",
+    "Shared/SessionControlV2.generated.swift": "33fb06e0bfaebcd92ac1c1378064623bdacd81891f6a6e1163f7441e734528d3",
     "Sources/WireContract.generated.swift": "9cae10829a0b99f300ef3a6367b8aac8b12678b2372a29e9921628cf22bc66dc",
     "Tests/ControlResponseFixtures.json": "a7bfce8f20443bcfa87f5a4ac55cfc7aa6446db6d3dbb5f07d7ceeccbc146bda"
   },

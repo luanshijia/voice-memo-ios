@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "required": [
+    "meeting_id",
+    "segments"
+  ],
+  "segment_required": [
+    "segment_id",
+    "channel",
+    "source_tag",
+    "generation",
+    "started_at",
+    "closed_at",
+    "reason"
+  ],
+  "time_bases": [
+    "effective_audio_seconds",
+    "meeting_elapsed_seconds"
+  ],
+  "pause_policy": "No synthetic silence is inserted for v2 paused gaps; wall clock retained per segment; original files immutable."
+}

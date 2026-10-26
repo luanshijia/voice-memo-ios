@@ -37,8 +37,9 @@ import Foundation
         input = meeting.input
         connection = meeting.transport
         self.commands = commands ?? MeetingCommands(
-            start: { meeting.startCapture() }, stop: { meeting.stopCapture() },
-            end: { meeting.terminateMeeting() })
+            start: { meeting.startCapture() },
+            end: { meeting.terminateMeeting() },
+            pause: { meeting.pauseCapture() }, resume: { meeting.resumeCapture() })
         subscription = meeting.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
     }
 
@@ -51,7 +52,8 @@ import Foundation
         let result: CaptureActionResult
         switch action {
         case .start, .recover:
-            if meeting.terminating { result = .rejected("会议正在结束") }
+            if meeting.isPaused { result = .rejected("会议已暂停，请使用继续") }
+            else if meeting.terminating { result = .rejected("会议正在结束") }
             else if meeting.wantsCapture && action == .start { result = .rejected("已有采集意图，请在连接页恢复") }
             else if meeting.isRecording { result = .rejected("采集已经开始或正在准备") }
             else if action == .recover && !meeting.projection.canReconnect(
@@ -62,14 +64,19 @@ import Foundation
         case .end, .cancelStart:
             if meeting.terminating { result = .rejected("结束动作正在执行") }
             else if meeting.isRecording || meeting.wantsCapture {
-                // S2 preserves the existing phone-channel stop. Full meeting
-                // pause/end semantics are implemented by S4, never simulated here.
-                commands.stop(); result = .submitted
+                commands.end(); result = .submitted
             } else if meeting.presentation.terminateAction.enabled {
                 commands.end(); result = .submitted
             } else { result = .rejected("当前没有可停止的手机采集") }
-        case .pause, .resume:
-            result = .rejected("暂停和继续尚待会控 v2 接入")
+        case .pause:
+            if meeting.isRecording, !meeting.terminating, let pause = commands.pause {
+                pause(); result = .submitted
+            } else { result = .rejected("当前无法暂停采集") }
+        case .resume:
+            if meeting.isPaused, !meeting.isRecording, !meeting.actionPending, meeting.capture?.observedState == "paused",
+               let resume = commands.resume {
+                resume(); result = .submitted
+            } else { result = .rejected("请等待暂停确认后再继续") }
         }
         if case .rejected(let reason) = result { message = reason } else { message = nil }
         return result

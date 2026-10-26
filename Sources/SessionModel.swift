@@ -31,6 +31,8 @@ struct TranscriptPartial: Identifiable {
     var lines: [TranscriptLine] { meeting.lines }
     var partials: [TranscriptPartial] { meeting.partials }
     var transcriptGapText: String { meeting.transcriptGapText }
+    var captureStatusText: String { meeting.captureStatusText }
+    var isPaused: Bool { meeting.isPaused }
     var isRecording: Bool { meeting.isRecording }
     var intent: LinkDesired { meeting.intent }
     var meetingContext: MeetingContext { meeting.meetingContext }

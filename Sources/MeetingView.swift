@@ -9,7 +9,7 @@ struct MeetingView: View {
         NavigationStack {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
-                    Label(model.meetingContext.meetingAlias, systemImage: "waveform")
+                    Label(model.captureStatusText, systemImage: "waveform")
                     Spacer()
                     Button("手机 · 面对面") { assistant.page = .input }
                         .font(.subheadline)
@@ -37,14 +37,23 @@ struct MeetingView: View {
             }
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 VStack(spacing: 6) {
-                    Text("候选阶段：手机开始/停止沿用原链，暂停与整会结束待接入。")
-                        .font(.caption).foregroundStyle(.secondary)
                     HStack {
-                        if model.isRecording || model.intent == .wanted {
-                            Button("停止手机采集", role: .destructive) { confirmStop = true }
-                                .buttonStyle(.borderedProminent)
+                        if model.isRecording || model.intent == .wanted || assistant.meeting.actionPending {
+                            if model.isPaused {
+                                Button("继续采集") { assistant.accept(.resume) }
+                                    .disabled(assistant.meeting.actionPending || assistant.meeting.capture?.observedState != "paused")
+                                    .buttonStyle(.borderedProminent)
+                            } else {
+                                Button("暂停采集") { assistant.accept(.pause) }
+                                    .disabled(!model.isRecording)
+                                    .buttonStyle(.borderedProminent)
+                            }
+                            Button("结束会议", role: .destructive) { confirmStop = true }
+                                .disabled(assistant.meeting.terminating)
+                                .buttonStyle(.bordered)
                         } else {
                             Button("开始手机采集") { assistant.accept(.start) }
+                                .disabled(assistant.meeting.actionPending || assistant.meeting.terminating)
                                 .buttonStyle(.borderedProminent)
                         }
                         Button("连接详情") { assistant.page = .connection }
@@ -53,9 +62,9 @@ struct MeetingView: View {
                     .controlSize(.large)
                 }.padding().frame(maxWidth: .infinity).background(.bar)
             }
-            .confirmationDialog("停止手机采集并保存已有录音？", isPresented: $confirmStop,
+            .confirmationDialog("结束本次会议并保存已有录音？", isPresented: $confirmStop,
                                 titleVisibility: .visible) {
-                Button("停止手机采集", role: .destructive) { assistant.accept(.end) }
+                Button("结束会议", role: .destructive) { assistant.accept(.end) }
                 Button("取消", role: .cancel) {}
             }
         }

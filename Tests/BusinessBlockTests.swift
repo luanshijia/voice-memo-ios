@@ -11,14 +11,12 @@ import XCTest
     let connection: ConnectionWorker
     let meeting: MeetingWorker
     var starts = 0
-    var stops = 0
     var ends = 0
     var checks = 0
     var forcedLock = false
     lazy var assistant = MeetingAssistant(meeting: meeting, commands: MeetingCommands(
         start: { [unowned self] in starts += 1; meeting.capturePreparing() },
-        stop: { [unowned self] in stops += 1; meeting.captureStopped() },
-        end: { [unowned self] in ends += 1 }))
+        end: { [unowned self] in ends += 1; meeting.captureStopped() }))
 
     init() {
         suite = "VoiceMemo.BusinessTests." + UUID().uuidString
@@ -50,7 +48,6 @@ import XCTest
         await f.assistant.checkConnection()
         XCTAssertEqual(f.checks, 1)
         XCTAssertEqual(f.starts, 0)
-        XCTAssertEqual(f.stops, 0)
         XCTAssertEqual(f.ends, 0)
     }
     func testLockedConfigurationRejectsAllEditsAndReset() async {

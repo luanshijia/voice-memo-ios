@@ -21,6 +21,23 @@ final class MeetingWorker: ObservableObject {
     /// 本场次标识(契约 §五):开始录音时生成、停止时清空、断线重连沿用。
     /// 它与服务端台账编号是两件事,也替代本地 `transport.generation` 用于丢弃上一场的迟到消息。
     @Published private(set) var sessionID = ""
+    @Published private(set) var capture: CaptureView?
+    @Published private(set) var actionPending = false
+    @Published private(set) var localCaptureDesired: String?
+    private var completedCaptureSeconds = 0.0
+    var isPaused: Bool { (localCaptureDesired ?? capture?.desiredState) == "paused" }
+    var captureStatusText: String {
+        let desired = localCaptureDesired ?? capture?.desiredState
+        if !actionPending && capture != nil && !meetingContext.isFresh() { return "会议状态待对账" }
+        if actionPending || (capture?.observedState == "pending" && desired != "active") {
+            return desired == "paused" ? "暂停待确认" : desired == "ended" ? "结束待确认" : "开始待确认"
+        }
+        if capture != nil && !meetingContext.isFresh() { return "会议状态待对账" }
+        if desired == "paused" { return "已暂停" }
+        if desired == "ended" { return "已结束" }
+        if isRecording { return input.isCapturing ? "采集中" : "正在准备采集" }
+        return desired == "active" ? "采集中断 · 可恢复" : "无会议"
+    }
     @Published private(set) var recordedSeconds: Double = 0     // 本地推流时长
     @Published private(set) var serverSeconds: Double = 0       // 家里已识别到的音频秒数(agent 回传,按来源分开记)
 
@@ -114,7 +131,6 @@ final class MeetingWorker: ObservableObject {
 
     private var timer: Timer?
     private var timerStartedAt: Date?
-    private var serverGeneration = 0
 
     init(settings: SettingsWorker, input: InputWorker, transport: ConnectionWorker,
          startObserving: Bool = true) {
@@ -223,6 +239,8 @@ final class MeetingWorker: ObservableObject {
         syncConfigStatus()
         syncProtocolStatus()
         if startObserving {
+            if let saved = MeetingClient.savedCapture() { applyCapture(saved, confirmed: false) }
+            actionPending = MeetingClient.hasPendingCapture()
             loadSavedReport()
             Task { [weak self] in await self?.observeDesktop() }
         }
@@ -244,35 +262,44 @@ final class MeetingWorker: ObservableObject {
 
     private func observeDesktop() async {
         while !Task.isCancelled {
-            // Retry a stop queued by an older build before starting new work.
             try? await MeetingClient.flushPendingBroadcastStop()
             try? await MeetingClient.flushPendingMicStop()
             do {
-                let pollGeneration = transport.generation
                 let pollConfig = cfg
-                let state = try await MeetingClient.deviceView(
-                    serverURL: pollConfig.url, deviceID: pollConfig.device)
-                guard pollConfig.url == cfg.url, pollConfig.device == cfg.device,
-                      pollGeneration == transport.generation else { continue }
-                // 管家助手:总管那边这场会现在算什么状态。录着的时候也要查 ——
-                // 底栏的会议状态与两个对接按钮都靠它,不查就永远显示"无会议"。
-                meetingContext = MeetingContext(view: state)
-                // Reports are independent of the current recording. The control
-                // contract includes earlier unacknowledged reports while a newer
-                // meeting is active, so always deliver them after the device view.
+                if let reconciled = try await transport.flushCapture() { applyCapture(reconciled) }
+                let state = try await transport.captureView(config: pollConfig)
+                guard pollConfig.url == cfg.url, pollConfig.device == cfg.device else { continue }
+                if let view = state.meeting { applyCapture(view, pendingReports: state.pendingReports.count) }
+                actionPending = MeetingClient.hasPendingCapture()
+                if !actionPending { localCaptureDesired = nil }
                 if artifactDeliveryTask == nil, !state.pendingReports.isEmpty {
-                    let deliveryConfig = cfg
                     artifactDeliveryTask = Task { [weak self] in
                         guard let self else { return }
                         defer { self.artifactDeliveryTask = nil }
-                        await self.deliverPendingReports(state.pendingReports, config: deliveryConfig)
+                        await self.deliverPendingReports(state.pendingReports, config: pollConfig)
                     }
                 }
             } catch {
-                // Keep the last known meeting visible during a temporary network loss.
+                // A network failure cannot confirm pause or erase a durable intent.
             }
             try? await Task.sleep(nanoseconds: 5_000_000_000)
         }
+    }
+
+    func applyCapture(_ view: CaptureView, pendingReports: Int = 0, confirmed: Bool = true) {
+        if let current = capture {
+            if current.meetingID == view.meetingID && (current.stateRevision > view.stateRevision ||
+                (current.stateRevision == view.stateRevision && (current.observationRevision ?? 0) > (view.observationRevision ?? 0))) { return }
+            if current.meetingID != view.meetingID && current.createdAt > view.createdAt { return }
+        }
+        capture = view
+        sessionID = view.meetingID
+        meetingContext = MeetingContext(capture: view, pendingReports: pendingReports,
+                                        observedAt: confirmed ? Date() : .distantPast)
+        if !MeetingClient.hasPendingCapture() { localCaptureDesired = nil }
+        let desired = localCaptureDesired ?? view.desiredState
+        intent = desired == "ended" ? .notWanted : .wanted
+        if desired != "active" { isRecording = false }
     }
 
     private func deliverPendingReports(_ pendingReports: [DeviceMeetingView.PendingReport],
@@ -371,15 +398,12 @@ final class MeetingWorker: ObservableObject {
 
     func startCapture() {
         guard !isRecording, !terminating else { return }
-        start()
-    }
-    func stopCapture() {
-        guard isRecording || intent == .wanted else { return }
-        stop()
+        beginCapture(resuming: false)
     }
     /// Explicit local observations preserve user intent across passive disconnects.
     func capturePreparing() { isRecording = true; intent = .wanted }
     func captureInterrupted() {
+        completedCaptureSeconds = recordedSeconds
         stopTimer()
         isRecording = false
         input.interrupted()
@@ -388,89 +412,38 @@ final class MeetingWorker: ObservableObject {
     }
     func captureStopped() { isRecording = false; intent = .notWanted }
 
-    /// 「主动终止」:结束这场会,并清掉本机这一轮的会议身份。
-    ///
-    /// 语义(用户 2026-10-24 定,固定不变):**不想要这个 room 号了、会议清盘结束,
-    /// 但录音和后续纪要照常要**。所以对电脑端来说这就是一次正常的用户停止
-    /// (`finishing_reason=user_stop`)——它照常核验、封场、出纪要;本机清号,
-    /// 下一次点顶部「开启」不带号,电脑端自会新建一场(新 UUID / 新 room)。
-    ///
-    /// 为什么必须先查电脑端:用户可能刚在控制中心停过录屏,本地缓存不是权威。
-    /// 为什么要替系统声补一次 stop:扩展退出后没人给它发停止,电脑端会一直认为
-    /// 那一路在采;少停一路,会议就进不了收尾,下一次开启又会被并回旧会。
-    func terminateMeeting() {
-        guard !terminating else { return }
-        terminating = true
-        transport.invalidate()
-        let generation = transport.generation
-        let terminationConfig = cfg
-        let operation = SessionOperation(generation: generation, config: terminationConfig)
-        Task { @MainActor in
-            defer { terminating = false }
-            do {
-                let view = try await MeetingClient.deviceView(serverURL: terminationConfig.url,
-                                                               deviceID: terminationConfig.device)
-                guard operation.isCurrent(generation: transport.generation, config: cfg) else { return }
-                let fresh = MeetingContext(view: view)
-                meetingContext = fresh
-                guard let meetingID = fresh.meetingID, fresh.hasOpenMeeting else {
-                    note("没有需要终止的会议")
-                    return
-                }
-                if fresh.isChannelOpen(fresh.systemAudio) {
-                    // Retire a channel left open by an older ReplayKit build.
-                    try await MeetingClient.stopChannel(
-                        serverURL: terminationConfig.url, meetingID: meetingID, deviceID: terminationConfig.device,
-                        channel: SessionControlContract.systemAudio,
-                        generation: fresh.systemAudioGeneration)
-                    guard operation.isCurrent(generation: transport.generation, config: cfg) else { return }
-                }
-                if fresh.isChannelOpen(fresh.mic) {
-                    try await MeetingClient.stopChannel(
-                        serverURL: terminationConfig.url, meetingID: meetingID, deviceID: terminationConfig.device,
-                        channel: SessionControlContract.mic,
-                        generation: fresh.micGeneration)
-                    guard operation.isCurrent(generation: transport.generation, config: cfg) else { return }
-                }
-                // 两路都已在电脑端停干净:先清本机会议号,`stop()` 见号为空就只做
-                // 断连接与清屏,不会再去打扰电脑端(否则会拿旧代次重发一次多余请求)。
-                sessionID = ""
-                stop()
-                resetCurrentMeetingData()
-                syncBoard()
-                syncProtocolStatus()
-                note("已主动终止:旧会议交给电脑端照常收尾出纪要;下次「开启」会开新会")
-            } catch {
-                // 失败即停在本机:两路没停干净就清号,下次开启会被并回旧会,
-                // 界面会显示"开了新会"而实际没有——宁可报错让用户重试。
-                // 断网时按钮本来就是亮的(断联正是它的使用场景),此刻点它拿到
-                // 的多半是连接错误:要说清是"连不上",不是"停不掉"。
-                let offline = (error as NSError).domain == NSURLErrorDomain
-                note(offline ? "电脑端暂时连不上,等网络恢复再点主动终止"
-                             : "主动终止失败:\(error.localizedDescription)")
-            }
-        }
-    }
+    func pauseCapture() { controlCapture("pause") }
+    func resumeCapture() { beginCapture(resuming: true) }
+    func terminateMeeting() { controlCapture("end") }
 
-    /// 取麦克风授权。带号恢复被电脑端明确拒绝(旧会已封场、或号已不存在)时,
-    /// 丢掉那条待确认申请,再以不带号重发一次。
-    /// 为什么必须清 pending:同一个通道会复用原请求号与原请求体(MeetingClient.pendingStart),
-    /// 不清就会把同一个带号请求原样重放,永远拿不到新会。
-    private func requestMicToken(config: LiveKitConfig, operation: SessionOperation, recoveryMeetingID: String?) async throws -> MeetingGrant {
-        do {
-            return try await config.requestToken(identity: config.identity,
-                                              channel: SessionControlContract.mic,
-                                              meetingID: recoveryMeetingID)
-        } catch {
-            guard operation.isCurrent(generation: transport.generation, config: cfg) else { throw CancellationError() }
-            guard recoveryMeetingID != nil,
-                  MeetingClient.isClosedMeetingRefusal(error) else { throw error }
-            try MeetingClient.discardPendingStart(channel: SessionControlContract.mic,
-                                              deviceID: config.device)
-            note("原会议已结束,改为新开一场")
-            return try await config.requestToken(identity: config.identity,
-                                              channel: SessionControlContract.mic,
-                                              meetingID: nil)
+    private func controlCapture(_ action: String) {
+        let config = cfg
+        do { try transport.queueCaptureAction(config: config, view: capture, action: action) }
+        catch { note("动作未保存：\(error.localizedDescription)"); return }
+        localCaptureDesired = action == "pause" ? "paused" : "ended"
+        actionPending = true
+        let generation = transport.invalidate()
+        completedCaptureSeconds = recordedSeconds
+        stopTimer()
+        if action == "end" { captureStopped() }
+        else { isRecording = false; intent = .wanted }
+        terminating = action == "end"
+        transport.enqueueDisconnect(beforeDisconnect: { [input] in await input.stop() }) {}
+        let disconnect = transport.pendingDisconnect
+        Task { [weak self] in
+            guard let self else { return }
+            defer { if generation == self.transport.generation { self.terminating = false } }
+            await disconnect?.value
+            do {
+                if let result = try await self.transport.flushCapture() { self.applyCapture(result) }
+                if let view = self.capture {
+                    try await self.transport.observeCapture(config: config, view: view, observed: "stopped")
+                    if let fresh = try await self.transport.captureView(config: config).meeting { self.applyCapture(fresh) }
+                }
+                guard generation == self.transport.generation else { return }
+                self.actionPending = MeetingClient.hasPendingCapture()
+                if !self.actionPending { self.localCaptureDesired = nil }
+            } catch { self.note("本地已停止，电脑动作待确认：\(error.localizedDescription)") }
         }
     }
 
@@ -495,6 +468,7 @@ final class MeetingWorker: ObservableObject {
         transcriptGapText = ""
         lastCatchUpAt = .distantPast
         recordedSeconds = 0
+        completedCaptureSeconds = 0
         serverSeconds = 0
         serverBySource = [:]
         progressSeenAt = [:]
@@ -507,7 +481,6 @@ final class MeetingWorker: ObservableObject {
         sumState = "等待提要…"
         sumCode = "wait_period"
         sessionID = ""
-        serverGeneration = 0
         transport.resetEndReason()
         noteSignatures = []
 
@@ -523,134 +496,59 @@ final class MeetingWorker: ObservableObject {
                                reason: nil, lastSeen: now, generation: transport.generation)
     }
 
-    private func start() {
+    private func beginCapture(resuming: Bool) {
         guard !terminating else { return }
-        let recoveryMeetingID = meetingContext.isFresh() && meetingContext.canStartNew()
-            ? nil : (sessionID.isEmpty ? nil : sessionID)
-        transport.invalidate()
-        let generation = transport.generation
-        resetCurrentMeetingData()
+        let config = cfg
+        let previousID = capture?.meetingID
+        do {
+            if resuming {
+                guard let view = capture, view.desiredState == "paused" else { return }
+                try transport.queueCaptureAction(config: config, view: view, action: "resume")
+            } else {
+                let recoveryID = capture.flatMap { $0.canRecover ? $0.meetingID : nil }
+                try transport.queueCaptureStart(config: config, input: input.binding, meetingID: recoveryID)
+            }
+        } catch { note("开始意图未保存：\(error.localizedDescription)"); return }
+        let generation = transport.invalidate()
+        let operation = SessionOperation(generation: generation, config: config)
+        actionPending = true
+        localCaptureDesired = "active"
         capturePreparing()
-        syncBoard()
-        syncProtocolStatus()
-        let cfg = self.cfg
-        let operation = SessionOperation(generation: generation, config: cfg)
         transport.beginConnection { [self] in
-            var grantedMeetingID: String?
-            var grantedServerGeneration = 0
             do {
                 try await MeetingClient.flushPendingMicStop()
-                guard operation.isCurrent(generation: self.transport.generation, config: self.cfg) else { return }
-                if recoveryMeetingID == nil, self.meetingContext.isFresh(), self.meetingContext.canStartNew(),
-                   let closedID = self.meetingContext.meetingID {
-                    try MeetingClient.retireClosedStart(channel: SessionControlContract.mic,
-                                                        deviceID: cfg.device, meetingID: closedID)
+                try await MeetingClient.flushPendingBroadcastStop()
+                guard let grant = try await transport.flushCapture() else { throw CancellationError() }
+                if previousID != grant.meetingID { resetCurrentMeetingData() }
+                applyCapture(grant)
+                guard operation.isCurrent(generation: transport.generation, config: cfg),
+                      grant.desiredState == "active", let media = grant.media else { return }
+                let live = try await transport.connect(url: media.url, token: media.token, identity: media.identity)
+                guard operation.isCurrent(generation: transport.generation, config: cfg) else {
+                    await transport.disconnect(live); return
                 }
-                let card = try await self.requestMicToken(config: cfg, operation: operation, recoveryMeetingID: recoveryMeetingID)
-                grantedMeetingID = card.meetingID
-                grantedServerGeneration = card.generation
-                guard operation.isCurrent(generation: self.transport.generation, config: self.cfg) else { throw CancellationError() }
-                let live = try await transport.connect(url: card.url, token: card.token, identity: cfg.identity)
                 input.bind(live)
                 do {
-                    try await input.start(context: ExecutionContext(
-                        configurationRevision: settings.snapshot.revision, operationID: UUID(),
-                        meetingID: card.meetingID, channel: SessionControlContract.mic,
-                        generation: card.generation, segmentID: nil))
-                } catch {
-                    await input.stop()
-                    await transport.disconnect(live)
-                    throw error
+                    try await input.start(context: ExecutionContext(configurationRevision: settings.snapshot.revision,
+                        operationID: UUID(), meetingID: grant.meetingID, channel: grant.channel,
+                        generation: grant.generation, segmentID: grant.segmentID))
+                } catch { await input.stop(); await transport.disconnect(live); throw error }
+                guard operation.isCurrent(generation: transport.generation, config: cfg) else {
+                    await input.stop(); await transport.disconnect(live); return
                 }
-                guard operation.isCurrent(generation: self.transport.generation, config: self.cfg) else {   // 这一轮已被停止/重开取代
-                    await input.stop()
-                    await self.transport.disconnect(live)                   // 只断自己这条,不碰新会话
-                    do {
-                        try MeetingClient.queueMicStop(serverURL: cfg.url,
-                                                              meetingID: card.meetingID,
-                                                              deviceID: cfg.device,
-                                                              generation: card.generation)
-                        try await MeetingClient.flushPendingMicStop()
-                    } catch {
-                        self.note("迟到的会议授权停止待同步: \(error.localizedDescription)")
-                    }
-                    return
-                }
-                self.sessionID = card.meetingID
-                self.serverGeneration = card.generation
-                self.transport.connected(live)
-                do {
-                    try await MeetingClient.reportObservation(
-                        serverURL: cfg.url, meetingID: card.meetingID,
-                        deviceID: cfg.device, channel: SessionControlContract.mic,
-                        generation: card.generation, observed: "publishing", requestID: card.requestID)
-                } catch {
-                    self.note("手机采集状态待同步: \(error.localizedDescription)")
-                }
-                guard operation.isCurrent(generation: self.transport.generation, config: self.cfg) else { return }
-                await transport.send(self.summodePayload(self.sumMode))   // 让家里跟上本机档位
-                guard operation.isCurrent(generation: self.transport.generation, config: self.cfg) else { return }
-                self.startTimer()
-                self.syncBoard()
+                transport.connected(live)
+                try await transport.observeCapture(config: config, view: grant, observed: "publishing")
+                guard operation.isCurrent(generation: transport.generation, config: cfg) else { return }
+                actionPending = MeetingClient.hasPendingCapture()
+                localCaptureDesired = nil
+                await transport.send(summodePayload(sumMode))
+                startTimer()
+                syncBoard()
             } catch {
-                // VoiceRoom.connect 失败时已自行断开这条连接,这里只回写 UI
-                if let grantedMeetingID {
-                    do {
-                        try MeetingClient.queueMicStop(serverURL: cfg.url,
-                                                              meetingID: grantedMeetingID,
-                                                              deviceID: cfg.device,
-                                                              generation: grantedServerGeneration)
-                        try await MeetingClient.flushPendingMicStop()
-                    } catch {
-                        self.note("连接失败后的会议停止待同步: \(error.localizedDescription)")
-                    }
-                }
-                guard operation.isCurrent(generation: self.transport.generation, config: self.cfg) else { return }
-                self.note("连接异常:\(error.localizedDescription)")
-                self.note("连接失败:\(error.localizedDescription)")
-                self.isRecording = false
-                self.syncBoard()
-            }
-        }
-    }
-
-    private func stop() {
-        let stoppedMeetingID = sessionID
-        let stopConfig = cfg
-        let stoppedGeneration = serverGeneration
-        if !stoppedMeetingID.isEmpty {
-            do {
-                try MeetingClient.queueMicStop(serverURL: stopConfig.url,
-                                                      meetingID: stoppedMeetingID,
-                                                      deviceID: stopConfig.device,
-                                                      generation: stoppedGeneration)
-            } catch {
-                note("停止意图保存失败: \(error.localizedDescription)")
-            }
-        }
-        transport.invalidate()     // 在飞的连接尝试作废,不许它稍后回写状态
-        stopTimer()
-        captureStopped()             // 只有用户按停止才清期望
-        sessionID = ""                  // 契约:停止即换场,下一场重新生成
-        serverGeneration = 0
-        partials = []                 // 在飞的部分字幕属于上一场,停止后不该再挂在屏幕上
-        syncBoard()
-        note("用户停止:推流 \(Int(recordedSeconds))s / 家里识别 \(Int(serverSeconds))s")
-        // 只断开"我这一代"的那条连接:旧任务迟到时不会再拿新会话开刀
-        transport.enqueueDisconnect(beforeDisconnect: { [input] in await input.stop() }) { [weak self] in
-            // 先结束媒体传输，再让电脑端封住该通道；否则 stop 请求可能先到，截掉尾部音频。
-            if !stoppedMeetingID.isEmpty {
-                do {
-                    try await MeetingClient.flushPendingMicStop()
-                    // 契约里 phone_observed 有 stopped:只发 publishing 的话总管永远等不到
-                    // "这台手机说它不采了",只能靠停止请求猜。这里补上,失败只记一行。
-                    try await MeetingClient.reportObservation(
-                        serverURL: stopConfig.url, meetingID: stoppedMeetingID,
-                        deviceID: stopConfig.device, channel: SessionControlContract.mic,
-                        generation: stoppedGeneration, observed: "stopped")
-                } catch {
-                    self?.note("电脑端会议停止状态同步失败: \(error.localizedDescription)")
-                }
+                guard operation.isCurrent(generation: transport.generation, config: cfg) else { return }
+                isRecording = false
+                actionPending = MeetingClient.hasPendingCapture()
+                note("采集未完成，请在连接页对账：\(error.localizedDescription)")
             }
         }
     }
@@ -696,13 +594,13 @@ final class MeetingWorker: ObservableObject {
 
     private func startTimer() {
         stopTimer()
-        recordedSeconds = 0
+        recordedSeconds = completedCaptureSeconds
         timerStartedAt = Date()
         // .common 模式:滚动字幕时定时器不停;publish 的秒数按真实时间差算,漏掉的 tick 自动补回来
         let t = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self, let start = self.timerStartedAt else { return }
-                self.recordedSeconds = Date().timeIntervalSince(start)
+                self.recordedSeconds = self.completedCaptureSeconds + Date().timeIntervalSince(start)
                 self.meetingFacts.recorded = Status(desired: LinkDesired.wanted,
                                              observed: MetricValue(value: self.recordedSeconds, unit: "秒"),
                                              reason: nil, lastSeen: Date(),

@@ -16,7 +16,6 @@ import XCTest
         }
         XCTAssertTrue(f.meeting.isRecording)
         XCTAssertEqual(f.starts, 1)
-        XCTAssertEqual(f.stops, 0)
         XCTAssertEqual(f.checks, 0)
         XCTAssertEqual(f.settings.snapshot.revision, 0)
     }

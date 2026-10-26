@@ -1,0 +1,334 @@
+{
+  "schema_version": 2,
+  "paths": {
+    "start": "/v2/meetings/start",
+    "actions": "/v2/meetings/{meeting_id}/actions",
+    "observe": "/v2/meetings/{meeting_id}/observe",
+    "device_view": "/v2/devices/{device_id}/meeting"
+  },
+  "requests": {
+    "start": {
+      "kind": "object",
+      "fields": [
+        {
+          "name": "request_id",
+          "kind": "string",
+          "format": "uuid"
+        },
+        {
+          "name": "device_id",
+          "kind": "string",
+          "pattern": "^[A-Za-z0-9._-]{1,64}$"
+        },
+        {
+          "name": "user_id",
+          "kind": "string",
+          "pattern": "^[A-Za-z0-9._-]{1,64}$"
+        },
+        {
+          "name": "config_revision",
+          "kind": "integer",
+          "minimum": 0
+        },
+        {
+          "name": "input",
+          "kind": "object",
+          "fields": [
+            {
+              "name": "channel",
+              "kind": "string",
+              "enum": [
+                "mic",
+                "external_audio"
+              ]
+            },
+            {
+              "name": "input_ref",
+              "kind": "string",
+              "nonempty": true
+            }
+          ]
+        },
+        {
+          "name": "source_tag",
+          "kind": "string",
+          "enum": [
+            "face2face",
+            "call"
+          ]
+        },
+        {
+          "name": "resume_meeting_id",
+          "kind": "string",
+          "format": "uuid",
+          "optional": true
+        }
+      ]
+    },
+    "action": {
+      "kind": "object",
+      "fields": [
+        {
+          "name": "request_id",
+          "kind": "string",
+          "format": "uuid"
+        },
+        {
+          "name": "device_id",
+          "kind": "string",
+          "pattern": "^[A-Za-z0-9._-]{1,64}$"
+        },
+        {
+          "name": "expected_revision",
+          "kind": "integer",
+          "minimum": 1
+        },
+        {
+          "name": "action",
+          "kind": "string",
+          "enum": [
+            "pause",
+            "resume",
+            "end",
+            "select_input"
+          ]
+        },
+        {
+          "name": "generation",
+          "kind": "integer",
+          "minimum": 1
+        },
+        {
+          "name": "segment_id",
+          "kind": "string",
+          "format": "uuid",
+          "optional": true
+        },
+        {
+          "name": "input",
+          "kind": "object",
+          "fields": [
+            {
+              "name": "channel",
+              "kind": "string",
+              "enum": [
+                "mic",
+                "external_audio"
+              ]
+            },
+            {
+              "name": "input_ref",
+              "kind": "string",
+              "nonempty": true
+            }
+          ],
+          "optional": true
+        },
+        {
+          "name": "source_tag",
+          "kind": "string",
+          "enum": [
+            "face2face",
+            "call"
+          ],
+          "optional": true
+        }
+      ]
+    },
+    "observe": {
+      "kind": "object",
+      "fields": [
+        {
+          "name": "device_id",
+          "kind": "string",
+          "pattern": "^[A-Za-z0-9._-]{1,64}$"
+        },
+        {
+          "name": "channel",
+          "kind": "string",
+          "enum": [
+            "mic",
+            "external_audio"
+          ]
+        },
+        {
+          "name": "generation",
+          "kind": "integer",
+          "minimum": 1
+        },
+        {
+          "name": "segment_id",
+          "kind": "string",
+          "format": "uuid"
+        },
+        {
+          "name": "observed",
+          "kind": "string",
+          "enum": [
+            "publishing",
+            "stopped",
+            "unknown"
+          ]
+        }
+      ]
+    }
+  },
+  "response_schemas": {
+    "capture": {
+      "kind": "object",
+      "fields": [
+        {
+          "name": "meeting_id",
+          "kind": "string",
+          "format": "uuid"
+        },
+        {
+          "name": "protocol_version",
+          "kind": "integer",
+          "minimum": 2,
+          "maximum": 2
+        },
+        {
+          "name": "status",
+          "kind": "string",
+          "nonempty": true
+        },
+        {
+          "name": "state_revision",
+          "kind": "integer",
+          "minimum": 1
+        },
+        {
+          "name": "desired_state",
+          "kind": "string",
+          "enum": [
+            "active",
+            "paused",
+            "ended"
+          ]
+        },
+        {
+          "name": "observed_state",
+          "kind": "string",
+          "enum": [
+            "active",
+            "paused",
+            "stopped",
+            "pending",
+            "unknown"
+          ]
+        },
+        {
+          "name": "channel",
+          "kind": "string",
+          "enum": [
+            "mic",
+            "external_audio"
+          ]
+        },
+        {
+          "name": "generation",
+          "kind": "integer",
+          "minimum": 1
+        },
+        {
+          "name": "segment_id",
+          "kind": "string",
+          "format": "uuid"
+        },
+        {
+          "name": "source_tag",
+          "kind": "string",
+          "enum": [
+            "face2face",
+            "call"
+          ]
+        },
+        {
+          "name": "input",
+          "kind": "object",
+          "fields": [
+            {
+              "name": "channel",
+              "kind": "string",
+              "enum": [
+                "mic",
+                "external_audio"
+              ]
+            },
+            {
+              "name": "input_ref",
+              "kind": "string",
+              "nonempty": true
+            }
+          ]
+        },
+        {
+          "name": "room",
+          "kind": "string",
+          "nonempty": true
+        },
+        {
+          "name": "created_at",
+          "kind": "string",
+          "format": "instant"
+        },
+        {
+          "name": "identity",
+          "kind": "string",
+          "nonempty": true
+        },
+        {
+          "name": "media",
+          "kind": "object",
+          "optional": true,
+          "fields": [
+            {
+              "name": "url",
+              "kind": "string",
+              "nonempty": true
+            },
+            {
+              "name": "token",
+              "kind": "string",
+              "nonempty": true
+            },
+            {
+              "name": "identity",
+              "kind": "string",
+              "nonempty": true
+            }
+          ]
+        },
+        {
+          "name": "observation_revision",
+          "kind": "integer",
+          "minimum": 1,
+          "optional": true
+        }
+      ]
+    }
+  },
+  "revision_semantics": {
+    "config_revision": "device-local settings binding",
+    "state_revision": "meeting capture revision; observations do not advance the action revision",
+    "legacy_state_revision": "v1 remains coordinator-global"
+  },
+  "errors": [
+    "invalid_request",
+    "request_id_conflict",
+    "protocol_version_required",
+    "stale_capture_revision",
+    "stale_segment",
+    "capture_paused",
+    "capture_ended",
+    "segment_not_closed",
+    "input_switch_requires_pause",
+    "external_unavailable"
+  ],
+  "recovery_eligible_meeting_states": [
+    "preparing",
+    "active",
+    "interrupted_pending"
+  ]
+}

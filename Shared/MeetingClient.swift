@@ -595,3 +595,209 @@ enum MeetingClient {
                        userInfo: userInfo)
     }
 }
+
+
+/// V2 authoritative capture projection. A media grant is optional on observations/actions.
+struct CaptureView: Codable, Equatable {
+    struct Binding: Codable, Equatable {
+        let channel: String
+        let inputRef: String
+        enum CodingKeys: String, CodingKey { case channel; case inputRef = "input_ref" }
+    }
+    struct Media: Codable, Equatable { let url: String; let token: String; let identity: String }
+    let meetingID: String
+    let protocolVersion: Int
+    let observationRevision: Int?
+    let status: String
+    let stateRevision: Int
+    let desiredState: String
+    let observedState: String
+    let channel: String
+    let generation: Int
+    let segmentID: String
+    let sourceTag: String
+    let input: Binding
+    let room: String
+    let createdAt: String
+    let identity: String
+    let media: Media?
+    var canRecover: Bool { desiredState == "active" && SessionControlV2Contract.recoveryEligibleMeetingStates.contains(status) }
+    enum CodingKeys: String, CodingKey {
+        case meetingID = "meeting_id", protocolVersion = "protocol_version", status
+        case observationRevision = "observation_revision"
+        case stateRevision = "state_revision", desiredState = "desired_state", observedState = "observed_state"
+        case channel, generation, segmentID = "segment_id", sourceTag = "source_tag", input, room
+        case createdAt = "created_at", identity, media
+    }
+}
+struct CaptureDeviceView: Decodable {
+    let meeting: CaptureView?
+    let pendingReports: [DeviceMeetingView.PendingReport]
+    enum CodingKeys: String, CodingKey { case meeting; case pendingReports = "pending_reports" }
+}
+
+extension MeetingClient {
+    private struct PendingCapture: Codable {
+        let serverURL: String
+        let deviceID: String
+        let path: String
+        let body: Data
+        let requestID: String
+        let action: String
+        var afterGrant: String?
+    }
+    private static let capturePendingKey = "vm.pendingCaptureV2"
+    private static let captureGrantKey = "vm.captureGrantV2"
+    static func hasPendingCapture() -> Bool {
+        (try? pendingStore().read(capturePendingKey)) != nil
+    }
+    static func savedCapture() -> CaptureView? {
+        guard let data = try? pendingStore().read(captureGrantKey) else { return nil }
+        return try? JSONDecoder().decode(CaptureView.self, from: data)
+    }
+    private static func saveCapture(_ view: CaptureView) throws {
+        let data = try JSONEncoder().encode(view)
+        try pendingStore().transaction(captureGrantKey) { current in
+            if let current, let saved = try? JSONDecoder().decode(CaptureView.self, from: current) {
+                if saved.createdAt > view.createdAt || (saved.meetingID == view.meetingID &&
+                    (saved.stateRevision > view.stateRevision ||
+                     (saved.stateRevision == view.stateRevision && (saved.observationRevision ?? 0) > (view.observationRevision ?? 0)))) {
+                    return (current, ())
+                }
+            }
+            return (data, ())
+        }
+    }
+    private static func captureEndpoint(_ serverURL: String, path: String) throws -> URL {
+        guard var c = URLComponents(string: serverURL), c.scheme == "wss", c.host != nil else {
+            throw failure(60, "电脑地址必须为 wss://")
+        }
+        c.scheme = "https"; c.path = path; c.queryItems = nil
+        guard let url = c.url else { throw failure(60, "会控地址无效") }
+        return url
+    }
+    private static func captureRequest(serverURL: String, path: String, body: Data? = nil) async throws -> Data {
+        var req = URLRequest(url: try captureEndpoint(serverURL, path: path))
+        req.httpMethod = body == nil ? "GET" : "POST"
+        req.httpBody = body
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue(try credential(), forHTTPHeaderField: "X-VM-Device-Token")
+        req.timeoutInterval = 8; req.cachePolicy = .reloadIgnoringLocalCacheData
+        let (data, response) = try await URLSession.shared.data(for: req)
+        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+            let code = controlErrorCode(from: data) ?? "control_v2_unavailable"
+            throw failure(61, "电脑会控未确认：" + code, controlErrorCode: code)
+        }
+        return data
+    }
+    private static func decodeCapture(_ data: Data) throws -> CaptureView {
+        let object = try JSONSerialization.jsonObject(with: data)
+        if let problem = SessionControlV2Contract.responseProblem("capture", object: object) {
+            throw failure(62, "会控回包不符合契约：" + problem)
+        }
+        return try JSONDecoder().decode(CaptureView.self, from: data)
+    }
+    static func captureDeviceView(config: LiveKitConfig) async throws -> CaptureDeviceView {
+        let path = SessionControlV2Contract.device_viewPath.replacingOccurrences(of: "{device_id}", with: config.device)
+        let data = try await captureRequest(serverURL: config.url, path: path)
+        let view = try JSONDecoder().decode(CaptureDeviceView.self, from: data)
+        if let capture = view.meeting { _ = try decodeCapture(JSONEncoder().encode(capture)) }
+        return view
+    }
+    static func queueCaptureStart(config: LiveKitConfig, revision: Int, input: InputBinding,
+                                  meetingID: String?) throws {
+        let store = try pendingStore()
+        try store.transaction(capturePendingKey) { current in
+            if let current {
+                let pending = try JSONDecoder().decode(PendingCapture.self, from: current)
+                guard pending.serverURL == config.url, pending.deviceID == config.device,
+                      pending.action == "start" else { throw failure(63, "请先确认上一项会控动作") }
+                return (current, ())
+            }
+            let id = UUID().uuidString.lowercased()
+            var object: [String: Any] = ["request_id": id, "device_id": config.device, "user_id": config.userID,
+                "config_revision": revision, "input": ["channel": input.channel, "input_ref": input.inputRef],
+                "source_tag": input.sourceTag.rawValue]
+            if let meetingID { object["resume_meeting_id"] = meetingID }
+            let pending = PendingCapture(serverURL: config.url, deviceID: config.device,
+                path: SessionControlV2Contract.startPath, body: try JSONSerialization.data(withJSONObject: object),
+                requestID: id, action: "start")
+            return (try JSONEncoder().encode(pending), ())
+        }
+    }
+    static func queueCaptureAction(config: LiveKitConfig, view: CaptureView?, action: String,
+                                   input: InputBinding? = nil) throws {
+        guard let view = view ?? savedCapture().flatMap({ $0.desiredState == "ended" ? nil : $0 }) else {
+            guard action == "pause" || action == "end" else { throw failure(63, "没有可操作的会议") }
+            try pendingStore().transaction(capturePendingKey) { current in
+                guard let current else { throw failure(63, "没有待确认的会议申请") }
+                var pending = try JSONDecoder().decode(PendingCapture.self, from: current)
+                guard pending.action == "start" else { throw failure(63, "会议申请尚未对账") }
+                if pending.afterGrant != "end" { pending.afterGrant = action }
+                return (try JSONEncoder().encode(pending), ())
+            }
+            return
+        }
+        let id = UUID().uuidString.lowercased()
+        var object: [String: Any] = ["request_id": id, "device_id": config.device,
+            "expected_revision": view.stateRevision, "generation": view.generation,
+            "segment_id": view.segmentID, "action": action]
+        if let input { object["input"] = ["channel": input.channel, "input_ref": input.inputRef]; object["source_tag"] = input.sourceTag.rawValue }
+        let pending = PendingCapture(serverURL: config.url, deviceID: config.device,
+            path: SessionControlV2Contract.actionsPath.replacingOccurrences(of: "{meeting_id}", with: view.meetingID),
+            body: try JSONSerialization.data(withJSONObject: object), requestID: id, action: action)
+        try pendingStore().transaction(capturePendingKey) { current in
+            if let current {
+                let old = try JSONDecoder().decode(PendingCapture.self, from: current)
+                if old.action == "end" && action != "end" { throw failure(63, "结束动作优先，不能恢复采集") }
+            }
+            return (try JSONEncoder().encode(pending), ())
+        }
+    }
+    static func flushPendingCapture(allowRebase: Bool = true) async throws -> CaptureView? {
+        let store = try pendingStore()
+        guard let data = try store.read(capturePendingKey) else { return nil }
+        let pending = try JSONDecoder().decode(PendingCapture.self, from: data)
+        let view: CaptureView
+        do {
+            view = try decodeCapture(await captureRequest(serverURL: pending.serverURL, path: pending.path, body: pending.body))
+        } catch {
+            let code = (error as NSError).userInfo["controlErrorCode"] as? String ?? ""
+            guard allowRebase, ["stale_capture_revision", "stale_segment", "request_superseded", "capture_ended"].contains(code) else { throw error }
+            let config = LiveKitConfig(url: pending.serverURL, device: pending.deviceID, userID: "")
+            guard let fresh = try await captureDeviceView(config: config).meeting,
+                  pending.path.contains(fresh.meetingID) else { throw error }
+            if ["pause", "end"].contains(pending.action), fresh.desiredState != "ended",
+               !(pending.action == "pause" && fresh.desiredState == "paused") {
+                try queueCaptureAction(config: config, view: fresh, action: pending.action)
+                return try await flushPendingCapture(allowRebase: false)
+            }
+            try saveCapture(fresh)
+            try store.transaction(capturePendingKey) { current in
+                guard let current, let latest = try? JSONDecoder().decode(PendingCapture.self, from: current),
+                      latest.requestID == pending.requestID else { return (current, ()) }
+                return (nil, ())
+            }
+            return fresh // A conflicting resume never reopens input automatically.
+        }
+        try saveCapture(view) // Save the granted identity/segment before forgetting the request.
+        let after: String? = try store.transaction(capturePendingKey) { current in
+            guard let current, let latest = try? JSONDecoder().decode(PendingCapture.self, from: current),
+                  latest.requestID == pending.requestID else { return (current, nil) }
+            return (nil, latest.afterGrant)
+        }
+        if let after {
+            let config = LiveKitConfig(url: pending.serverURL, device: pending.deviceID, userID: "")
+            try queueCaptureAction(config: config, view: view, action: after)
+            return try await flushPendingCapture()
+        }
+        return view
+    }
+    static func observeCapture(config: LiveKitConfig, view: CaptureView, observed: String) async throws {
+        let body: [String: Any] = ["device_id": config.device, "channel": view.channel,
+            "generation": view.generation, "segment_id": view.segmentID, "observed": observed]
+        let path = SessionControlV2Contract.observePath.replacingOccurrences(of: "{meeting_id}", with: view.meetingID)
+        _ = try decodeCapture(await captureRequest(serverURL: config.url, path: path,
+                      body: JSONSerialization.data(withJSONObject: body)))
+    }
+}

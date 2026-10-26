@@ -64,6 +64,15 @@ struct MeetingContext: Equatable {
         self.lastSeen = Date()
     }
 
+    init(capture: CaptureView, pendingReports: Int = 0, observedAt: Date = Date()) {
+        self.init(meetingID: capture.meetingID,
+                  meeting: AppSharedContract.meetingState(capture.status),
+                  mic: capture.channel == "mic" && capture.desiredState == "active" ? .active : nil,
+                  micGeneration: capture.channel == "mic" ? capture.generation : nil,
+                  systemAudio: nil, systemAudioGeneration: nil, recoveryDeadline: nil,
+                  lastSeen: observedAt, pendingReports: pendingReports, revision: capture.stateRevision)
+    }
+
     // MARK: - 底栏要显示的两个词
 
     /// 这份投影还新不新。不动它就会把断网前的「已激活」一直挂在底栏上。

@@ -9,7 +9,7 @@ import XCTest
         XCTAssertEqual(f.starts, 1)
         XCTAssertEqual(f.assistant.accept(.end), .submitted)
         _ = f.assistant.accept(.end)
-        XCTAssertEqual(f.stops, 1)
+        XCTAssertEqual(f.ends, 1)
         XCTAssertEqual(f.starts, 1)
         XCTAssertFalse(f.meeting.isRecording)
     }
@@ -20,7 +20,6 @@ import XCTest
             if case .rejected = f.assistant.accept(action) {} else { XCTFail("unsupported action accepted") }
         }
         XCTAssertTrue(f.meeting.isRecording)
-        XCTAssertEqual(f.stops, 0)
         XCTAssertEqual(f.ends, 0)
     }
     func testInvalidConfigurationFailsBeforeAnyCaptureCommand() async {

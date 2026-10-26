@@ -31,6 +31,8 @@ struct InputBinding: Equatable {
     let kind: InputKind
     let capturePort: CapturePort
     let sourceTag: SourceTag
+    var channel: String { kind == .phone ? "mic" : "external_audio" }
+    var inputRef: String { kind == .phone ? "iphone" : "cb08" }
     static let phone = InputBinding(kind: .phone, capturePort: .nativeMicrophone, sourceTag: .face2face)
 }
 
@@ -60,6 +62,7 @@ enum ConfigurationField { case serverURL, deviceID, userID, credential }
 /// to MeetingWorker; tests can exercise the assistant without opening a network.
 @MainActor struct MeetingCommands {
     let start: () -> Void
-    let stop: () -> Void
     let end: () -> Void
+    var pause: (() -> Void)? = nil
+    var resume: (() -> Void)? = nil
 }

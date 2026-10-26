@@ -20,7 +20,7 @@ struct ConnectionView: View {
                         .font(.footnote).foregroundStyle(.secondary)
                     Button("恢复本会议") { assistant.accept(.recover) }
                         .buttonStyle(.borderless)
-                        .disabled(!assistant.meeting.projection.canReconnect(
+                        .disabled(assistant.meeting.isPaused || assistant.meeting.actionPending || !assistant.meeting.projection.canReconnect(
                             wantsToContinue: assistant.meeting.wantsCapture,
                             recording: assistant.meeting.isRecording,
                             networkOK: assistant.connection.network == .connected))

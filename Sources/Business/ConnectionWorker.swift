@@ -35,6 +35,21 @@ import LiveKit
             self?.onTranscript?(type, who, seconds, text, gap, ts, raw)
         }
     }
+    func queueCaptureStart(config: LiveKitConfig, input: InputBinding, meetingID: String?) throws {
+        try MeetingClient.queueCaptureStart(config: config, revision: settings.snapshot.revision,
+                                            input: input, meetingID: meetingID)
+    }
+    func queueCaptureAction(config: LiveKitConfig, view: CaptureView?, action: String,
+                            input: InputBinding? = nil) throws {
+        try MeetingClient.queueCaptureAction(config: config, view: view, action: action, input: input)
+    }
+    func flushCapture() async throws -> CaptureView? { try await MeetingClient.flushPendingCapture() }
+    func captureView(config: LiveKitConfig) async throws -> CaptureDeviceView {
+        try await MeetingClient.captureDeviceView(config: config)
+    }
+    func observeCapture(config: LiveKitConfig, view: CaptureView, observed: String) async throws {
+        try await MeetingClient.observeCapture(config: config, view: view, observed: observed)
+    }
     func connect(url: String, token: String, identity: String) async throws -> Room {
         try await room.connect(url: url, token: token, identity: identity)
     }

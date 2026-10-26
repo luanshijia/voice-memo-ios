@@ -1,0 +1,121 @@
+{
+  "version": 1,
+  "valid": [
+    {
+      "meeting_id": "00000000-0000-4000-8000-000000000001",
+      "protocol_version": 2,
+      "status": "active",
+      "state_revision": 1,
+      "desired_state": "active",
+      "observed_state": "pending",
+      "channel": "mic",
+      "generation": 1,
+      "segment_id": "00000000-0000-4000-8000-000000000002",
+      "source_tag": "face2face",
+      "input": {
+        "channel": "mic",
+        "input_ref": "iphone"
+      },
+      "room": "vm-00000000-0000-4000-8000-000000000001",
+      "created_at": "2026-10-26T00:00:00.000Z",
+      "identity": "phone-livekit"
+    }
+  ],
+  "invalid": [
+    {
+      "meeting_id": "00000000-0000-4000-8000-000000000001",
+      "protocol_version": 1,
+      "status": "active",
+      "state_revision": 1,
+      "desired_state": "active",
+      "observed_state": "pending",
+      "channel": "mic",
+      "generation": 1,
+      "segment_id": "00000000-0000-4000-8000-000000000002",
+      "source_tag": "face2face",
+      "input": {
+        "channel": "mic",
+        "input_ref": "iphone"
+      },
+      "room": "vm-00000000-0000-4000-8000-000000000001",
+      "created_at": "2026-10-26T00:00:00.000Z",
+      "identity": "phone-livekit"
+    },
+    {
+      "meeting_id": "00000000-0000-4000-8000-000000000001",
+      "protocol_version": 2,
+      "status": "active",
+      "state_revision": true,
+      "desired_state": "active",
+      "observed_state": "pending",
+      "channel": "mic",
+      "generation": 1,
+      "segment_id": "00000000-0000-4000-8000-000000000002",
+      "source_tag": "face2face",
+      "input": {
+        "channel": "mic",
+        "input_ref": "iphone"
+      },
+      "room": "vm-00000000-0000-4000-8000-000000000001",
+      "created_at": "2026-10-26T00:00:00.000Z",
+      "identity": "phone-livekit"
+    },
+    {
+      "meeting_id": "00000000-0000-4000-8000-000000000001",
+      "protocol_version": 2,
+      "status": "active",
+      "state_revision": 1,
+      "desired_state": "active",
+      "observed_state": "pending",
+      "channel": "mic",
+      "generation": 0,
+      "segment_id": "00000000-0000-4000-8000-000000000002",
+      "source_tag": "face2face",
+      "input": {
+        "channel": "mic",
+        "input_ref": "iphone"
+      },
+      "room": "vm-00000000-0000-4000-8000-000000000001",
+      "created_at": "2026-10-26T00:00:00.000Z",
+      "identity": "phone-livekit"
+    },
+    {
+      "meeting_id": "00000000-0000-4000-8000-000000000001",
+      "protocol_version": 2,
+      "status": "active",
+      "state_revision": 1,
+      "desired_state": "active",
+      "observed_state": "pending",
+      "channel": "mic",
+      "generation": 1,
+      "segment_id": "bad",
+      "source_tag": "face2face",
+      "input": {
+        "channel": "mic",
+        "input_ref": "iphone"
+      },
+      "room": "vm-00000000-0000-4000-8000-000000000001",
+      "created_at": "2026-10-26T00:00:00.000Z",
+      "identity": "phone-livekit"
+    },
+    {
+      "meeting_id": "00000000-0000-4000-8000-000000000001",
+      "protocol_version": 2,
+      "status": "active",
+      "state_revision": 1,
+      "desired_state": "recording",
+      "observed_state": "pending",
+      "channel": "mic",
+      "generation": 1,
+      "segment_id": "00000000-0000-4000-8000-000000000002",
+      "source_tag": "face2face",
+      "input": {
+        "channel": "mic",
+        "input_ref": "iphone"
+      },
+      "room": "vm-00000000-0000-4000-8000-000000000001",
+      "created_at": "2026-10-26T00:00:00.000Z",
+      "identity": "phone-livekit"
+    }
+  ]
+}
