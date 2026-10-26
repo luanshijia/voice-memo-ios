@@ -1,17 +1,10 @@
 # VoiceMemo iOS
 
-VoiceMemo iOS 是会议录音客户端。主 App 采集麦克风音频；用户可手动启动 ReplayKit 广播扩展采集符合 iOS 录制规则的系统播放音频。两路分别加入家里的 LiveKit 房间，电脑端负责识别、归档与会后纪要。
+手机负责采集、推流和文字显示，用户自己的Windows主机负责识别、录音归档与会后纪要。主App由统一管家助手调度四个业务工人，当前候选支持iPhone麦克风与独立CB08输入。ReplayKit扩展退出新构建。
 
-音频和转写数据发往用户自己的 Windows 主机。App 源码不包含 LiveKit 长期 key/secret；已登记设备经 TLS 代理 `/v1/meetings/start` 申请电脑端签发的会议号和短期票据。实时消息与会议控制的正本分别在电脑端仓库的 `contracts/wire-v2.json`、`contracts/session-control-v1.json`。
+电脑端机器正本：实时消息contracts/wire-v2.json，分段采集会控contracts/session-control-v2.json，输入清单contracts/input-manifest-v1.json；V1保留旧手机请求的兼容对账。App不包含LiveKit长期key/secret，登记设备经TLS代理取得短期票据。
 
-## 当前代码基线
-
-- 当前待编译源码版本：`0.9.20 / build 89`。实时消息校验器与控制接口常量分别由电脑端 `wire-v2.json`、`session-control-v1.json` 生成；本轮源码尚未通过 Mac CI 或真机检查。
-- 最近一个已核验 IPA：build 86，GitHub Actions `39196411913`，源码提交 `7237250`；产物 `dist/ci-build86-wire-contract/VoiceMemo-unsigned-ipa/VoiceMemo-unsigned.ipa`，SHA-256：`A061201E93EE1E30809ED7C5FCC3FEA0682F7C413429F7C1A00480CBEC8A1494`。主 App 与 ReplayKit 扩展均为 `0.9.18 / 86`。这是编译与打包验证，不是设备安装或真机验收。
-- build 88 的 Mac CI 曾编译成功，但不验证本轮 build 89 源码；用户已将打包交给 Hermes，本轮不下载 IPA。所有 V2 正式设备项目仍为“待检测”。
-- 当前主界面：五个顶部控制按钮、第一遍/定稿字幕、会中提要面板（档位、状态和要点）及底部状态栏。
-- 收包端按消息类型校验必填字段和类型；schema 整数采用跨端安全范围，`summary.clock` 只接受 ASCII `HH:mm`。
-- tag 或 CI 编译成功都不能代替真机运行验收。当前包和 CI 状态以 GitHub Actions 实际结果为准。
+当前版本唯一来源为project.yml，精确提交、CI、IPA与真机验收只在电脑端notes/STATE.md维护。历史构建不代表当前候选通过；CI与实机/生产分开验收。
 
 ## 目录
 
@@ -21,9 +14,11 @@ VoiceMemo iOS 是会议录音客户端。主 App 采集麦克风音频；用户�
 | `Sources/ContentView.swift` | 主界面与字幕显示 |
 | `Sources/SessionModel.swift` | 会议工人状态的界面投影 |
 | `Sources/VoiceRoom.swift` | LiveKit 连接和消息收发校验 |
-| `Sources/LiveKitConfig.swift` | 配置、短期 token 请求、App Group 广播卡 |
+| `Sources/Business/` | 设置、输入、连接、会议状态及动作所有者 |
+| `Shared/MeetingClient.swift` | V2持久请求、电脑授权、报告保存回执 |
+| `Sources/Inputs/` | 手机/CB08设备适配、Opus解码 |
 | `Broadcast/` | 留档的旧广播源码，退出全部构建目标 |
-| `Sources/NetProbe.swift`、`Sources/BroadcastProbe.swift` | 网络与扩展诊断 |
+| `Sources/NetProbe.swift` | 网络入口探测 |
 
 ## 构建与安装
 
