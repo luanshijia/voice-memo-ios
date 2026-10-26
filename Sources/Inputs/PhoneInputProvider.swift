@@ -8,8 +8,8 @@ import LiveKit
     private let publisher: AudioPublishing
     private var room: Room?
 
-    init(publisher: AudioPublishing = AudioPublisher()) {
-        self.publisher = publisher
+    init(publisher: AudioPublishing? = nil) {
+        self.publisher = publisher ?? AudioPublisher()
     }
 
     func prepare() async throws {}
