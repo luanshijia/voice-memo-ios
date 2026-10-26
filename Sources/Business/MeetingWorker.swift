@@ -292,6 +292,11 @@ final class MeetingWorker: ObservableObject {
                 (current.stateRevision == view.stateRevision && (current.observationRevision ?? 0) > (view.observationRevision ?? 0))) { return }
             if current.meetingID != view.meetingID && current.createdAt > view.createdAt { return }
         }
+        if !isRecording, view.desiredState != "ended" {
+            let kind: InputKind = view.channel == "external_audio" ? .external : .phone
+            input.adopt(InputBinding(kind: kind, capturePort: kind == .phone ? .nativeMicrophone : .pcmFeed,
+                                     sourceTag: SourceTag(rawValue: view.sourceTag) ?? .face2face))
+        }
         capture = view
         sessionID = view.meetingID
         meetingContext = MeetingContext(capture: view, pendingReports: pendingReports,
@@ -412,6 +417,23 @@ final class MeetingWorker: ObservableObject {
     }
     func captureStopped() { isRecording = false; intent = .notWanted }
 
+    @discardableResult func selectInput(_ binding: InputBinding) -> CaptureActionResult {
+        guard isPaused, !actionPending, capture?.observedState == "paused", let view = capture else {
+            return .rejected("请先暂停并等待电脑确认")
+        }
+        do { try transport.queueCaptureAction(config: cfg, view: view, action: "select_input", input: binding) }
+        catch { return .rejected("输入选择未保存：\(error.localizedDescription)") }
+        actionPending = true
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                if let result = try await self.transport.flushCapture() { self.applyCapture(result) }
+                self.actionPending = MeetingClient.hasPendingCapture()
+            } catch { self.note("输入切换待确认：\(error.localizedDescription)") }
+        }
+        return .submitted
+    }
+
     func pauseCapture() { controlCapture("pause") }
     func resumeCapture() { beginCapture(resuming: true) }
     func terminateMeeting() { controlCapture("end") }
@@ -428,7 +450,10 @@ final class MeetingWorker: ObservableObject {
         if action == "end" { captureStopped() }
         else { isRecording = false; intent = .wanted }
         terminating = action == "end"
-        transport.enqueueDisconnect(beforeDisconnect: { [input] in await input.stop() }) {}
+        input.closeGate()
+        transport.enqueueDisconnect(beforeDisconnect: { [input] in
+            if action == "pause" { await input.pause() } else { await input.stop() }
+        }) {}
         let disconnect = transport.pendingDisconnect
         Task { [weak self] in
             guard let self else { return }
@@ -547,6 +572,7 @@ final class MeetingWorker: ObservableObject {
             } catch {
                 guard operation.isCurrent(generation: transport.generation, config: cfg) else { return }
                 isRecording = false
+                input.device.cancelHardwareIntent()
                 actionPending = MeetingClient.hasPendingCapture()
                 note("采集未完成，请在连接页对账：\(error.localizedDescription)")
             }

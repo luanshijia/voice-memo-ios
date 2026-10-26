@@ -24,12 +24,13 @@ struct ContentView: View {
                 Text(message).font(.callout).frame(maxWidth: .infinity)
                     .padding(8).background(.thinMaterial)
             } else if assistant.page != .meeting && (model.isRecording || model.intent == .wanted) {
-                Button("手机采集进行中 · 返回会议") { assistant.page = .meeting }
+                Button("采集进行中 · 返回会议") { assistant.page = .meeting }
                     .frame(maxWidth: .infinity, minHeight: 44).background(.thinMaterial)
             }
         }
         .task { await model.refreshForegroundStateLoop() }
         .onChange(of: scenePhase) { _, phase in
+            assistant.input.device.appState(foreground: phase == .active)
             guard phase == .active else { return }
             Task {
                 await model.refreshNet()

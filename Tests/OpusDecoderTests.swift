@@ -9,11 +9,9 @@ final class OpusDecoderTests: XCTestCase {
     }
 
     func testEmptyPacketIsRejected() throws {
-        #if CB08_PROBE
-        let decoder = try OpusDecoder()
+        let decoder: OpusDecoder
+        do { decoder = try OpusDecoder() }
+        catch OpusDecoderError.decoderUnavailable { throw XCTSkip("Simulator has no Opus converter; device check remains required") }
         XCTAssertThrowsError(try decoder.decode(packet: Data()))
-        #else
-        throw XCTSkip("The runtime decoder check runs only in a CB08 probe build")
-        #endif
     }
 }

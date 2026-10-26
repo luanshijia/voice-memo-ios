@@ -11,7 +11,7 @@ struct MeetingView: View {
                 HStack {
                     Label(model.captureStatusText, systemImage: "waveform")
                     Spacer()
-                    Button("手机 · 面对面") { assistant.page = .input }
+                    Button(assistant.input.displayName) { assistant.page = .input }
                         .font(.subheadline)
                 }
                 if !model.transcriptGapText.isEmpty {
@@ -52,7 +52,7 @@ struct MeetingView: View {
                                 .disabled(assistant.meeting.terminating)
                                 .buttonStyle(.bordered)
                         } else {
-                            Button("开始手机采集") { assistant.accept(.start) }
+                            Button("开始采集") { assistant.accept(.start) }
                                 .disabled(assistant.meeting.actionPending || assistant.meeting.terminating)
                                 .buttonStyle(.borderedProminent)
                         }

@@ -65,11 +65,12 @@ import XCTest
         XCTAssertEqual(f.settings.config.device, "changed")
         XCTAssertEqual(LiveKitConfig.load(defaults: f.defaults).device, "changed")
     }
-    func testExternalSelectionIsHonestAndPreservesPhoneBinding() async {
+    func testExternalSelectionDoesNotStartDisconnectedDevice() async {
         let f = BusinessFixture(); defer { f.cleanUp() }
         f.assistant.selectInput(.external)
-        XCTAssertEqual(f.input.binding, .phone)
-        XCTAssertNotNil(f.assistant.message)
+        XCTAssertEqual(f.input.binding.channel, "external_audio")
+        XCTAssertFalse(f.input.isAvailable)
+        if case .rejected = f.assistant.accept(.start) {} else { XCTFail("disconnected external started") }
         XCTAssertEqual(f.starts, 0)
     }
     func testConnectionProjectionCannotInventRawAudioReceipt() async {

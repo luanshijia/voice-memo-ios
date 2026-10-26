@@ -1,14 +1,11 @@
-#if CB08_PROBE
 import AVFoundation
 import AudioToolbox
-#endif
 
 struct OpusPacketMetrics: Equatable {
     let packetBytes: Int
     let decodedSamples: Int
 }
 
-#if CB08_PROBE
 enum OpusDecoderError: Error, LocalizedError {
     case emptyPacket
     case decoderUnavailable
@@ -25,9 +22,13 @@ enum OpusDecoderError: Error, LocalizedError {
     }
 }
 
-/// Probe-only decoder. Each SDK callback is tested as one opaque codec packet;
+/// Callback-preserving candidate decoder. Each SDK callback is tested as one opaque codec packet;
 /// no fixed byte count or packet splitting is inferred from the manual.
-final class OpusDecoder {
+protocol OpusDecoding: AnyObject {
+    func decode(packet: Data) throws -> (pcm: Data, metrics: OpusPacketMetrics)
+}
+
+final class OpusDecoder: OpusDecoding {
     private let converter: AVAudioConverter
     private let inputFormat: AVAudioFormat
     private let outputFormat: AVAudioFormat
@@ -102,4 +103,3 @@ final class OpusDecoder {
         return (pcm, OpusPacketMetrics(packetBytes: packet.count, decodedSamples: sampleCount))
     }
 }
-#endif

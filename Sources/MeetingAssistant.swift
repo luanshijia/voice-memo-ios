@@ -40,6 +40,11 @@ import Foundation
             start: { meeting.startCapture() },
             end: { meeting.terminateMeeting() },
             pause: { meeting.pauseCapture() }, resume: { meeting.resumeCapture() })
+        input.device.onHardware = { [weak self] event in self?.hardware(event) ?? false }
+        input.external.onFault = { [weak self] in
+            guard let self, self.input.binding.kind == .external, self.meeting.isRecording else { return }
+            self.meeting.pauseCapture()
+        }
         subscription = meeting.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
     }
 
@@ -67,13 +72,13 @@ import Foundation
                 commands.end(); result = .submitted
             } else if meeting.presentation.terminateAction.enabled {
                 commands.end(); result = .submitted
-            } else { result = .rejected("当前没有可停止的手机采集") }
+            } else { result = .rejected("当前没有可结束的采集") }
         case .pause:
             if meeting.isRecording, !meeting.terminating, let pause = commands.pause {
                 pause(); result = .submitted
             } else { result = .rejected("当前无法暂停采集") }
         case .resume:
-            if meeting.isPaused, !meeting.isRecording, !meeting.actionPending, meeting.capture?.observedState == "paused",
+            if meeting.isPaused, !meeting.isRecording, !meeting.actionPending, readiness.problems.isEmpty, meeting.capture?.observedState == "paused",
                let resume = commands.resume {
                 resume(); result = .submitted
             } else { result = .rejected("请等待暂停确认后再继续") }
@@ -82,10 +87,30 @@ import Foundation
         return result
     }
 
-    func selectInput(_ kind: InputKind) {
-        let result = input.select(kind)
+    var canSelectInput: Bool {
+        !meeting.actionPending && !meeting.terminating && !meeting.isRecording &&
+        ((!meeting.wantsCapture && !settings.isLocked) ||
+         (meeting.isPaused && meeting.capture?.observedState == "paused"))
+    }
+    func selectInput(_ kind: InputKind, tag: SourceTag = .face2face) {
+        guard canSelectInput else { message = "请先暂停并等待确认"; return }
+        let binding = InputBinding(kind: kind, capturePort: kind == .phone ? .nativeMicrophone : .pcmFeed,
+                                   sourceTag: kind == .phone ? .face2face : tag)
+        let result = meeting.isPaused ? meeting.selectInput(binding) : input.select(kind, tag: tag)
         if case .rejected(let reason) = result { message = reason } else { message = nil }
         objectWillChange.send()
+    }
+    /// No key event can claim another source's active meeting.
+    func hardware(_ event: CB08RecordAction) -> Bool {
+        guard input.binding.kind == .external, !meeting.actionPending else { return false }
+        let action: CaptureAction
+        switch event {
+        case .start: action = .start
+        case .stop: action = .end
+        case .pause: action = .pause
+        case .resume: action = .resume
+        }
+        return accept(action) == .submitted
     }
 
     func checkConnection() async {

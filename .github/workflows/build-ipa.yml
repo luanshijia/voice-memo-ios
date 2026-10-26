@@ -9,12 +9,6 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
-    inputs:
-      cb08_probe:
-        description: Include the device-only CB08 diagnostics view in the iPhoneOS archive
-        type: boolean
-        required: false
-        default: false
 
 jobs:
   build:
@@ -89,8 +83,6 @@ jobs:
       - name: 编译(不签名)
         run: |
           set -o pipefail
-          PROBE_CONDITION=""
-          if [[ "${{ inputs.cb08_probe }}" == "true" ]]; then PROBE_CONDITION="CB08_PROBE"; fi
           # 设备名与使用者的真值只在这里出现:值来自仓库 Secrets(日志里被遮蔽),
           # 由 build setting 注入 Info.plist。代码与 project.yml 里只有中性占位。
           xcodebuild \
@@ -102,7 +94,6 @@ jobs:
             -archivePath "$RUNNER_TEMP/VoiceMemo.xcarchive" \
             VM_DEFAULT_DEVICE="${VM_DEFAULT_DEVICE}" \
             VM_DEFAULT_USER="${VM_DEFAULT_USER}" \
-            SWIFT_ACTIVE_COMPILATION_CONDITIONS="$PROBE_CONDITION" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \

@@ -71,6 +71,7 @@ targets:
         # 锁屏/后台继续录音的关键:后台音频模式
         UIBackgroundModes:
           - audio
+          - bluetooth-central
         NSMicrophoneUsageDescription: 用于会议录音与实时转写
         NSBluetoothAlwaysUsageDescription: 用于连接 CB08 外置录音设备
         # 走 wss:// + 自家 CA 签发的证书,ATS 保持 iOS 默认的严格策略(不加任何豁免)。
@@ -85,7 +86,7 @@ targets:
         VM_DEFAULT_DEVICE: iphone
         VM_DEFAULT_USER: owner
         MARKETING_VERSION: "0.10.0"
-        CURRENT_PROJECT_VERSION: "107"
+        CURRENT_PROJECT_VERSION: "108"
         SWIFT_VERSION: "5.0"
         # 显式锁定:接 SwiftPM 依赖后产物 Info.plist 的 MinimumOSVersion 曾变成 13.0(依赖的声明下限),
         # 而代码用了 iOS 17 的 API —— 写死避免漂移。

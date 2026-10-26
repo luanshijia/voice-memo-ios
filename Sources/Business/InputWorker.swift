@@ -12,25 +12,55 @@ import LiveKit
         desired: .wanted, observed: .unknownState)
     @Published private(set) var modeStatus = Status<LinkDesired, MicModeObserved, CapReason>(
         desired: .wanted, observed: .unknownState)
+    let device: CB08SDKBridge
+    let external: CB08InputProvider
+    private var subscriptions = Set<AnyCancellable>()
     private let provider: PhoneInputProvider
     var configurationLocked: () -> Bool = { false }
 
-    init(provider: PhoneInputProvider? = nil) { self.provider = provider ?? PhoneInputProvider() }
-    var isAvailable: Bool { binding.kind == .phone }
+    init(provider: PhoneInputProvider? = nil) {
+        let publisher = AudioPublisher()
+        self.provider = provider ?? PhoneInputProvider(publisher: publisher)
+        let device = CB08SDKBridge()
+        self.device = device
+        external = CB08InputProvider(device: device, publisher: publisher)
+        external.onFlow = { [weak self] in self?.isCapturing = true }
+        external.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }.store(in: &subscriptions)
+        device.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }.store(in: &subscriptions)
+    }
+    var isAvailable: Bool { binding.kind == .phone || external.isAvailable }
     var permission: CapObserved { permissionStatus.observed }
-    @discardableResult func select(_ kind: InputKind) -> CaptureActionResult {
-        guard kind == .phone else { return .rejected("外设正式通路尚未接入") }
-        guard !configurationLocked() else { return .rejected("请先完成当前会议或待确认动作") }
-        binding = .phone
+    var displayName: String {
+        binding.kind == .phone ? "手机 · 面对面" : "CB08 · \(binding.sourceTag == .call ? "通话" : "面对面")"
+    }
+    @discardableResult func select(_ kind: InputKind, tag: SourceTag = .face2face) -> CaptureActionResult {
+        guard !configurationLocked() else { return .rejected("请先暂停并等待确认") }
+        adopt(InputBinding(kind: kind, capturePort: kind == .phone ? .nativeMicrophone : .pcmFeed,
+                           sourceTag: kind == .phone ? .face2face : tag))
         return .submitted
     }
-    func bind(_ room: Room) { provider.bind(room) }
-    func start(context: ExecutionContext) async throws {
-        try await provider.start(context: context)
-        isCapturing = true
+    func adopt(_ value: InputBinding) { binding = value }
+    func bind(_ room: Room) {
+        if binding.kind == .phone { provider.bind(room) } else { external.bind(room) }
     }
-    func stop() async { await provider.stop(); isCapturing = false }
-    func interrupted() { provider.bind(nil); isCapturing = false }
+    func start(context: ExecutionContext) async throws {
+        guard context.channel == binding.channel else { throw CB08InputError.invalidContext }
+        if binding.kind == .phone { try await provider.start(context: context); isCapturing = true }
+        else { try await external.start(context: context) }
+    }
+    func closeGate() { if binding.kind == .external { external.closeGate() }; isCapturing = false }
+    func pause() async {
+        isCapturing = false
+        if binding.kind == .phone { await provider.stop() } else { await external.pause() }
+    }
+    func stop() async {
+        isCapturing = false
+        await provider.stop()
+        await external.stop()
+    }
+    func interrupted() {
+        provider.bind(nil); external.interrupted(); isCapturing = false
+    }
 
     func refreshMicMode(generation: Int) {
         let allowed = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized

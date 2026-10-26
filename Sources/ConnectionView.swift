@@ -5,8 +5,12 @@ struct ConnectionView: View {
     var body: some View {
         NavigationStack {
             List {
-                Section("当前来源：手机") {
-                    LabeledContent("输入", value: "iPhone 麦克风")
+                Section("当前来源：\(assistant.input.displayName)") {
+                    LabeledContent("输入", value: assistant.input.displayName)
+                    if assistant.input.binding.kind == .external {
+                        LabeledContent("CB08 → 手机", value: assistant.input.device.connected ? "蓝牙已连接" : "蓝牙未连接")
+                        LabeledContent("提交PCM样本", value: "\(assistant.input.external.submittedSamples)")
+                    }
                     LabeledContent("手机 → 电脑入口", value: word(assistant.connection.network))
                     LabeledContent("电脑会议管家", value: assistant.connection.controlIsFresh ? "最近查询成功" : "无新鲜鉴权证据")
                     LabeledContent("媒体连接", value: word(assistant.connection.media))
