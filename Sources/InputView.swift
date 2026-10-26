@@ -1,4 +1,5 @@
 import SwiftUI
+import AVFoundation
 
 struct InputView: View {
     @ObservedObject var assistant: MeetingAssistant
@@ -6,32 +7,66 @@ struct InputView: View {
         NavigationStack {
             List {
                 Section("手机") {
-                    Label("iPhone 麦克风 · 面对面", systemImage: "iphone")
-                    Text(assistant.input.permission == .yes ? "麦克风权限已允许" : "开始时检查麦克风权限")
-                        .foregroundStyle(.secondary)
-                    Button(assistant.input.binding.kind == .phone ? "已选择手机" : "选择手机") { assistant.selectInput(.phone) }
-                        .buttonStyle(.borderless).disabled(!assistant.canSelectInput)
+                    inputButton("iPhone 麦克风", icon: "iphone", kind: .phone) {
+                        assistant.selectInput(.phone)
+                    }
+                    LabeledContent("麦克风权限", value: microphonePermission)
                 }
                 Section("外置设备") {
-                    Label("CB08", systemImage: "waveform")
-                    Text(assistant.input.device.connected ? "蓝牙已连接" : "蓝牙未连接")
+                    inputButton("CB08", icon: "waveform", kind: .external) {
+                        let tag = assistant.input.binding.kind == .external ? assistant.input.binding.sourceTag : .face2face
+                        assistant.selectInput(.external, tag: tag)
+                    }
+                    LabeledContent("蓝牙连接", value: assistant.input.device.connected ? "已连接" : "未连接")
+                    if assistant.input.device.connected {
+                        LabeledContent("卡片录音状态", value: cardRecordState)
+                    }
                     NavigationLink("外设控制台") {
                         ExternalDeviceView(device: assistant.input.device, provider: assistant.input.external,
-                                           controlsLocked: assistant.meeting.isRecording)
+                                           controlsLocked: assistant.meeting.isRecording, assistant: assistant)
                     }
-                    Button("选择CB08 · 面对面") { assistant.selectInput(.external, tag: .face2face) }
-                        .buttonStyle(.borderless).disabled(!assistant.canSelectInput)
-                    Button("选择CB08 · 通话") { assistant.selectInput(.external, tag: .call) }
-                        .buttonStyle(.borderless).disabled(!assistant.canSelectInput)
-                    Text("面对面：下推；通话：上推、贴附手机并使用听筒。标签只记录场景，请手动拨动开关。AirPods通话暂不支持。")
-                        .font(.footnote).foregroundStyle(.secondary)
                 }
-                Section("当前输入") {
-                    Text(assistant.input.displayName)
-                    Text("采集中先暂停，电脑确认后可切换输入；继续沿用同一会议并开启新段。")
-                        .font(.footnote).foregroundStyle(.secondary)
-                }
-            }.navigationTitle("输入")
+            }.font(.body)
+        }
+    }
+
+    private func inputButton(_ title: String, icon: String, kind: InputKind,
+                             action: @escaping () -> Void) -> some View {
+        let selected = assistant.input.binding.kind == kind
+        return Button(action: action) {
+            HStack(spacing: 12) {
+                Label(title, systemImage: icon)
+                Spacer()
+                if selected { Image(systemName: "checkmark").accessibilityHidden(true) }
+            }
+            .font(.body.weight(.medium))
+            .padding(.horizontal, 16)
+            .frame(maxWidth: .infinity, minHeight: 52)
+            .foregroundStyle(selected ? Color.white : Color.primary)
+            .background(selected ? Color.blue : Color(uiColor: .tertiarySystemFill),
+                        in: RoundedRectangle(cornerRadius: 12))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!assistant.canSelectInput)
+        .accessibilityValue(selected ? "已选中" : "未选中")
+    }
+
+    private var microphonePermission: String {
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized: return "已允许"
+        case .denied, .restricted: return "未授权"
+        case .notDetermined: return "尚未询问"
+        @unknown default: return "未知"
+        }
+    }
+
+    private var cardRecordState: String {
+        switch assistant.input.device.recordState {
+        case 0: return "停止"
+        case 1: return "录音中"
+        case 2: return "暂停"
+        default: return "未知"
         }
     }
 }

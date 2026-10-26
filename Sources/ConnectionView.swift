@@ -5,8 +5,8 @@ struct ConnectionView: View {
     var body: some View {
         NavigationStack {
             List {
-                Section("当前来源：\(assistant.input.displayName)") {
-                    LabeledContent("输入", value: assistant.input.displayName)
+                Section {
+                    LabeledContent("当前输入", value: assistant.input.displayName)
                     if assistant.input.binding.kind == .external {
                         LabeledContent("CB08 → 手机", value: assistant.input.device.connected ? "蓝牙已连接" : "蓝牙未连接")
                         LabeledContent("提交PCM样本", value: "\(assistant.input.external.submittedSamples)")
@@ -29,12 +29,8 @@ struct ConnectionView: View {
                             recording: assistant.meeting.isRecording,
                             networkOK: assistant.connection.network == .connected))
                 }
-                Section {
-                    Button("前往设置") { assistant.page = .settings }.buttonStyle(.borderless)
-                    Button("前往输入") { assistant.page = .input }.buttonStyle(.borderless)
-                }
             }
-            .navigationTitle("连接")
+            .font(.body)
         }
     }
     private func word(_ value: LinkObserved) -> String {

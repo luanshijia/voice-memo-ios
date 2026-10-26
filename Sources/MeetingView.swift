@@ -23,15 +23,28 @@ struct MeetingView: View {
                 }
             }
             .padding(.horizontal)
-            .navigationTitle("会议")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                if !model.finalReportText.isEmpty {
+                ToolbarItem(placement: .topBarTrailing) {
                     NavigationLink("会后材料") {
-                        ScrollView {
-                            Text(model.finalReportText).textSelection(.enabled)
-                                .frame(maxWidth: .infinity, alignment: .leading).padding()
-                        }.navigationTitle("会后材料")
+                        Group {
+                            if model.finalReportText.isEmpty {
+                                ContentUnavailableView("暂无会后材料", systemImage: "doc.text",
+                                    description: Text("收到并保存的会后报告会显示在这里。"))
+                            } else {
+                                ScrollView {
+                                    VStack(alignment: .leading, spacing: 16) {
+                                        Text("会议：\(assistant.meeting.finalReportMeetingID)")
+                                            .font(.footnote).foregroundStyle(.secondary)
+                                        Text(model.finalReportText).font(.body)
+                                    }
+                                    .textSelection(.enabled)
+                                    .frame(maxWidth: .infinity, alignment: .leading).padding()
+                                }
+                            }
+                        }
+                        .navigationTitle("会后材料")
+                        .navigationBarTitleDisplayMode(.inline)
                     }
                 }
             }
@@ -56,8 +69,6 @@ struct MeetingView: View {
                                 .disabled(assistant.meeting.actionPending || assistant.meeting.terminating)
                                 .buttonStyle(.borderedProminent)
                         }
-                        Button("连接详情") { assistant.page = .connection }
-                            .buttonStyle(.bordered)
                     }
                     .controlSize(.large)
                 }.padding().frame(maxWidth: .infinity).background(.bar)

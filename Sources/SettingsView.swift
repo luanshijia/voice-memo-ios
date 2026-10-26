@@ -1,22 +1,19 @@
 import SwiftUI
-import UIKit
 
 /// 设置页:连接参数、黑匣子信息都收在这里,平时主界面干净
 struct SettingsView: View {
     @ObservedObject var model: SessionModel
     let worker: SettingsWorker
-    @State private var copiedAt = ""
 
     var body: some View {
         NavigationStack {
             Form {
                 stateSection          // 固定信息(环境 / 身份 / 版本)—— 按用户口径放最上面
                 connectionSection     // 固定(可编辑)
-                logSection            // 主 App 步骤与一键复制
+                logSection            // 状态与步骤使用同一份可复制文本
                 crashSection          // 有才显示
             }
-            .navigationTitle("设置")
-            .navigationBarTitleDisplayMode(.inline)
+            .font(.body)
         }
     }
 
@@ -26,7 +23,6 @@ struct SettingsView: View {
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
                 .keyboardType(.URL)
-                .font(.system(size: 14, design: .monospaced))
             TextField("控制手机", text: configurationBinding(.deviceID, value: model.deviceID))
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
@@ -39,12 +35,8 @@ struct SettingsView: View {
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
                 .disabled(model.isRecording)
-            Button("恢复默认连接参数") { worker.reset() }
             if let reason = worker.lockReason {
                 Text(reason).font(.footnote).foregroundStyle(.secondary)
-            }
-            ForEach(worker.snapshot.problems, id: \.self) { problem in
-                Text(problem).font(.footnote).foregroundStyle(.orange)
             }
         } header: {
             Text("连接参数")
@@ -56,52 +48,43 @@ struct SettingsView: View {
         Binding(get: { value }, set: { worker.update(field, value: $0) })
     }
 
-    /// 复制走的内容:一眼能看全「这台手机现在是什么状态」
-    private var debugBundle: String {
+    /// 显示与复制使用同一份状态摘要和步骤日志，不包含登记凭据。
+    private var logText: String {
         """
-        server=\(model.serverURL)
-        identity=\(model.identity)
-        LivK=\(model.livekWord)
-        录=\(Int(model.recordedSeconds)) 收=\(Int(model.serverSeconds)) 句=\(model.lines.count)
-        麦克风模式=\(model.micModeText)(宽谱=\(model.micIsWide))
-        version=\(appVersion)
+        版本：\(appVersion)
+        电脑入口：\(model.serverURL)
+        身份：\(model.identity)
+        媒体连接：\(model.livekWord)
+        采集计时：\(Int(model.recordedSeconds)) 秒
+        已识别音频：\(Int(model.serverSeconds)) 秒
+        字幕条数：\(model.lines.count)
+
+        \(model.notesText.isEmpty ? "暂无日志" : model.notesText)
         """
     }
 
     @ViewBuilder private var crashSection: some View {
         if let crash = CrashLog.previousCrashFile {
             Section("上次异常(黑匣子文件)") {
-                Text(crash).font(.system(size: 11, design: .monospaced))
+                Text(crash).font(.footnote.monospaced()).textSelection(.enabled)
                 Button("清空黑匣子") { CrashLog.clear() }
             }
         } else if let failed = CrashLog.lastFailure {
             Section("上次异常") {
-                Text(failed).font(.system(size: 11, design: .monospaced))
+                Text(failed).font(.footnote.monospaced()).textSelection(.enabled)
                 Button("清空黑匣子") { CrashLog.clear() }
             }
         }
     }
 
-    /// 主 App 日志与一键复制。
+    /// 长按文本使用系统选择与复制。
     private var logSection: some View {
         Section {
-            Text("主程序").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
-            if model.notes.isEmpty {
-                Text("还没有步骤记录").font(.system(size: 10)).foregroundStyle(.secondary)
-            } else {
-                Text(model.notesText)
-                    .font(.system(size: 10, design: .monospaced))
-                    .textSelection(.enabled)
-            }
-            Button {
-                UIPasteboard.general.string = debugBundle
-                copiedAt = "已复制 \(debugBundle.count) 字符"
-            } label: {
-                Label("复制排错信息", systemImage: "square.and.arrow.up")
-            }
-            if !copiedAt.isEmpty {
-                Text(copiedAt).font(.system(size: 11)).foregroundStyle(.secondary)
-            }
+            Text(logText)
+                .font(.footnote.monospaced())
+                .foregroundStyle(.primary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .textSelection(.enabled)
         } header: {
             Text("日志")
         }
@@ -118,20 +101,13 @@ struct SettingsView: View {
         }
     }
 
-    /// 值那一列统一款式:等宽小字 + 绿色,与 App Group / 扩展 两行完全一致
+    /// 字段左对齐，值右对齐；静态信息不使用成功状态色。
     private func valueRow(_ label: String, _ value: String) -> some View {
-        HStack(spacing: 6) {
-            Text(label)
-                .font(.system(size: 12))
-                .foregroundStyle(.secondary)
-                .layoutPriority(1)
-            Spacer(minLength: 4)
+        LabeledContent(label) {
             Text(value)
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(.green)
-                .lineLimit(1)
-                .minimumScaleFactor(0.6)
-                .truncationMode(.middle)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.trailing)
+                .textSelection(.enabled)
         }
     }
 
