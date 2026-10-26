@@ -57,7 +57,8 @@ import Foundation
         let result: CaptureActionResult
         switch action {
         case .start, .recover:
-            if meeting.isPaused { result = .rejected("会议已暂停，请使用继续") }
+            if meeting.actionPending { result = .rejected("请先等待当前会控动作确认") }
+            else if meeting.isPaused { result = .rejected("会议已暂停，请使用继续") }
             else if meeting.terminating { result = .rejected("会议正在结束") }
             else if meeting.wantsCapture && action == .start { result = .rejected("已有采集意图，请在连接页恢复") }
             else if meeting.isRecording { result = .rejected("采集已经开始或正在准备") }
@@ -78,7 +79,8 @@ import Foundation
                 pause(); result = .submitted
             } else { result = .rejected("当前无法暂停采集") }
         case .resume:
-            if meeting.isPaused, !meeting.isRecording, !meeting.actionPending, readiness.problems.isEmpty, meeting.capture?.observedState == "paused",
+            if meeting.isPaused, !meeting.isRecording, !meeting.actionPending,
+               connection.pendingDisconnect == nil, readiness.problems.isEmpty, meeting.capture?.observedState == "paused",
                let resume = commands.resume {
                 resume(); result = .submitted
             } else { result = .rejected("请等待暂停确认后再继续") }
@@ -88,7 +90,7 @@ import Foundation
     }
 
     var canSelectInput: Bool {
-        !meeting.actionPending && !meeting.terminating && !meeting.isRecording &&
+        !meeting.actionPending && !meeting.terminating && !meeting.isRecording && connection.pendingDisconnect == nil &&
         ((!meeting.wantsCapture && !settings.isLocked) ||
          (meeting.isPaused && meeting.capture?.observedState == "paused"))
     }

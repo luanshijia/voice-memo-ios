@@ -705,8 +705,8 @@ extension MeetingClient {
         return view
     }
     static func queueCaptureStart(config: LiveKitConfig, revision: Int, input: InputBinding,
-                                  meetingID: String?) throws {
-        let store = try pendingStore()
+                                  meetingID: String?, store suppliedStore: PendingRequestStore? = nil) throws {
+        let store = try suppliedStore ?? pendingStore()
         try store.transaction(capturePendingKey) { current in
             if let current {
                 let pending = try JSONDecoder().decode(PendingCapture.self, from: current)
@@ -726,10 +726,27 @@ extension MeetingClient {
         }
     }
     static func queueCaptureAction(config: LiveKitConfig, view: CaptureView?, action: String,
-                                   input: InputBinding? = nil) throws {
+                                   input: InputBinding? = nil, store suppliedStore: PendingRequestStore? = nil) throws {
+        let store = try suppliedStore ?? pendingStore()
+        // A new start owns its eventual meeting, even while `view` still points
+        // at the previous ended meeting. Preserve its idempotency key until the
+        // grant is known, then apply the requested halt to that grant.
+        if action == "pause" || action == "end" {
+            let deferred = try store.transaction(capturePendingKey) { current -> (Data?, Bool) in
+                guard let current else { return (nil, false) }
+                var pending = try JSONDecoder().decode(PendingCapture.self, from: current)
+                guard pending.action == "start" else { return (current, false) }
+                guard pending.serverURL == config.url, pending.deviceID == config.device else {
+                    throw failure(63, "待确认申请绑定了另一份配置")
+                }
+                if pending.afterGrant != "end" { pending.afterGrant = action }
+                return (try JSONEncoder().encode(pending), true)
+            }
+            if deferred { return }
+        }
         guard let view = view ?? savedCapture().flatMap({ $0.desiredState == "ended" ? nil : $0 }) else {
             guard action == "pause" || action == "end" else { throw failure(63, "没有可操作的会议") }
-            try pendingStore().transaction(capturePendingKey) { current in
+            try store.transaction(capturePendingKey) { current in
                 guard let current else { throw failure(63, "没有待确认的会议申请") }
                 var pending = try JSONDecoder().decode(PendingCapture.self, from: current)
                 guard pending.action == "start" else { throw failure(63, "会议申请尚未对账") }
@@ -746,7 +763,7 @@ extension MeetingClient {
         let pending = PendingCapture(serverURL: config.url, deviceID: config.device,
             path: SessionControlV2Contract.actionsPath.replacingOccurrences(of: "{meeting_id}", with: view.meetingID),
             body: try JSONSerialization.data(withJSONObject: object), requestID: id, action: action)
-        try pendingStore().transaction(capturePendingKey) { current in
+        try store.transaction(capturePendingKey) { current in
             if let current {
                 let old = try JSONDecoder().decode(PendingCapture.self, from: current)
                 if old.action == "end" && action != "end" { throw failure(63, "结束动作优先，不能恢复采集") }
@@ -754,7 +771,7 @@ extension MeetingClient {
             return (try JSONEncoder().encode(pending), ())
         }
     }
-    static func flushPendingCapture(allowRebase: Bool = true) async throws -> CaptureView? {
+    @MainActor static func flushPendingCapture(allowRebase: Bool = true) async throws -> CaptureView? {
         let store = try pendingStore()
         guard let data = try store.read(capturePendingKey) else { return nil }
         let pending = try JSONDecoder().decode(PendingCapture.self, from: data)
