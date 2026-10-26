@@ -653,7 +653,7 @@ final class SessionModel: ObservableObject {
                 phoneInput.bind(live)
                 do {
                     try await phoneInput.start(context: ExecutionContext(
-                        configurationRevision: cfg.revision, operationID: UUID(),
+                        configurationRevision: AppStorage.configurationRevision, operationID: UUID(),
                         meetingID: card.meetingID, channel: SessionControlContract.mic,
                         generation: card.generation, segmentID: nil))
                 } catch {
