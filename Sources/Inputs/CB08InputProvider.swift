@@ -36,7 +36,7 @@ import LiveKit
         guard context.channel == "external_audio", context.meetingID != nil,
               context.segmentID != nil, context.generation != nil else { throw CB08InputError.invalidContext }
         // Do not adopt a card's unrelated existing recording into a new meeting.
-        guard device.recordState == 0 || device.recordState == 2 else { throw CB08InputError.alreadyRecording }
+        guard device.recordState == 0 || (device.recordState == 2 && (paused || context.resumesPausedDevice)) else { throw CB08InputError.alreadyRecording }
         let decoder = try makeDecoder()
         epoch += 1; let attempt = epoch
         try await publisher.startPCM(in: room)

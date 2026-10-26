@@ -54,6 +54,7 @@ struct ExecutionContext {
     let channel: String
     let generation: Int?
     let segmentID: String?
+    var resumesPausedDevice: Bool = false
 }
 
 enum ConfigurationField { case serverURL, deviceID, userID, credential }

@@ -417,6 +417,11 @@ final class MeetingWorker: ObservableObject {
     /// Explicit local observations preserve user intent across passive disconnects.
     func capturePreparing() { isRecording = true; intent = .wanted }
     func captureInterrupted() {
+        if input.binding.kind == .external, wantsCapture, !isPaused, !terminating {
+            // A lost transport must not leave the card recording indefinitely.
+            controlCapture("pause")
+            return
+        }
         completedCaptureSeconds = recordedSeconds
         stopTimer()
         isRecording = false
@@ -566,7 +571,7 @@ final class MeetingWorker: ObservableObject {
                 do {
                     try await input.start(context: ExecutionContext(configurationRevision: settings.snapshot.revision,
                         operationID: UUID(), meetingID: grant.meetingID, channel: grant.channel,
-                        generation: grant.generation, segmentID: grant.segmentID))
+                        generation: grant.generation, segmentID: grant.segmentID, resumesPausedDevice: resuming))
                 } catch { await input.stop(); await transport.disconnect(live); throw error }
                 guard operation.isCurrent(generation: transport.generation, config: cfg) else {
                     await input.stop(); await transport.disconnect(live); return
