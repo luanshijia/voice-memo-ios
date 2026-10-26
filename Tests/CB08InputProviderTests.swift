@@ -79,6 +79,19 @@ import XCTest
         await provider.stop()
         XCTAssertTrue(device.commands.isEmpty); XCTAssertEqual(publisher.starts, 0)
     }
+    func testConfirmedPausedSelectionUsesNextInputRatherThanClosedSegmentChannel() throws {
+        let f = BusinessFixture(); defer { f.cleanUp() }
+        let fixtures = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(SessionControlV2Contract.fixturesJSON.utf8)) as? [String: Any])
+        var object = try XCTUnwrap((fixtures["valid"] as? [[String: Any]])?.first)
+        object["desired_state"] = "paused"; object["observed_state"] = "paused"
+        object["channel"] = "mic"; object["source_tag"] = "call"
+        object["input"] = ["channel":"external_audio", "input_ref":"cb08"]
+        let selected = try JSONDecoder().decode(CaptureView.self, from: JSONSerialization.data(withJSONObject: object))
+        f.meeting.applyCapture(selected)
+        XCTAssertEqual(f.input.binding.channel, "external_audio")
+        XCTAssertEqual(f.input.binding.sourceTag, .call)
+        XCTAssertFalse(f.meeting.isRecording)
+    }
     func testHardwareButtonsCannotHijackPhoneCapture() async {
         let f = BusinessFixture(); defer { f.cleanUp() }
         f.assistant.accept(.start)

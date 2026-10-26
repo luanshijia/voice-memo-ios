@@ -302,7 +302,7 @@ final class MeetingWorker: ObservableObject {
             if current.meetingID != view.meetingID && current.createdAt > view.createdAt { return }
         }
         if !isRecording, view.desiredState != "ended" {
-            let kind: InputKind = view.channel == "external_audio" ? .external : .phone
+            let kind: InputKind = view.input.channel == "external_audio" ? .external : .phone
             input.adopt(InputBinding(kind: kind, capturePort: kind == .phone ? .nativeMicrophone : .pcmFeed,
                                      sourceTag: SourceTag(rawValue: view.sourceTag) ?? .face2face))
         }
