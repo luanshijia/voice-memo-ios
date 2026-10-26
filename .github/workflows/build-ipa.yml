@@ -12,11 +12,8 @@ on:
 
 jobs:
   build:
-    # 公开仓库的标准 macOS runner 里,macos-15 本身就是 arm64(M1,预装 Xcode 16.x);文档里
-    # arm64 的合法标签只有 macos-latest / macos-14 / macos-15 / macos-26。
-    # 没有 macos-15-arm64 这个标签:用它 job 会永远排队(实测排队 24 小时后被自动取消,
-    # job.started_at 为 null),不是编译失败。
-    runs-on: macos-15
+    # 使用 macOS 26 arm64 runner，作为当前构建队列的替代环境。
+    runs-on: macos-26
     timeout-minutes: 30
 
     steps:
