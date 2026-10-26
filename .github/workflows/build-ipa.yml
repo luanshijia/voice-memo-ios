@@ -62,6 +62,7 @@ jobs:
           test -n "$DEVICE_ID"
           xcodebuild -project VoiceMemo.xcodeproj -scheme VoiceMemo \
             -destination "platform=iOS Simulator,id=$DEVICE_ID" \
+            -derivedDataPath "$RUNNER_TEMP/VoiceMemo-tests" \
             -resultBundlePath "$RUNNER_TEMP/VoiceMemo-tests.xcresult" \
             CODE_SIGNING_ALLOWED=NO test
 
@@ -76,15 +77,8 @@ jobs:
           test -n "$DEVICE_ID"
           xcrun simctl boot "$DEVICE_ID" || true
           xcrun simctl bootstatus "$DEVICE_ID" -b
-          xcodebuild \
-            -project VoiceMemo.xcodeproj \
-            -scheme VoiceMemo \
-            -configuration Release \
-            -destination "platform=iOS Simulator,id=$DEVICE_ID" \
-            -derivedDataPath "$RUNNER_TEMP/VoiceMemo-simulator" \
-            CODE_SIGNING_ALLOWED=NO \
-            build
-          APP="$RUNNER_TEMP/VoiceMemo-simulator/Build/Products/Release-iphonesimulator/VoiceMemo.app"
+          # Reuse the tested simulator binary; avoid rebuilding LiveKit for Release.
+          APP="$RUNNER_TEMP/VoiceMemo-tests/Build/Products/Debug-iphonesimulator/VoiceMemo.app"
           test -d "$APP"
           xcrun simctl install "$DEVICE_ID" "$APP"
           xcrun simctl launch "$DEVICE_ID" com.luanshijia.voicememo
