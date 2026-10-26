@@ -54,9 +54,9 @@ import LiveKit
     }
     /// Close the gate synchronously, before any asynchronous track disconnect.
     func closeGate() { accepting = false; flowing = false; epoch += 1; device.discardQueuedPackets() }
-    func requestHalt(_ action: CB08RecordAction, forceDevice: Bool = false) {
+    func requestHalt(_ action: CB08RecordAction) {
         closeGate(); paused = action == .pause
-        if pendingHalt != action, ownsRecording || forceDevice {
+        if pendingHalt != action, ownsRecording {
             device.command(action); pendingHalt = action
         }
         if action == .stop { ownsRecording = false }
@@ -66,8 +66,8 @@ import LiveKit
         if let room { await publisher.stopPCM(in: room) }
         room = nil; decoder = nil; context = nil
     }
-    func stop(forceDevice: Bool = false) async {
-        requestHalt(.stop, forceDevice: forceDevice)
+    func stop() async {
+        requestHalt(.stop)
         if let room { await publisher.stopPCM(in: room) }
         room = nil; decoder = nil; context = nil
     }

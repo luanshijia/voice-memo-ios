@@ -17,8 +17,10 @@ import XCTest
     final class Publisher: AudioPublishing {
         var microphone: [Bool] = []
         var failStart = false
+        var onDisable: (() -> Void)?
         func setNativeMicrophone(_ enabled: Bool, in room: Room) async throws {
             microphone.append(enabled)
+            if !enabled { onDisable?() }
             if enabled && failStart { throw URLError(.cannotConnectToHost) }
         }
     }
@@ -36,6 +38,7 @@ import XCTest
     var observations: [String] = []
     var failPublishing = false
     var viewHandler: (@MainActor () async throws -> CaptureDeviceView)?
+    var observeHandler: (@MainActor (String) async throws -> Void)?
 
     init() throws {
         let suite = "VoiceMemo.CaptureLifecycle." + UUID().uuidString
@@ -53,7 +56,12 @@ import XCTest
         view = try Self.projection()
         let control = CaptureControlOperations(
             queueStart: { [unowned self] _, _, _, _ in pending = true },
-            queueAction: { _, _, _, _ in },
+            queueAction: { [unowned self] _, _, action, _ in
+                if action == "pause" || action == "end" {
+                    view = try Self.projection(["desired_state": action == "pause" ? "paused" : "ended", "state_revision": 2])
+                    pending = true
+                }
+            },
             flush: { [unowned self] in
                 flushes += 1
                 guard pending else { return nil }
@@ -66,6 +74,7 @@ import XCTest
             },
             observe: { [unowned self] _, _, observed in
                 observations.append(observed)
+                if let observeHandler { try await observeHandler(observed) }
                 if observed == "publishing" && failPublishing { throw URLError(.timedOut) }
             }, hasPending: { [unowned self] in pending })
         connection = ConnectionWorker(settings: settings, captureControl: control,
@@ -206,6 +215,30 @@ import XCTest
         try await f.cleanUp()
     }
 
+    func testLocalEndStopsMicrophoneBeforePublishingRequestCompletes() async throws {
+        let f = try CaptureLifecycleFixture()
+        let gate = CaptureGate()
+        let publishing = expectation(description: "publishing request waiting")
+        let stopped = expectation(description: "microphone disabled before network returns")
+        f.publisher.onDisable = { stopped.fulfill() }
+        f.observeHandler = { observed in
+            if observed == "publishing" { publishing.fulfill(); await gate.wait() }
+        }
+        f.meeting.startCapture()
+        let start = f.connection.connecting
+        await fulfillment(of: [publishing], timeout: 2)
+        f.meeting.terminateMeeting()
+        let teardown = f.connection.pendingDisconnect
+        await fulfillment(of: [stopped], timeout: 2)
+        XCTAssertEqual(f.publisher.microphone, [true, false])
+        XCTAssertNotNil(f.connection.pendingDisconnect)
+        gate.open()
+        await start?.value
+        await teardown?.value
+        XCTAssertNil(f.connection.live)
+        try await f.cleanUp()
+    }
+
     func testEndDuringNewStartKeepsRequestBoundToNewGrantInsteadOfOldMeeting() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -226,5 +259,29 @@ import XCTest
         XCTAssertEqual(pending["afterGrant"] as? String, "end")
         XCTAssertEqual(pending["path"] as? String, SessionControlV2Contract.startPath)
         XCTAssertEqual(pending["body"] as? String, original["body"] as? String)
+    }
+
+    func testDeferredEndIsReplacedAtomicallyAndSurvivesStoreReopen() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = PendingRequestStore(root: root)
+        let key = "vm.pendingCaptureV2"
+        let config = LiveKitConfig(url: "wss://example.test", device: "phone", userID: "user")
+        try MeetingClient.queueCaptureStart(config: config, revision: 1, input: .phone, meetingID: nil, store: store)
+        try MeetingClient.queueCaptureAction(config: config, view: nil, action: "end", store: store)
+        let data = try XCTUnwrap(try store.read(key))
+        let original = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let request = try XCTUnwrap(original["requestID"] as? String)
+        let grant = try CaptureLifecycleFixture.projection()
+        XCTAssertTrue(try MeetingClient.completeCaptureRequest(requestID: request, view: grant, store: store))
+        let reopened = PendingRequestStore(root: root)
+        let saved = try XCTUnwrap(try reopened.read(key))
+        let end = try XCTUnwrap(JSONSerialization.jsonObject(with: saved) as? [String: Any])
+        XCTAssertEqual(end["action"] as? String, "end")
+        XCTAssertTrue((end["path"] as? String)?.contains(grant.meetingID) == true)
+        XCTAssertNotEqual(end["requestID"] as? String, request)
+        // A late replay of the start must not remove the replacement end.
+        XCTAssertFalse(try MeetingClient.completeCaptureRequest(requestID: request, view: grant, store: reopened))
+        XCTAssertEqual(try reopened.read(key), saved)
     }
 }

@@ -51,7 +51,7 @@ import LiveKit
     func requestHalt(pausing: Bool) {
         isCapturing = false
         // SDK commands are local BLE writes: do not wait for network/room cleanup.
-        external.requestHalt(pausing ? .pause : .stop, forceDevice: !pausing && binding.kind == .external)
+        external.requestHalt(pausing ? .pause : .stop)
     }
     func pause() async {
         isCapturing = false
@@ -65,7 +65,7 @@ import LiveKit
     func finish() async {
         isCapturing = false
         await provider.stop()
-        await external.stop(forceDevice: binding.kind == .external)
+        await external.stop()
     }
     func interrupted() {
         provider.bind(nil); external.interrupted(); isCapturing = false

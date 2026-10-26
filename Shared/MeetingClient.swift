@@ -755,14 +755,8 @@ extension MeetingClient {
             }
             return
         }
-        let id = UUID().uuidString.lowercased()
-        var object: [String: Any] = ["request_id": id, "device_id": config.device,
-            "expected_revision": view.stateRevision, "generation": view.generation,
-            "segment_id": view.segmentID, "action": action]
-        if let input { object["input"] = ["channel": input.channel, "input_ref": input.inputRef]; object["source_tag"] = input.sourceTag.rawValue }
-        let pending = PendingCapture(serverURL: config.url, deviceID: config.device,
-            path: SessionControlV2Contract.actionsPath.replacingOccurrences(of: "{meeting_id}", with: view.meetingID),
-            body: try JSONSerialization.data(withJSONObject: object), requestID: id, action: action)
+        let pending = try captureActionRecord(serverURL: config.url, deviceID: config.device,
+                                             view: view, action: action, input: input)
         try store.transaction(capturePendingKey) { current in
             if let current {
                 let old = try JSONDecoder().decode(PendingCapture.self, from: current)
@@ -771,6 +765,33 @@ extension MeetingClient {
             return (try JSONEncoder().encode(pending), ())
         }
     }
+
+    private static func captureActionRecord(serverURL: String, deviceID: String, view: CaptureView,
+                                             action: String, input: InputBinding? = nil) throws -> PendingCapture {
+        let id = UUID().uuidString.lowercased()
+        var object: [String: Any] = ["request_id": id, "device_id": deviceID,
+            "expected_revision": view.stateRevision, "generation": view.generation,
+            "segment_id": view.segmentID, "action": action]
+        if let input { object["input"] = ["channel": input.channel, "input_ref": input.inputRef]; object["source_tag"] = input.sourceTag.rawValue }
+        return PendingCapture(serverURL: serverURL, deviceID: deviceID,
+            path: SessionControlV2Contract.actionsPath.replacingOccurrences(of: "{meeting_id}", with: view.meetingID),
+            body: try JSONSerialization.data(withJSONObject: object), requestID: id, action: action)
+    }
+
+    /// Atomically replace a deferred start with its halt, or clear an ordinary
+    /// completed request. A failed write leaves the original intent available.
+    static func completeCaptureRequest(requestID: String, view: CaptureView,
+                                        store: PendingRequestStore) throws -> Bool {
+        try store.transaction(capturePendingKey) { current in
+            guard let current, let latest = try? JSONDecoder().decode(PendingCapture.self, from: current),
+                  latest.requestID == requestID else { return (current, false) }
+            guard let after = latest.afterGrant else { return (nil, false) }
+            let replacement = try captureActionRecord(serverURL: latest.serverURL, deviceID: latest.deviceID,
+                                                       view: view, action: after)
+            return (try JSONEncoder().encode(replacement), true)
+        }
+    }
+
     @MainActor static func flushPendingCapture(allowRebase: Bool = true) async throws -> CaptureView? {
         let store = try pendingStore()
         guard let data = try store.read(capturePendingKey) else { return nil }
@@ -798,14 +819,7 @@ extension MeetingClient {
             return fresh // A conflicting resume never reopens input automatically.
         }
         try saveCapture(view) // Save the granted identity/segment before forgetting the request.
-        let after: String? = try store.transaction(capturePendingKey) { current in
-            guard let current, let latest = try? JSONDecoder().decode(PendingCapture.self, from: current),
-                  latest.requestID == pending.requestID else { return (current, nil) }
-            return (nil, latest.afterGrant)
-        }
-        if let after {
-            let config = LiveKitConfig(url: pending.serverURL, device: pending.deviceID, userID: "")
-            try queueCaptureAction(config: config, view: view, action: after)
+        if try completeCaptureRequest(requestID: pending.requestID, view: view, store: store) {
             return try await flushPendingCapture()
         }
         return view

@@ -38,6 +38,8 @@ import LiveKit
     private let disconnectRoom: (@MainActor (Room) async -> Void)?
     private var connectionAttemptID: UUID?
     private var disconnectID: UUID?
+    private var pendingInputCleanup: Task<Void, Never>?
+    private var inputCleanupID: UUID?
     var onNote: ((String) -> Void)?
     var onProtocolIssue: ((String) -> Void)?
     var onEnded: ((String) -> Void)?
@@ -116,11 +118,22 @@ import LiveKit
         live = nil
         let id = UUID()
         disconnectID = id
+        // Stop input independently of a start task awaiting a control response.
+        // Input cleanups stay serialized, without waiting for network teardown.
+        let priorInputCleanup = pendingInputCleanup
+        let cleanupID = UUID()
+        inputCleanupID = cleanupID
+        let cleanup = Task {
+            defer { if inputCleanupID == cleanupID { pendingInputCleanup = nil; inputCleanupID = nil } }
+            await priorInputCleanup?.value
+            await beforeDisconnect()
+        }
+        pendingInputCleanup = cleanup
         pendingDisconnect = Task {
             defer { if disconnectID == id { pendingDisconnect = nil; disconnectID = nil } }
             await previous?.value
+            await cleanup.value
             await inflight?.value
-            await beforeDisconnect()
             if let target { await self.disconnect(target) }
             await completion()
         }

@@ -7,6 +7,7 @@ import LiveKit
 
     private let publisher: AudioPublishing
     private var room: Room?
+    private var epoch = 0
 
     init(publisher: AudioPublishing? = nil) {
         self.publisher = publisher ?? AudioPublisher()
@@ -14,11 +15,16 @@ import LiveKit
 
     func prepare() async throws {}
 
-    func bind(_ room: Room?) { self.room = room }
+    func bind(_ room: Room?) { epoch += 1; self.room = room }
 
     func start(context: ExecutionContext) async throws {
         guard let room else { throw PhoneInputError.noActiveRoom }
+        let attempt = epoch
         try await publisher.setNativeMicrophone(true, in: room)
+        guard attempt == epoch else {
+            try? await publisher.setNativeMicrophone(false, in: room)
+            throw CancellationError()
+        }
     }
 
     func pause() async throws {
@@ -32,6 +38,7 @@ import LiveKit
     }
 
     func stop() async {
+        epoch += 1
         guard let room else { return }
         self.room = nil
         try? await publisher.setNativeMicrophone(false, in: room)

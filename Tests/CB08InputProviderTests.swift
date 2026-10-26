@@ -87,6 +87,17 @@ import XCTest
         do { try await provider.start(context: context()); XCTFail("unrelated paused recording adopted") } catch {}
         XCTAssertEqual(publisher.starts, 0); XCTAssertTrue(device.commands.isEmpty)
     }
+    func testRejectedStartCannotStopIndependentCardRecording() async {
+        let device = Device(); device.recordState = 1
+        let publisher = Publisher()
+        let provider = CB08InputProvider(device: device, publisher: publisher, makeDecoder: { Decoder() })
+        provider.bind(Room())
+        do { try await provider.start(context: context()); XCTFail("independent recording adopted") } catch {}
+        provider.requestHalt(.stop)
+        await provider.stop()
+        XCTAssertEqual(device.recordState, 1)
+        XCTAssertTrue(device.commands.isEmpty)
+    }
     func testConfirmedPausedSelectionUsesNextInputRatherThanClosedSegmentChannel() throws {
         let f = BusinessFixture(); defer { f.cleanUp() }
         let fixtures = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(SessionControlV2Contract.fixturesJSON.utf8)) as? [String: Any])
