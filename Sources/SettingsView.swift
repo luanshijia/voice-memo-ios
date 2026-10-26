@@ -19,7 +19,7 @@ struct SettingsView: View {
 #endif
                 stateSection          // 固定信息(环境 / 身份 / 版本)—— 按用户口径放最上面
                 connectionSection     // 固定(可编辑)
-                logSection            // 日志:主 App 步骤 + 扩展日志 + 一键复制(用户口径 2026-10-19 合并)
+                logSection            // 主 App 步骤与一键复制
                 crashSection          // 有才显示
             }
             .navigationTitle("设置")
@@ -89,9 +89,7 @@ struct SettingsView: View {
         }
     }
 
-    /// 日志(用户口径 2026-10-19):把「主程序步骤」与「扩展日志」并进同一个分区,
-    /// 内部只用两行灰字小标题区分来源 —— 两者是不同进程的证据,不是同一事实的副本。
-    /// 底部保留唯一的复制入口(原「排错」分区不再单列)。
+    /// 主 App 日志与一键复制。
     private var logSection: some View {
         Section {
             Text("主程序").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
@@ -102,8 +100,6 @@ struct SettingsView: View {
                     .font(.system(size: 10, design: .monospaced))
                     .textSelection(.enabled)
             }
-            Text("扩展").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
-            ExtLogBody()
             Button {
                 UIPasteboard.general.string = debugBundle
                 copiedAt = "已复制 \(debugBundle.count) 字符"
@@ -122,8 +118,6 @@ struct SettingsView: View {
 
     private var stateSection: some View {
         Section {
-            AppGroupRow()
-            ExtensionRow()
             valueRow("身份", model.identity)
             valueRow("版本", appVersion)
         } header: {
