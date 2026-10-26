@@ -18,6 +18,7 @@ enum CB08RecordAction: Int { case start = 1, stop = 3, pause = 5, resume = 7 }
     var onPacket: ((Data) -> Void)? { get set }
     var onLoss: (() -> Void)? { get set }
     func command(_ action: CB08RecordAction)
+    func discardQueuedPackets()
 }
 
 /// Bound delegate-to-main handoff; no unbounded backlog of PCM work.
@@ -25,10 +26,13 @@ private final class CB08PacketBudget: @unchecked Sendable {
     private let lock = NSLock()
     private var pending = 0
     private var lost = 0
-    func reserve() -> Bool {
+    private var epoch = 0
+    func invalidate() { lock.lock(); epoch += 1; lock.unlock() }
+    func current(_ value: Int) -> Bool { lock.lock(); defer { lock.unlock() }; return value == epoch }
+    func reserve() -> Int? {
         lock.lock(); defer { lock.unlock() }
-        guard pending < 8 else { lost += 1; return false }
-        pending += 1; return true
+        guard pending < 8 else { lost += 1; return nil }
+        pending += 1; return epoch
     }
     func release() -> Int {
         lock.lock(); defer { lock.unlock() }
@@ -91,7 +95,7 @@ private final class CB08PacketBudget: @unchecked Sendable {
 #endif
     }
     func disconnect() {
-        stopScan(); hardwareIntent = nil; connected = false; recordState = nil
+        stopScan(); hardwareIntent = nil; discardQueuedPackets(); connected = false; recordState = nil
         status = "已请求断开"; onLoss?()
 #if !targetEnvironment(simulator)
         node.closeConnect()
@@ -105,7 +109,10 @@ private final class CB08PacketBudget: @unchecked Sendable {
 #endif
         status = "已请求设备状态"
     }
-    func cancelHardwareIntent() { hardwareIntent = nil }
+    func cancelHardwareIntent(unless action: CB08RecordAction? = nil) {
+        if hardwareIntent != action { hardwareIntent = nil }
+    }
+    func discardQueuedPackets() { budget.invalidate() }
     func command(_ action: CB08RecordAction) {
         guard connected else { return }
         let acknowledge = hardwareIntent == action
@@ -150,7 +157,7 @@ private final class CB08PacketBudget: @unchecked Sendable {
             }
         case 2:
             guard let observed = integer(data["connect_state"]) else { status = "连接状态未知"; return }
-            connected = observed == 1; hardwareIntent = nil; recordState = nil
+            connected = observed == 1; hardwareIntent = nil; discardQueuedPackets(); recordState = nil
             status = connected ? "已连接，等待刷新状态" : "已断开"
             if connected { refreshStatus() } else { onLoss?() }
         case 3, 9:
@@ -185,11 +192,12 @@ extension CB08SDKBridge: WindBleDelegate {
         Task { @MainActor [weak self] in self?.receiveEvent(data) }
     }
     nonisolated func deviceRecord(_ recordData: Data) {
-        guard budget.reserve() else { return }
+        guard let epoch = budget.reserve() else { return }
         let packet = Data(recordData)
         Task { @MainActor [weak self] in
             guard let self else { return }
             let lost = self.budget.release()
+            guard self.budget.current(epoch) else { return }
             self.receivePacket(packet, lost: lost)
         }
     }

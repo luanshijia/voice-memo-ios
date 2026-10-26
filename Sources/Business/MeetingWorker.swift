@@ -269,7 +269,16 @@ final class MeetingWorker: ObservableObject {
                 if let reconciled = try await transport.flushCapture() { applyCapture(reconciled) }
                 let state = try await transport.captureView(config: pollConfig)
                 guard pollConfig.url == cfg.url, pollConfig.device == cfg.device else { continue }
-                if let view = state.meeting { applyCapture(view, pendingReports: state.pendingReports.count) }
+                if let view = state.meeting {
+                    applyCapture(view, pendingReports: state.pendingReports.count)
+                    // A relaunch has no active publisher. Complete a pause/end observation
+                    // even when the app previously exited after the durable action ack.
+                    if view.desiredState != "active", !isRecording, !input.isCapturing,
+                       transport.connecting == nil, transport.pendingDisconnect == nil,
+                       view.observedState == "pending" {
+                        try await transport.observeCapture(config: pollConfig, view: view, observed: "stopped")
+                    }
+                }
                 actionPending = MeetingClient.hasPendingCapture()
                 if !actionPending { localCaptureDesired = nil }
                 if artifactDeliveryTask == nil, !state.pendingReports.isEmpty {
@@ -450,6 +459,7 @@ final class MeetingWorker: ObservableObject {
         if action == "end" { captureStopped() }
         else { isRecording = false; intent = .wanted }
         terminating = action == "end"
+        input.device.cancelHardwareIntent(unless: action == "pause" ? .pause : .stop)
         input.closeGate()
         transport.enqueueDisconnect(beforeDisconnect: { [input] in
             if action == "pause" { await input.pause() } else { await input.stop() }

@@ -44,6 +44,7 @@ import LiveKit
         }
         self.decoder = decoder; self.context = context
         decodedPackets = 0; decodeFailures = 0; submittedSamples = 0
+        device.discardQueuedPackets()
         failure = nil; flowing = false; accepting = true
         let resume = paused || device.recordState == 2
         paused = false
@@ -51,7 +52,7 @@ import LiveKit
         device.command(resume ? .resume : .start)
     }
     /// Close the gate synchronously, before any asynchronous track disconnect.
-    func closeGate() { accepting = false; flowing = false; epoch += 1 }
+    func closeGate() { accepting = false; flowing = false; epoch += 1; device.discardQueuedPackets() }
     func pause() async {
         closeGate(); paused = true
         if ownsRecording { device.command(.pause) }

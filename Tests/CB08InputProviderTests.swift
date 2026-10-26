@@ -10,6 +10,8 @@ import XCTest
         var onPacket: ((Data) -> Void)?
         var onLoss: (() -> Void)?
         var commands: [CB08RecordAction] = []
+        var discarded = 0
+        func discardQueuedPackets() { discarded += 1 }
         func command(_ action: CB08RecordAction) {
             commands.append(action)
             switch action { case .start, .resume: recordState = 1; case .pause: recordState = 2; case .stop: recordState = 0 }
@@ -48,6 +50,7 @@ import XCTest
         device.onPacket?(Data([1]))
         XCTAssertEqual(publisher.packets, 1)
         XCTAssertEqual(publisher.stops, 2)
+        XCTAssertGreaterThanOrEqual(device.discarded, 4)
     }
     func testPhoneContextCannotPublishExternalAudio() async {
         let device = Device(); let publisher = Publisher()
