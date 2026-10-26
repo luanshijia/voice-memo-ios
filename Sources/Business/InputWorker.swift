@@ -48,7 +48,11 @@ import LiveKit
         if binding.kind == .phone { try await provider.start(context: context); isCapturing = true }
         else { try await external.start(context: context) }
     }
-    func closeGate() { if binding.kind == .external { external.closeGate() }; isCapturing = false }
+    func requestHalt(pausing: Bool) {
+        isCapturing = false
+        // SDK commands are local BLE writes: do not wait for network/room cleanup.
+        external.requestHalt(pausing ? .pause : .stop, forceDevice: !pausing && binding.kind == .external)
+    }
     func pause() async {
         isCapturing = false
         if binding.kind == .phone { await provider.stop() } else { await external.pause() }
@@ -57,6 +61,11 @@ import LiveKit
         isCapturing = false
         await provider.stop()
         await external.stop()
+    }
+    func finish() async {
+        isCapturing = false
+        await provider.stop()
+        await external.stop(forceDevice: binding.kind == .external)
     }
     func interrupted() {
         provider.bind(nil); external.interrupted(); isCapturing = false

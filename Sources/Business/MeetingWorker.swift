@@ -450,7 +450,7 @@ final class MeetingWorker: ObservableObject {
     private func controlCapture(_ action: String) {
         let config = cfg
         do { try transport.queueCaptureAction(config: config, view: capture, action: action) }
-        catch { note("动作未保存：\(error.localizedDescription)"); return }
+        catch { input.device.cancelHardwareIntent(); note("动作未保存：\(error.localizedDescription)"); return }
         localCaptureDesired = action == "pause" ? "paused" : "ended"
         actionPending = true
         let generation = transport.invalidate()
@@ -460,9 +460,9 @@ final class MeetingWorker: ObservableObject {
         else { isRecording = false; intent = .wanted }
         terminating = action == "end"
         input.device.cancelHardwareIntent(unless: action == "pause" ? .pause : .stop)
-        input.closeGate()
+        input.requestHalt(pausing: action == "pause")
         transport.enqueueDisconnect(beforeDisconnect: { [input] in
-            if action == "pause" { await input.pause() } else { await input.stop() }
+            if action == "pause" { await input.pause() } else { await input.finish() }
         }) {}
         let disconnect = transport.pendingDisconnect
         Task { [weak self] in
@@ -543,7 +543,7 @@ final class MeetingWorker: ObservableObject {
                 let recoveryID = capture.flatMap { $0.canRecover ? $0.meetingID : nil }
                 try transport.queueCaptureStart(config: config, input: input.binding, meetingID: recoveryID)
             }
-        } catch { note("开始意图未保存：\(error.localizedDescription)"); return }
+        } catch { input.device.cancelHardwareIntent(); note("开始意图未保存：\(error.localizedDescription)"); return }
         let generation = transport.invalidate()
         let operation = SessionOperation(generation: generation, config: config)
         actionPending = true
