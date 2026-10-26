@@ -133,14 +133,14 @@ final class MeetingWorker: ObservableObject {
             changes.sink { [weak self] _ in self?.objectWillChange.send() }.store(in: &subscriptions)
         }
         // 连接态的文字由 board 的 observed 承载(底栏 LivK/RepK + 设置页派生行),不再存一份旧文案。
-        transport.room.onNote = { [weak self] s in self?.note(s) }
-        transport.room.onProtocolIssue = { [weak self] kind in self?.noteProtocolIssue(kind) }
-        transport.room.onEnded = { [weak self] s in
+        transport.onNote = { [weak self] s in self?.note(s) }
+        transport.onProtocolIssue = { [weak self] kind in self?.noteProtocolIssue(kind) }
+        transport.onEnded = { [weak self] s in
             guard let self else { return }
             self.note("连接结束:\(s)")
             self.captureInterrupted()
         }
-        transport.room.onTranscript = { [weak self] type, who, audioS, text, gap, ts, raw in
+        transport.onTranscript = { [weak self] type, who, audioS, text, gap, ts, raw in
             guard let self else { return }
             // 契约 §三.5 / §五:v2 必须按场次过滤 —— 本机没有当前场次,或场次不符,一律丢弃。
             let incomingSession = (raw["session_id"] as? String) ?? ""
@@ -187,7 +187,7 @@ final class MeetingWorker: ObservableObject {
                 // 因此收到**本场首条有效 final** 后补发一次当前档位:每场只一次,带 v2 + 当前 session_id。
                 if !self.didResyncSumMode, !self.sessionID.isEmpty {
                     self.didResyncSumMode = true
-                    Task { await self.transport.room.send(self.summodePayload(self.sumMode)) }
+                    Task { await self.transport.send(self.summodePayload(self.sumMode)) }
                     self.note("已补发当前档位 \(self.sumMode)(本场首条定稿后)")
                 }
                 if !text.isEmpty || raw["seq"] != nil {
@@ -483,7 +483,7 @@ final class MeetingWorker: ObservableObject {
         sumMode = m
         note("会中提要档位 → \(m == "auto" ? "自动" : "手动")")
         guard !sessionID.isEmpty else { return }   // 未在录音:只在本机切档,不发(契约要求 v2 带场次号)
-        Task { await transport.room.send(summodePayload(m)) }
+        Task { await transport.send(summodePayload(m)) }
     }
 
     /// Clear device-owned, in-memory data for the current meeting while keeping
@@ -550,7 +550,7 @@ final class MeetingWorker: ObservableObject {
                 grantedMeetingID = card.meetingID
                 grantedServerGeneration = card.generation
                 guard operation.isCurrent(generation: self.transport.generation, config: self.cfg) else { throw CancellationError() }
-                let live = try await transport.room.connect(url: card.url, token: card.token, identity: cfg.identity)
+                let live = try await transport.connect(url: card.url, token: card.token, identity: cfg.identity)
                 input.bind(live)
                 do {
                     try await input.start(context: ExecutionContext(
@@ -559,12 +559,12 @@ final class MeetingWorker: ObservableObject {
                         generation: card.generation, segmentID: nil))
                 } catch {
                     await input.stop()
-                    await transport.room.disconnect(live)
+                    await transport.disconnect(live)
                     throw error
                 }
                 guard operation.isCurrent(generation: self.transport.generation, config: self.cfg) else {   // 这一轮已被停止/重开取代
                     await input.stop()
-                    await self.transport.room.disconnect(live)                   // 只断自己这条,不碰新会话
+                    await self.transport.disconnect(live)                   // 只断自己这条,不碰新会话
                     do {
                         try MeetingClient.queueMicStop(serverURL: cfg.url,
                                                               meetingID: card.meetingID,
@@ -588,7 +588,7 @@ final class MeetingWorker: ObservableObject {
                     self.note("手机采集状态待同步: \(error.localizedDescription)")
                 }
                 guard operation.isCurrent(generation: self.transport.generation, config: self.cfg) else { return }
-                await transport.room.send(self.summodePayload(self.sumMode))   // 让家里跟上本机档位
+                await transport.send(self.summodePayload(self.sumMode))   // 让家里跟上本机档位
                 guard operation.isCurrent(generation: self.transport.generation, config: self.cfg) else { return }
                 self.startTimer()
                 self.syncBoard()

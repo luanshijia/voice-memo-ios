@@ -4,7 +4,7 @@ import LiveKit
 
 /// Owns transport instances, async generations and disconnection serialization.
 @MainActor final class ConnectionWorker: ObservableObject {
-    let room: VoiceRoom
+    private let room: VoiceRoom
     @Published private(set) var generation = 0
     @Published private(set) var live: Room?
     @Published private(set) var connecting: Task<Void, Never>?
@@ -14,6 +14,10 @@ import LiveKit
         desired: .wanted, observed: .notStarted)
     private let settings: SettingsWorker
     private let probeHost: (String, UInt16) async -> Bool
+    var onNote: ((String) -> Void)?
+    var onProtocolIssue: ((String) -> Void)?
+    var onEnded: ((String) -> Void)?
+    var onTranscript: ((String, String, Double, String, Double?, Double, [String: Any]) -> Void)?
     var controlObservation: () -> MeetingContext = { .empty }
     var recognitionProgress: () -> Double = { 0 }
 
@@ -24,7 +28,18 @@ import LiveKit
         self.probeHost = probeHost
         self.room.onState = { [weak self] _ in self?.objectWillChange.send() }
         self.room.onEndReason = { [weak self] reason in self?.endReason = reason }
+        self.room.onNote = { [weak self] note in self?.onNote?(note) }
+        self.room.onProtocolIssue = { [weak self] issue in self?.onProtocolIssue?(issue) }
+        self.room.onEnded = { [weak self] reason in self?.onEnded?(reason) }
+        self.room.onTranscript = { [weak self] type, who, seconds, text, gap, ts, raw in
+            self?.onTranscript?(type, who, seconds, text, gap, ts, raw)
+        }
     }
+    func connect(url: String, token: String, identity: String) async throws -> Room {
+        try await room.connect(url: url, token: token, identity: identity)
+    }
+    func disconnect(_ target: Room) async { await room.disconnect(target) }
+    func send(_ payload: [String: Any]) async { await room.send(payload) }
     @discardableResult func invalidate() -> Int { generation += 1; return generation }
     /// Capture the previous wait synchronously before scheduling a new attempt.
     /// A stop in the same event-loop turn must never become its own predecessor.
