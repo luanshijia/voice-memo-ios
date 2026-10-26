@@ -1,4 +1,3 @@
-import LiveKit
 import SwiftUI
 
 @main
@@ -10,7 +9,7 @@ struct VoiceMemoApp: App {
     /// 官方文档 Docs/audio.md 提供这个开关,并建议在启动时设一次。
     /// 代价:停止后音频会话仍然 active → 别的 App 的音乐不会自动恢复(可接受)。
     init() {
-        AudioManager.shared.audioSession.isAutomaticDeactivationEnabled = false
+        AudioPublisher.configureAudioSession()
         CrashLog.readPreviousRun()   // 先读上一轮留下的崩溃痕迹(必须在 install() 清空文件之前)
         CrashLog.install()           // 再装崩溃处理器
     }

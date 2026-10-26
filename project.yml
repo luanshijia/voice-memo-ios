@@ -35,63 +35,14 @@ targets:
         BUNDLE_LOADER: "$(TEST_HOST)"
         CODE_SIGNING_ALLOWED: NO
         SWIFT_VERSION: "5.0"
-  # 广播扩展作为第二个 LiveKit 参与者,只发布 ReplayKit audioApp 系统声音。
-  VoiceMemoBroadcast:
-    type: app-extension
-    platform: iOS
-    sources:
-      - Broadcast
-      - Shared
-    dependencies:
-      # 扩展独立连入会议室;identity 与主 App 的麦克风参与者分开。
-      - package: LiveKit
-        product: LiveKit
-    info:
-      path: Broadcast/Info.plist
-      properties:
-        # 必须是纯 ASCII:SideStore 给扩展注册 App ID 时会拼出
-        # "<App 显示名> <扩展显示名>" 当 appIdName,中文/非 ASCII 会被 Apple 直接拒绝
-        # (实测报错:An invalid value ... was provided for the parameter 'appIdName'.)
-        # → 显示名一律用纯 ASCII,才能走「每个扩展注册 App ID」这条路。
-        CFBundleDisplayName: VoiceMemoBroadcast
-        # 版本号的唯一真相源是下面 settings.MARKETING_VERSION / CURRENT_PROJECT_VERSION。
-        # 这里必须写 $(...) 引用:手写字面量会【覆盖】settings(实测 0.9.5 那次就是因为
-        # 这里还写着 0.9.4,打出来的包版本号没变)。
-        CFBundleShortVersionString: "$(MARKETING_VERSION)"
-        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
-        # 必须写在 properties 里:XcodeGen 会用这里的属性【覆盖】path 指向的 Info.plist,
-        # 只写在文件里会被覆盖掉(实测:CI 报 "NSExtension:NSExtensionPointIdentifier Does Not Exist")
-        NSExtension:
-          NSExtensionPointIdentifier: com.apple.broadcast-services-upload
-          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).SampleHandler
-        # 扩展自己要用 https 连回家里(回信道 ②):给本地网络权限说明
-        NSLocalNetworkUsageDescription: 连接你家里的转写服务(xEdge 私网)
-    settings:
-      base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.luanshijia.voicememo.broadcast
-        PRODUCT_NAME: VoiceMemoBroadcast
-        MARKETING_VERSION: "0.10.0"
-        CURRENT_PROJECT_VERSION: "105"
-        SWIFT_VERSION: "5.0"
-        IPHONEOS_DEPLOYMENT_TARGET: "17.0"
-        # LiveKit 的动态框架(RTC/UniFFI)由主 App 嵌入;扩展运行时从主 App Frameworks 查找。
-        LD_RUNPATH_SEARCH_PATHS:
-          - $(inherited)
-          - "@executable_path/../../Frameworks"
-        TARGETED_DEVICE_FAMILY: "1"
-        GENERATE_INFOPLIST_FILE: NO
-        # App Group:主 App 传入短期扩展 token,并读取扩展状态日志。
-        CODE_SIGN_ENTITLEMENTS: Broadcast/Broadcast.entitlements
-        CODE_SIGNING_ALLOWED: NO
-        CODE_SIGN_IDENTITY: ""
-        CODE_SIGNING_REQUIRED: NO
-
-
   VoiceMemo:
     type: application
     platform: iOS
     sources:
-      - Sources
+      - path: Sources
+        excludes:
+          # Retained on disk as a reviewed migration backup; never compiled into new builds.
+          - BroadcastProbe.swift
       - Shared
       - Assets.xcassets        # 主屏图标(2026-10-15 加):以前包里根本没有图标,装到主屏是空白的
       - path: Contracts/revision.json
@@ -99,10 +50,6 @@ targets:
     dependencies:
       - package: LiveKit
         product: LiveKit
-      # 扩展嵌进 PlugIns/;不签名 —— 侧载时由 SideStore 一起重签
-      - target: VoiceMemoBroadcast
-        embed: true
-        codeSign: false
     info:
       path: Support/Info.plist
       properties:

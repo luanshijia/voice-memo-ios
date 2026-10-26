@@ -113,19 +113,14 @@ jobs:
           set -eux
           APP="$RUNNER_TEMP/VoiceMemo.xcarchive/Products/Applications/VoiceMemo.app"
           APPEX="$APP/PlugIns/VoiceMemoBroadcast.appex"
-          test -d "$APPEX"
-          # 顺序:先嵌套(扩展)后主包。用 XcodeGen 里声明的同一份 entitlements 文件。
-          codesign --force --sign - --timestamp=none --entitlements Broadcast/Broadcast.entitlements "$APPEX"
+          test ! -e "$APPEX"
           codesign --force --sign - --timestamp=none --entitlements Support/VoiceMemo.entitlements "$APP"
-          echo "=== 扩展 entitlements ==="; codesign -d --entitlements :- "$APPEX" 2>&1 || true
           echo "=== 主包 entitlements ==="; codesign -d --entitlements :- "$APP" 2>&1 || true
           # 硬校验:App Group 必须真的进包(CI 绿≠东西在包里,这条踩过好几次)
-          for BIN in "$APPEX" "$APP"; do
-            DUMP="$(codesign -d --entitlements :- "$BIN" 2>&1 || codesign -d --entitlements - "$BIN" 2>&1 || true)"
-            echo "$DUMP" | grep -q "group.com.luanshijia.voicememo" \
-              || { echo "缺 App Group entitlement: $BIN"; exit 1; }
-          done
-          echo "两个二进制的 App Group entitlement 都已在包里 ✓"
+          DUMP="$(codesign -d --entitlements :- "$APP" 2>&1 || codesign -d --entitlements - "$APP" 2>&1 || true)"
+          echo "$DUMP" | grep -q "group.com.luanshijia.voicememo" \
+            || { echo "缺 App Group entitlement: $APP"; exit 1; }
+          echo "主 App 的历史迁移兼容 entitlement 仍在包里 ✓"
 
       - name: 打包成 .ipa
         run: |
@@ -133,11 +128,8 @@ jobs:
           APP="$RUNNER_TEMP/VoiceMemo.xcarchive/Products/Applications/VoiceMemo.app"
           test -d "$APP"
           /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist"
-          # 广播扩展必须在包里:CI 绿不等于嵌进去了,漏嵌要到手机上才发现(见项目笔记)
-          test -d "$APP/PlugIns/VoiceMemoBroadcast.appex"
-          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/PlugIns/VoiceMemoBroadcast.appex/Info.plist"
-          /usr/libexec/PlistBuddy -c 'Print :NSExtension:NSExtensionPointIdentifier' "$APP/PlugIns/VoiceMemoBroadcast.appex/Info.plist"
-          file "$APP/PlugIns/VoiceMemoBroadcast.appex/VoiceMemoBroadcast"
+          # The ReplayKit extension is retired and must not be embedded.
+          test ! -e "$APP/PlugIns/VoiceMemoBroadcast.appex"
           mkdir -p "$RUNNER_TEMP/ipa/Payload"
           cp -R "$APP" "$RUNNER_TEMP/ipa/Payload/"
           cd "$RUNNER_TEMP/ipa"

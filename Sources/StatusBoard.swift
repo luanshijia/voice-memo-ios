@@ -3,8 +3,7 @@ import Foundation
 /// 状态层的第二层(L2):持有事实、算结论。
 /// 规则正本:`notes/规范-状态显示.md`。本文件只放"值 → 结论"的纯逻辑,不碰 UI、不碰 IO。
 ///
-/// 覆盖范围(站 1–4 已全部落地,2026-10-19 核对):`Cap.AppGroup`、`Link.Probe`、`Link.LiveKit`、
-/// `Link.ReplayKit`、`Cap.MicPermission`、`Cap.MicMode`、`Cap.ExtensionEmbedded`、
+/// 覆盖范围:`Cap.AppGroup`、`Link.Probe`、`Link.LiveKit`、`Cap.MicPermission`、`Cap.MicMode`、
 /// `Metric.Recorded`/`Received`/`Progress`/`Summary(+Fresh/Round)`、`Cap.Config`、`Cap.Protocol`。
 /// 旧注释曾写“只完成站 1”,已过期 —— 站 5(界面全量改读本文件的结论、删旧 `status` 字段)尚未完成。
 
@@ -75,14 +74,10 @@ struct StatusBoard {
     var livekit = Status<LinkDesired, LinkObserved, LinkReason>(
         desired: .notWanted, observed: .notStarted)
 
-    // ---- 站 2:系统直播那一路 + 两项能力 + 扩展是否在包里 ----
-    var replaykit = Status<LinkDesired, LinkObserved, LinkReason>(
-        desired: .notWanted, observed: .notStarted)
+    // ---- 本机输入能力 ----
     var micPermission = Status<LinkDesired, CapObserved, CapReason>(
         desired: .wanted, observed: .unknownState)
     var micMode = Status<LinkDesired, MicModeObserved, CapReason>(
-        desired: .wanted, observed: .unknownState)
-    var extensionEmbedded = Status<LinkDesired, CapObserved, CapReason>(
         desired: .wanted, observed: .unknownState)
 
     // ---- 站 3:数值三项(录 / 收 / 提要) ----
@@ -162,20 +157,6 @@ extension StatusBoard {
         Self.capabilityCondition(appGroup.observed)
     }
 
-    // MARK: 站 2 的派生
-
-    /// 项定义表 `Link.ReplayKit`:心跳 30 秒没动 = 观测不到;系统声 40 秒不涨 = 系统声那一路死了。
-    /// 判定本身在 `BroadcastProbe`(它读日志);这里只声明"多久算过期",供派生与显示层共用。
-    static let replaykitStaleAfter: TimeInterval = 30
-    static let replaykitStallAfter: TimeInterval = 40
-
-    func replaykitCondition(currentGeneration: Int, now: Date = Date()) -> Condition {
-        Self.linkCondition(desired: replaykit.desired, observed: replaykit.observed, reason: replaykit.reason,
-                           lastSeen: replaykit.lastSeen, generation: replaykit.generation,
-                           currentGeneration: currentGeneration,
-                           staleAfter: Self.replaykitStaleAfter, now: now)
-    }
-
     func micPermissionCondition() -> Condition {
         Self.capabilityCondition(micPermission.observed)
     }
@@ -186,10 +167,6 @@ extension StatusBoard {
         case .wide, .other: return .ok
         case .unknownState: return .unknown
         }
-    }
-
-    func extensionCondition() -> Condition {
-        Self.capabilityCondition(extensionEmbedded.observed)
     }
 
     // MARK: 站 3 的派生

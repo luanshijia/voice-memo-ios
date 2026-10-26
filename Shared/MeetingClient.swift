@@ -1,7 +1,7 @@
 import Foundation
 import CryptoKit
 
-/// Shared control contract for the main App and ReplayKit extension.
+/// Control API client used by the main App. App Group data below is read only for migration compatibility.
 /// The computer creates the meeting id and returns it with the media grant.
 struct MeetingGrant: Decodable {
     var requestID: String? = nil // local correlation; never decoded from the server
@@ -155,10 +155,11 @@ enum MeetingClient {
     }
 
     private static func pendingStore() throws -> PendingRequestStore {
-        guard let root = appGroupCandidates.compactMap({
+        let oldRoots = appGroupCandidates.compactMap({
             FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: $0)
-        }).first else { throw failure(13, "App Group 不可用，无法保存控制请求") }
-        return PendingRequestStore(root: root.appendingPathComponent("pending-control"), legacy: sharedDefaults())
+        }).map { $0.appendingPathComponent("pending-control", isDirectory: true) }
+        return PendingRequestStore(root: try AppStorage.pendingRequestDirectory(),
+                                   legacy: sharedDefaults(), legacyRoots: oldRoots)
     }
 
     private static func validatedResponse(_ data: Data, kind: String) throws -> [String: Any] {
@@ -172,7 +173,7 @@ enum MeetingClient {
     }
 
     static func credential() throws -> String {
-        guard let token = sharedDefaults()?.string(forKey: "vm.deviceToken"),
+        guard let token = UserDefaults.standard.string(forKey: "vm.deviceToken"),
               !token.isEmpty else {
             throw failure(10, "这台手机尚未登记设备凭据，请在设置中填写")
         }
@@ -183,6 +184,9 @@ enum MeetingClient {
                              deviceID: String, channel: String,
                              meetingID: String? = nil,
                              ttl: Int = 15 * 60) async throws -> MeetingGrant {
+        guard channel == SessionControlContract.mic else {
+            throw failure(7, "此客户端只允许申请手机麦克风通道")
+        }
         guard var components = URLComponents(string: serverURL),
               let configuredHost = components.host else {
             throw failure(2, "连接地址不合法: \(serverURL)")
@@ -286,11 +290,12 @@ enum MeetingClient {
     }
 
     static func sharedRegistration() throws -> (serverURL: String, deviceID: String, userID: String) {
-        guard let defaults = sharedDefaults(),
+        let defaults = UserDefaults.standard
+        guard
               let serverURL = defaults.string(forKey: "lk.url"), !serverURL.isEmpty,
               let deviceID = defaults.string(forKey: "lk.device"), !deviceID.isEmpty,
               let userID = defaults.string(forKey: "lk.user"), !userID.isEmpty else {
-            throw failure(6, "App Group 中没有电脑地址或设备登记信息；请先打开主 App 完成初始化")
+            throw failure(6, "本机没有电脑地址或设备登记信息；请先在设置页完成初始化")
         }
         return (serverURL, deviceID, userID)
     }
@@ -422,31 +427,6 @@ enum MeetingClient {
         let confirmation = try validatedResponse(data, kind: "artifact_ack")
         guard confirmation["meeting_id"] as? String == meetingID,
               confirmation["sha256"] as? String == sha256 else { throw failure(12, "报告回执版本不一致") }
-    }
-
-    static func requestBroadcastGrant() async throws -> MeetingGrant {
-        // A previous ReplayKit process may have been killed before its stop HTTP request finished.
-        // Resolve that stop before starting a new generation of the same channel.
-        try await flushPendingBroadcastStop()
-        let registration = try sharedRegistration()
-        let identity = registration.deviceID + "-replaykit"
-        let view = try await deviceView(serverURL: registration.serverURL,
-                                        deviceID: registration.deviceID)
-        let meetingID = view.meeting.flatMap { meeting in
-            SessionControlContract.recoveryEligibleMeetingStates.contains(meeting.status)
-                ? meeting.meetingID : nil
-        }
-        if meetingID == nil, let closedID = view.meeting?.meetingID {
-            try retireClosedStart(channel: SessionControlContract.systemAudio,
-                                  deviceID: registration.deviceID, meetingID: closedID)
-        }
-        let grant = try await requestGrant(serverURL: registration.serverURL,
-                                           identity: identity,
-                                           userID: registration.userID,
-                                           deviceID: registration.deviceID,
-                                           channel: SessionControlContract.systemAudio,
-                                           meetingID: meetingID)
-        return grant
     }
 
     static func stopChannel(serverURL: String, meetingID: String,

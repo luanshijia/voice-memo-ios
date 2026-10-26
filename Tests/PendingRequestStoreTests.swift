@@ -44,4 +44,21 @@ final class PendingRequestStoreTests: XCTestCase {
         XCTAssertNil(defaults.data(forKey: "stop"))
         XCTAssertEqual(try PendingRequestStore(root: root).read("stop"), old)
     }
+
+    func testLegacyAppGroupRequestFileIsMovedOnlyAfterPrivateCopyExists() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let oldRoot = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: oldRoot)
+        }
+        try FileManager.default.createDirectory(at: oldRoot, withIntermediateDirectories: true)
+        let oldFile = oldRoot.appendingPathComponent("start.json")
+        let old = Data("{\"request_id\":\"preserve-me\"}".utf8)
+        try old.write(to: oldFile)
+        let store = PendingRequestStore(root: root, legacyRoots: [oldRoot])
+        XCTAssertEqual(try store.read("start"), old)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: oldFile.path))
+        XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent("start.json")), old)
+    }
 }

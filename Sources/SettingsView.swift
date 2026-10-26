@@ -68,14 +68,10 @@ struct SettingsView: View {
         """
         server=\(model.serverURL)
         identity=\(model.identity)
-        LivK=\(model.livekWord) RepK=\(model.repkWord)
+        LivK=\(model.livekWord)
         录=\(Int(model.recordedSeconds)) 收=\(Int(model.serverSeconds)) 句=\(model.lines.count)
         麦克风模式=\(model.micModeText)(宽谱=\(model.micIsWide))
-        App Group=\(BroadcastProbe.groupName())
-        扩展=\(BroadcastProbe.extensionBundleID)
         version=\(appVersion)
-
-        \(BroadcastProbe.fullLogText())
         """
     }
 

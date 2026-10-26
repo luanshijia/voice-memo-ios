@@ -16,7 +16,6 @@ struct LiveKitConfig {
     var device: String
     var userID: String
     var identity: String { device + "-livekit" }
-    var broadcastIdentity: String { device + "-replaykit" }
 
     static func load() -> LiveKitConfig {
         let d = UserDefaults.standard
@@ -30,11 +29,6 @@ struct LiveKitConfig {
         d.set(url, forKey: "lk.url")
         d.set(device, forKey: "lk.device")
         d.set(userID, forKey: "lk.user")
-        if let shared = MeetingClient.sharedDefaults() {
-            shared.set(url, forKey: "lk.url")
-            shared.set(device, forKey: "lk.device")
-            shared.set(userID, forKey: "lk.user")
-        }
         d.removeObject(forKey: "lk.key")        // 老版本留下的长期密钥:不再使用,清掉
         d.removeObject(forKey: "lk.secret")
     }
@@ -42,12 +36,11 @@ struct LiveKitConfig {
     typealias Token = MeetingGrant
 
     /// 向家里要一张卡。失败一律抛出 —— 调用方必须让用户看到"取卡失败",不能静默连不上。
-    func requestToken(identity: String, ttl: Int = 15 * 60, channel: String? = nil,
+    func requestToken(identity: String, channel: String, ttl: Int = 15 * 60,
                       meetingID: String? = nil) async throws -> Token {
-        let resolvedChannel = channel ?? (identity == broadcastIdentity ? "system_audio" : "mic")
         return try await MeetingClient.requestGrant(serverURL: url, identity: identity,
                                                             userID: userID, deviceID: device,
-                                                            channel: resolvedChannel,
+                                                            channel: channel,
                                                             meetingID: meetingID, ttl: ttl)
     }
 

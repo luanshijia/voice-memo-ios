@@ -49,25 +49,21 @@ final class VoiceRoom: NSObject {
     }
 
     @discardableResult
-    func connect(url: String, token: String, identity: String,
-                 publishMic: Bool = true) async throws -> Room {
-        // token 由主 App 向家里现取(LiveKitConfig.requestToken),这里只管连
+    func connect(url: String, token: String, identity: String) async throws -> Room {
+        // Connecting is transport only. An input provider explicitly activates capture later.
         let newRoom = Room()
         newRoom.add(delegate: self)
         self.room = newRoom
         onNote?("发起连接 \(url) 身份=\(identity)")
         do {
             try await newRoom.connect(url: url, token: token)
-            if publishMic {
-                try await newRoom.localParticipant.setMicrophone(enabled: true)
-            }
         } catch {
-            // 连上一半失败(例如开麦被拒)也要把这条连接收干净:不留同身份影子
+            // Failed transport setup must not leave an identity connected in the room.
             await newRoom.disconnect()
             if room === newRoom { room = nil }
             throw error
         }
-        onState?(publishMic ? "已连上房间,麦克风已开" : "已连上房间,只接收")
+        onState?("已连上房间,采集尚未启动")
         onNote?("已连接房间=\(newRoom.name) 参与者=\(newRoom.remoteParticipants.count)")
         return newRoom
     }
@@ -76,7 +72,6 @@ final class VoiceRoom: NSObject {
     /// 为什么必须传实例:旧连接任务迟到完成时若执行"断开当前房间",会把后来新建的会话断掉。
     func disconnect(_ target: Room) async {
         intentionalTarget = ObjectIdentifier(target)
-        _ = try? await target.localParticipant.setMicrophone(enabled: false)
         await target.disconnect()
         if room === target { room = nil }
     }

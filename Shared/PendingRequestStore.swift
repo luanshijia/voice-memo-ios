@@ -6,6 +6,7 @@ import Darwin
 struct PendingRequestStore {
     let root: URL
     var legacy: UserDefaults? = nil
+    var legacyRoots: [URL] = []
 
     func transaction<T>(_ key: String, _ update: (Data?) throws -> (Data?, T)) throws -> T {
         guard key.range(of: "^[A-Za-z0-9._-]+$", options: .regularExpression) != nil else {
@@ -25,7 +26,10 @@ struct PendingRequestStore {
         let exists = FileManager.default.fileExists(atPath: file.path)
         legacy?.synchronize()
         let current: Data?
+        let legacyFile = legacyRoots.map { $0.appendingPathComponent(key + ".json") }
+            .first(where: { FileManager.default.fileExists(atPath: $0.path) })
         if exists { current = try Data(contentsOf: file) }
+        else if let legacyFile { current = try Data(contentsOf: legacyFile) }
         else { current = legacy?.data(forKey: key) }
         let (next, result) = try update(current)
         if let next {
@@ -39,6 +43,7 @@ struct PendingRequestStore {
             try FileManager.default.removeItem(at: file)
         }
         // Migration is complete only after the replacement was saved.
+        if let legacyFile { try? FileManager.default.removeItem(at: legacyFile) }
         legacy?.removeObject(forKey: key)
         legacy?.synchronize()
         return result

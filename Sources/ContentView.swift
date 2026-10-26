@@ -32,7 +32,6 @@ struct ContentView: View {
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active else { return }
             Task {
-                await model.refreshExt()
                 await model.refreshNet()
                 await model.catchUpNow()
             }

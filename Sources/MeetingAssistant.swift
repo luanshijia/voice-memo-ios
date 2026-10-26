@@ -8,6 +8,7 @@ import Foundation
     let assistant: MeetingAssistant
     private var subscription: AnyCancellable?
     init() {
+        AppStorage.migrateLegacySettings()
         let session = SessionModel()
         model = session
         assistant = MeetingAssistant(port: LegacySessionAdapter(model: session), changes: session.objectWillChange)

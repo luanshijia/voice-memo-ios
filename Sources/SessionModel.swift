@@ -46,9 +46,6 @@ final class SessionModel: ObservableObject {
     @Published var serverSeconds: Double = 0       // 家里已识别到的音频秒数(agent 回传,按来源分开记)
 
     // ---- 状态面板(规范见 notes/规范-状态显示.md;站 1 = App Group / 链路探测 / LiveKit)----
-    /// 系统直播那一路的事实:扩展写过「=== 扩展启动」且没写「结束」。
-    @Published var broadcastAlive = false
-
     /// 电脑端总管状态的本机镜像(管家助手)。底栏的会议状态、连接状态与「主动终止」
     /// 的可用性都读它;没查到时保持上一次的值,断网不会把会议从屏幕上抹掉。
     @Published private(set) var meetingContext = MeetingContext.empty
@@ -131,10 +128,10 @@ final class SessionModel: ObservableObject {
         }
     }
     var deviceToken: String {
-        get { MeetingClient.sharedDefaults()?.string(forKey: "vm.deviceToken") ?? "" }
+        get { UserDefaults.standard.string(forKey: "vm.deviceToken") ?? "" }
         set {
             guard !configurationLocked else { return }
-            MeetingClient.sharedDefaults()?.set(newValue, forKey: "vm.deviceToken")
+            UserDefaults.standard.set(newValue, forKey: "vm.deviceToken")
             AppStorage.configurationChanged()
             objectWillChange.send()
         }
@@ -208,8 +205,7 @@ final class SessionModel: ObservableObject {
 
     private var cfg = LiveKitConfig.load()
     private let room = VoiceRoom()
-    private let observerRoom = VoiceRoom()
-    private var observerConnection: Room?
+    private let phoneInput = PhoneInputProvider()
     private var timer: Timer?
     /// 上一次「停止」的断开动作。实测踩过:点停止后立刻再点开始,新旧两条连接同身份并存,
     /// 服务端按 DUPLICATE_IDENTITY 把旧的那条踢掉(01:44:33 就是这么发生的)。
@@ -317,36 +313,25 @@ final class SessionModel: ObservableObject {
                 self.syncProtocolStatus()
             }
         }
-        observerRoom.onTranscript = room.onTranscript
-        observerRoom.onNote = { [weak self] s in self?.note(s) }
-        observerRoom.onState = { [weak self] _ in self?.syncBoard() }
-        observerRoom.onEnded = { [weak self] s in
-            self?.observerConnection = nil
-            self?.note("会议查看连接结束:\(s)")
-            self?.syncBoard()
-        }
-        observerRoom.onProtocolIssue = { [weak self] kind in self?.noteProtocolIssue(kind) }
         // 从 Bundle 读真实版本(以前写死成 v0.2.0(build 11),截图里会误导人)
         let ver = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
         note("App 启动,v\(ver)(build \(build), LiveKit)")
         syncConfigStatus()
         syncProtocolStatus()
-        cfg.save() // 扩展独立启动时也能从 App Group 读取登记信息
+        cfg.save()
         loadSavedReport()
         Task { [weak self] in await self?.observeDesktop() }
     }
 
     /// Foreground probes follow the root view's SwiftUI task lifetime.
     func refreshForegroundStateLoop() async {
-        await refreshExt()
         await refreshNet()
         refreshMicMode()
         var tick = 0
         while !Task.isCancelled {
             try? await Task.sleep(nanoseconds: 3_000_000_000)
             guard !Task.isCancelled else { return }
-            await refreshExt()
             refreshMicMode()
             tick += 1
             if tick % 2 == 0 { await refreshNet() }
@@ -355,7 +340,7 @@ final class SessionModel: ObservableObject {
 
     private func observeDesktop() async {
         while !Task.isCancelled {
-            // ReplayKit may have exited before its stop request completed.
+            // Retry a stop queued by an older build before starting new work.
             try? await MeetingClient.flushPendingBroadcastStop()
             try? await MeetingClient.flushPendingMicStop()
             do {
@@ -368,39 +353,6 @@ final class SessionModel: ObservableObject {
                 // 管家助手:总管那边这场会现在算什么状态。录着的时候也要查 ——
                 // 底栏的会议状态与两个对接按钮都靠它,不查就永远显示"无会议"。
                 meetingContext = MeetingContext(view: state)
-                if !isRecording {
-                        let systemActive = state.meeting?.channels["system_audio"]?.status == "active"
-                        if systemActive, let receiver = state.view,
-                           receiver.meetingID == state.meeting?.meetingID {
-                            if observerConnection == nil || sessionID != receiver.meetingID {
-                                if let old = observerConnection { await observerRoom.disconnect(old) }
-                                guard pollGeneration == connectionGeneration, !isRecording else { continue }
-                                if sessionID != receiver.meetingID { resetCurrentMeetingData() }
-                                sessionID = receiver.meetingID
-                                do {
-                                    let viewing = try await observerRoom.connect(
-                                        url: receiver.url, token: receiver.token,
-                                        identity: receiver.identity, publishMic: false)
-                                    guard pollGeneration == connectionGeneration, !isRecording else {
-                                        await observerRoom.disconnect(viewing)
-                                        continue
-                                    }
-                                    observerConnection = viewing
-                                } catch {
-                                    note("会议查看连接失败: \(error.localizedDescription)")
-                                }
-                                syncBoard()
-                            }
-                        } else if let old = observerConnection {
-                            observerConnection = nil
-                            await observerRoom.disconnect(old)
-                            if !isRecording { sessionID = "" }
-                            syncBoard()
-                        }
-                    }
-                if observerConnection != nil, Date().timeIntervalSince(lastCatchUpAt) >= 10 {
-                    Task { [weak self] in await self?.catchUpNow() }
-                }
                 // Reports are independent of the current recording. The control
                 // contract includes earlier unacknowledged reports while a newer
                 // meeting is active, so always deliver them after the device view.
@@ -559,12 +511,7 @@ final class SessionModel: ObservableObject {
                     return
                 }
                 if fresh.isChannelOpen(fresh.systemAudio) {
-                    // 扩展那一路 App 停不回来(既有限制):它还在推就请用户去停;
-                    // 已经停了而电脑端还记着"在采",就替它补一次 stop。
-                    guard systemAudioAlreadyStopped else {
-                        note("系统声音那一路还在直播:请先在控制中心停止录屏,再点一次主动终止")
-                        return
-                    }
+                    // Retire a channel left open by an older ReplayKit build.
                     try await MeetingClient.stopChannel(
                         serverURL: terminationConfig.url, meetingID: meetingID, deviceID: terminationConfig.device,
                         channel: SessionControlContract.systemAudio,
@@ -595,16 +542,6 @@ final class SessionModel: ObservableObject {
                 note(offline ? "电脑端暂时连不上,等网络恢复再点主动终止"
                              : "主动终止失败:\(error.localizedDescription)")
             }
-        }
-    }
-
-    /// 扩展那一路是否已经不推了。
-    /// 看不到(unknown / notStarted)按"已停"处理:用户点的是终止,这一场的系统声
-    /// 到此为止是可接受的;反过来当成"还在推",终止会永远卡在提示上。
-    private var systemAudioAlreadyStopped: Bool {
-        switch board.replaykit.observed {
-        case .connected, .connecting, .reconnecting: return false
-        default: return true
         }
     }
 
@@ -698,10 +635,6 @@ final class SessionModel: ObservableObject {
             let prev = pendingDisconnect
             pendingDisconnect = nil
             if let prev { await prev.value }
-            if let observing = observerConnection {
-                observerConnection = nil
-                await observerRoom.disconnect(observing)
-            }
             var grantedMeetingID: String?
             var grantedServerGeneration = 0
             do {
@@ -717,7 +650,19 @@ final class SessionModel: ObservableObject {
                 grantedServerGeneration = card.generation
                 guard operation.isCurrent(generation: self.connectionGeneration, config: self.cfg) else { throw CancellationError() }
                 let live = try await room.connect(url: card.url, token: card.token, identity: cfg.identity)
+                phoneInput.bind(live)
+                do {
+                    try await phoneInput.start(context: ExecutionContext(
+                        configurationRevision: cfg.revision, operationID: UUID(),
+                        meetingID: card.meetingID, channel: SessionControlContract.mic,
+                        generation: card.generation, segmentID: nil))
+                } catch {
+                    await phoneInput.stop()
+                    await room.disconnect(live)
+                    throw error
+                }
                 guard operation.isCurrent(generation: self.connectionGeneration, config: self.cfg) else {   // 这一轮已被停止/重开取代
+                    await phoneInput.stop()
                     await self.room.disconnect(live)                   // 只断自己这条,不碰新会话
                     do {
                         try MeetingClient.queueMicStop(serverURL: cfg.url,
@@ -798,7 +743,10 @@ final class SessionModel: ObservableObject {
         connecting = nil
         pendingDisconnect = Task { [weak self] in
             await inflight?.value          // 等它彻底收尾,否则同身份双连会把新会话挤掉
-            if let live { await self?.room.disconnect(live) }
+            if let live {
+                await self?.phoneInput.stop()
+                await self?.room.disconnect(live)
+            }
             // 先结束媒体传输，再让电脑端封住该通道；否则 stop 请求可能先到，截掉尾部音频。
             if !stoppedMeetingID.isEmpty {
                 do {
@@ -893,7 +841,7 @@ final class SessionModel: ObservableObject {
     func syncBoard() {
         let generation = connectionGeneration
         var observed: LinkObserved = .notStarted
-        if let state = (isRecording ? room.connectionState : observerRoom.connectionState) {
+        if let state = room.connectionState {
             switch state {
             case .connected: observed = .connected
             case .connecting: observed = .connecting
@@ -907,15 +855,8 @@ final class SessionModel: ObservableObject {
             observed = .connecting
         }
         let reason: LinkReason? = (observed == .disconnected) ? (livekEndReason ?? .disconnected) : nil
-        let receiveIntent: LinkDesired = observerConnection == nil ? intent : .wanted
-        board.livekit = Status(desired: receiveIntent, observed: observed, reason: reason,
+        board.livekit = Status(desired: intent, observed: observed, reason: reason,
                                lastSeen: Date(), generation: generation)
-
-        let groupOK = BroadcastProbe.containerURL() != nil
-        board.appGroup = Status(desired: LinkDesired.wanted,
-                                observed: groupOK ? CapObserved.yes : CapObserved.no,
-                                reason: groupOK ? nil : CapReason.appGroupUnavailable,
-                                lastSeen: Date(), generation: generation)
 
                     }
 
@@ -934,39 +875,6 @@ final class SessionModel: ObservableObject {
                              reason: reason,
                              lastSeen: Date(), generation: connectionGeneration)
     }
-
-    /// 系统直播那一路的采集入口:读一次扩展日志,写事实(`broadcastAlive`)
-    /// 与面板(`replaykit` / `extensionEmbedded`)。
-    /// `desired` 取自扩展日志里的「=== 扩展启动 / 结束」标记 —— 那是**用户动作的记录**,
-    /// 不是从失败结果倒推;所以这里既不猜也不越权。
-    func refreshExt() async {
-        let status = await BroadcastProbe.status(
-            expectedMeetingID: meetingContext.meetingID,
-            expectedGeneration: meetingContext.systemAudioGeneration)
-        broadcastAlive = status.isActive
-
-        let generation = connectionGeneration
-        let observed: LinkObserved
-        switch status.phase {
-        case .stopped:   observed = .notStarted
-        case .waiting:   observed = .connecting
-        case .receiving: observed = .connected
-        case .error:     observed = .disconnected
-        case .unknown:   observed = .unknown
-        }
-        // 没启动过 = 期望"不要"(condition 判 ok);启动了就别用 isActive 当期望,
-        // 否则 error 态会被算成"用户没要求" → 误判为正常。
-        let desired: LinkDesired = (status.phase == .stopped) ? .notWanted : .wanted
-        board.replaykit = Status(desired: desired, observed: observed, reason: status.reason,
-                                 lastSeen: Date(), generation: generation)
-
-        let embedded = BroadcastProbe.isExtensionEmbedded
-        board.extensionEmbedded = Status(desired: LinkDesired.wanted,
-                                         observed: embedded ? CapObserved.yes : CapObserved.no,
-                                         reason: embedded ? nil : CapReason.extensionMissing,
-                                         lastSeen: Date(), generation: generation)
-
-                    }
 
     /// 「派生值变了」才记一行 —— 数值项没有旧显示值可对照,走这条。
     private func conditionNote(_ item: String, _ condition: Condition, detail: @autoclosure () -> String) {
@@ -1038,10 +946,6 @@ final class SessionModel: ObservableObject {
         Self.linkWord(board.livekitCondition(currentGeneration: connectionGeneration),
                       observed: board.livekit.observed, desired: board.livekit.desired)
     }
-    var repkWord: String {
-        Self.linkWord(board.replaykitCondition(currentGeneration: connectionGeneration),
-                      observed: board.replaykit.observed, desired: board.replaykit.desired)
-    }
     private static func linkWord(_ c: Condition, observed: LinkObserved, desired: LinkDesired) -> String {
         if desired == .notWanted { return "未连" }
         switch c {
@@ -1053,22 +957,6 @@ final class SessionModel: ObservableObject {
             default: return "未知"          // 观测不到 ≠ 正在连
             }
         }
-    }
-
-    /// 底栏右组:两个可分路的数(收/句)按 LivK|RepK 给出;`录` 不可分,不在这里。
-    var serverSecondsByWay: (livk: Double, repk: Double) {
-        var livk = 0.0, repk = 0.0
-        for (src, sec) in serverBySource {
-            if src.hasSuffix("-replaykit") { repk += sec } else { livk += sec }
-        }
-        return (livk, repk)
-    }
-    var linesByWay: (livk: Int, repk: Int) {
-        var livk = 0, repk = 0
-        for line in lines {
-            if line.source.hasSuffix("-replaykit") { repk += 1 } else { livk += 1 }
-        }
-        return (livk, repk)
     }
 
     /// 契约 §三.5:`summode` 必须带 `schema_version` 与当前 `session_id`。
