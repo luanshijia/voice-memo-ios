@@ -17,15 +17,13 @@ struct LiveKitConfig {
     var userID: String
     var identity: String { device + "-livekit" }
 
-    static func load() -> LiveKitConfig {
-        let d = UserDefaults.standard
+    static func load(defaults d: UserDefaults = .standard) -> LiveKitConfig {
         return LiveKitConfig(url: d.string(forKey: "lk.url") ?? defaultURL,
                              device: d.string(forKey: "lk.device") ?? defaultDevice,
                              userID: d.string(forKey: "lk.user") ?? defaultUser)
     }
 
-    func save() {
-        let d = UserDefaults.standard
+    func save(defaults d: UserDefaults = .standard) {
         d.set(url, forKey: "lk.url")
         d.set(device, forKey: "lk.device")
         d.set(userID, forKey: "lk.user")

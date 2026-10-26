@@ -9,9 +9,12 @@ import Foundation
     private var subscription: AnyCancellable?
     init() {
         AppStorage.migrateLegacySettings()
-        let session = SessionModel()
-        model = session
-        assistant = MeetingAssistant(port: LegacySessionAdapter(model: session), changes: session.objectWillChange)
+        let settings = SettingsWorker()
+        let input = InputWorker()
+        let connection = ConnectionWorker(settings: settings)
+        let meeting = MeetingWorker(settings: settings, input: input, transport: connection)
+        model = SessionModel(meeting: meeting)
+        assistant = MeetingAssistant(meeting: meeting)
         subscription = assistant.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
     }
 }
@@ -24,17 +27,19 @@ import Foundation
     let input: InputWorker
     let connection: ConnectionWorker
     let meeting: MeetingWorker
-    private let port: LegacySessionPort
+    private let commands: MeetingCommands
     private var subscription: AnyCancellable?
     private var checking = false
 
-    init(port: LegacySessionPort, changes: ObservableObjectPublisher? = nil) {
-        self.port = port
-        settings = SettingsWorker(port: port)
-        input = InputWorker(port: port)
-        connection = ConnectionWorker(port: port)
-        meeting = MeetingWorker(port: port)
-        subscription = changes?.sink { [weak self] _ in self?.objectWillChange.send() }
+    init(meeting: MeetingWorker, commands: MeetingCommands? = nil) {
+        self.meeting = meeting
+        settings = meeting.settings
+        input = meeting.input
+        connection = meeting.transport
+        self.commands = commands ?? MeetingCommands(
+            start: { meeting.startCapture() }, stop: { meeting.stopCapture() },
+            end: { meeting.terminateMeeting() })
+        subscription = meeting.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
     }
 
     var readiness: ReadinessSnapshot {
@@ -53,15 +58,15 @@ import Foundation
                 wantsToContinue: meeting.wantsCapture, recording: meeting.isRecording,
                 networkOK: connection.network == .connected) { result = .rejected("当前没有可恢复的会议授权") }
             else if let problem = readiness.problems.first { result = .rejected(problem) }
-            else { port.startCapture(); result = .submitted }
+            else { commands.start(); result = .submitted }
         case .end, .cancelStart:
             if meeting.terminating { result = .rejected("结束动作正在执行") }
             else if meeting.isRecording || meeting.wantsCapture {
                 // S2 preserves the existing phone-channel stop. Full meeting
                 // pause/end semantics are implemented by S4, never simulated here.
-                port.stopCapture(); result = .submitted
+                commands.stop(); result = .submitted
             } else if meeting.presentation.terminateAction.enabled {
-                port.endMeeting(); result = .submitted
+                commands.end(); result = .submitted
             } else { result = .rejected("当前没有可停止的手机采集") }
         case .pause, .resume:
             result = .rejected("暂停和继续尚待会控 v2 接入")

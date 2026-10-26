@@ -3,22 +3,21 @@ import XCTest
 
 @MainActor final class NavigationStateTests: XCTestCase {
     func testRepeatedNavigationKeepsCaptureAndDoesNoIO() async {
-        let port = TestSessionPort()
-        let assistant = MeetingAssistant(port: port)
-        assistant.accept(.start)
+        let f = BusinessFixture(); defer { f.cleanUp() }
+        f.assistant.accept(.start)
         for _ in 0..<5 {
             for page in WorkspacePage.allCases {
-                assistant.page = page
-                _ = assistant.meeting.projection
-                _ = assistant.connection.media
-                _ = assistant.settings.snapshot
-                _ = assistant.input.binding
+                f.assistant.page = page
+                _ = f.assistant.meeting.projection
+                _ = f.assistant.connection.media
+                _ = f.assistant.settings.snapshot
+                _ = f.assistant.input.binding
             }
         }
-        XCTAssertTrue(port.isRecording)
-        XCTAssertEqual(port.starts, 1)
-        XCTAssertEqual(port.stops, 0)
-        XCTAssertEqual(port.checks, 0)
-        XCTAssertEqual(port.writes, 0)
+        XCTAssertTrue(f.meeting.isRecording)
+        XCTAssertEqual(f.starts, 1)
+        XCTAssertEqual(f.stops, 0)
+        XCTAssertEqual(f.checks, 0)
+        XCTAssertEqual(f.settings.snapshot.revision, 0)
     }
 }

@@ -43,6 +43,7 @@ targets:
         excludes:
           # Retained on disk as a reviewed migration backup; never compiled into new builds.
           - BroadcastProbe.swift
+          - LegacySessionAdapter.swift
       - Shared
       - Assets.xcassets        # 主屏图标(2026-10-15 加):以前包里根本没有图标,装到主屏是空白的
       - path: Contracts/revision.json
@@ -84,7 +85,7 @@ targets:
         VM_DEFAULT_DEVICE: iphone
         VM_DEFAULT_USER: owner
         MARKETING_VERSION: "0.10.0"
-        CURRENT_PROJECT_VERSION: "105"
+        CURRENT_PROJECT_VERSION: "106"
         SWIFT_VERSION: "5.0"
         # 显式锁定:接 SwiftPM 依赖后产物 Info.plist 的 MinimumOSVersion 曾变成 13.0(依赖的声明下限),
         # 而代码用了 iOS 17 的 API —— 写死避免漂移。

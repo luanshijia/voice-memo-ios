@@ -44,6 +44,15 @@ jobs:
         run: |
           xcodegen --version
           xcodegen generate
+          # Source archives must not appear in any generated build target.
+          python3 - <<'PY'
+          from pathlib import Path
+          project = Path("VoiceMemo.xcodeproj/project.pbxproj").read_text()
+          for retired in ("BroadcastProbe.swift", "LegacySessionAdapter.swift", "SampleHandler.swift",
+                          "LiveKitBroadcastPublisher.swift", "VoiceMemoBroadcast"):
+              assert retired not in project, retired + " is still in the generated project"
+          print("Retired source archives excluded from all targets")
+          PY
           ls -la
 
       - name: Swift 行为回归

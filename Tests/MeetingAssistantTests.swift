@@ -3,53 +3,44 @@ import XCTest
 
 @MainActor final class MeetingAssistantTests: XCTestCase {
     func testDuplicateStartAndEndDoNotToggleCaptureBackOn() async {
-        let port = TestSessionPort()
-        let assistant = MeetingAssistant(port: port)
-        XCTAssertEqual(assistant.accept(.start), .submitted)
-        _ = assistant.accept(.start)
-        XCTAssertEqual(port.starts, 1)
-        XCTAssertEqual(assistant.accept(.end), .submitted)
-        _ = assistant.accept(.end)
-        XCTAssertEqual(port.stops, 1)
-        XCTAssertEqual(port.starts, 1)
-        XCTAssertFalse(port.isRecording)
+        let f = BusinessFixture(); defer { f.cleanUp() }
+        XCTAssertEqual(f.assistant.accept(.start), .submitted)
+        _ = f.assistant.accept(.start)
+        XCTAssertEqual(f.starts, 1)
+        XCTAssertEqual(f.assistant.accept(.end), .submitted)
+        _ = f.assistant.accept(.end)
+        XCTAssertEqual(f.stops, 1)
+        XCTAssertEqual(f.starts, 1)
+        XCTAssertFalse(f.meeting.isRecording)
     }
-
     func testUnsupportedPauseCannotStopOrEndMeeting() async {
-        let port = TestSessionPort()
-        let assistant = MeetingAssistant(port: port)
-        assistant.accept(.start)
+        let f = BusinessFixture(); defer { f.cleanUp() }
+        f.assistant.accept(.start)
         for action in [CaptureAction.pause, .resume] {
-            if case .rejected = assistant.accept(action) {} else { XCTFail("unsupported action accepted") }
+            if case .rejected = f.assistant.accept(action) {} else { XCTFail("unsupported action accepted") }
         }
-        XCTAssertTrue(port.isRecording)
-        XCTAssertEqual(port.stops, 0)
-        XCTAssertEqual(port.ends, 0)
+        XCTAssertTrue(f.meeting.isRecording)
+        XCTAssertEqual(f.stops, 0)
+        XCTAssertEqual(f.ends, 0)
     }
-
     func testInvalidConfigurationFailsBeforeAnyCaptureCommand() async {
-        let port = TestSessionPort()
-        port.configuration = ConfigSnapshot(serverURL: "http://example.test", deviceID: "phone",
-            userID: "user", revision: 2, hasCredential: false)
-        let assistant = MeetingAssistant(port: port)
-        if case .rejected = assistant.accept(.start) {} else { XCTFail("invalid config accepted") }
-        XCTAssertEqual(port.starts, 0)
+        let f = BusinessFixture(); defer { f.cleanUp() }
+        f.settings.update(.serverURL, value: "http://example.test")
+        f.settings.update(.credential, value: "")
+        if case .rejected = f.assistant.accept(.start) {} else { XCTFail("invalid config accepted") }
+        XCTAssertEqual(f.starts, 0)
     }
-
-    func testLateLegacyObservationProjectsWithoutAnotherStart() async {
-        let port = TestSessionPort()
-        let assistant = MeetingAssistant(port: port, changes: port.objectWillChange)
-        assistant.accept(.start)
-        port.isRecording = false // SDK disconnect keeps the user's recording intent.
-        XCTAssertTrue(assistant.meeting.wantsCapture)
-        XCTAssertFalse(assistant.meeting.isRecording)
-        XCTAssertEqual(port.starts, 1)
+    func testPassiveDisconnectPreservesIntentWithoutAnotherStart() async {
+        let f = BusinessFixture(); defer { f.cleanUp() }
+        f.assistant.accept(.start)
+        f.meeting.captureInterrupted()
+        XCTAssertTrue(f.assistant.meeting.wantsCapture)
+        XCTAssertFalse(f.assistant.meeting.isRecording)
+        XCTAssertEqual(f.starts, 1)
     }
-
     func testRecoveryCannotCreateMeetingWhenNoOriginalMeetingExists() async {
-        let port = TestSessionPort()
-        let assistant = MeetingAssistant(port: port)
-        if case .rejected = assistant.accept(.recover) {} else { XCTFail("recovery created meeting") }
-        XCTAssertEqual(port.starts, 0)
+        let f = BusinessFixture(); defer { f.cleanUp() }
+        if case .rejected = f.assistant.accept(.recover) {} else { XCTFail("recovery created meeting") }
+        XCTAssertEqual(f.starts, 0)
     }
 }

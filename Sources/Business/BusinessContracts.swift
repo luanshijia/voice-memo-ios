@@ -56,20 +56,10 @@ struct ExecutionContext {
 
 enum ConfigurationField { case serverURL, deviceID, userID, credential }
 
-/// S2-only seam. Workers read the same legacy facts, never copies of mutable state.
-@MainActor protocol LegacySessionPort: AnyObject {
-    var configuration: ConfigSnapshot { get }
-    var configurationLocked: Bool { get }
-    var isRecording: Bool { get }
-    var wantsCapture: Bool { get }
-    var terminating: Bool { get }
-    var meeting: MeetingContext { get }
-    var board: StatusBoard { get }
-    var presentation: SessionPresentation { get }
-    func updateConfiguration(_ field: ConfigurationField, value: String)
-    func resetConfiguration()
-    func startCapture()
-    func stopCapture()
-    func endMeeting()
-    func checkConnection() async
+/// Commands are injected independently of the state owners. Production dispatches
+/// to MeetingWorker; tests can exercise the assistant without opening a network.
+@MainActor struct MeetingCommands {
+    let start: () -> Void
+    let stop: () -> Void
+    let end: () -> Void
 }
