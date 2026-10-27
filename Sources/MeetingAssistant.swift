@@ -64,6 +64,7 @@ import Foundation
             }
         }
         input.device.onHardware = { [weak self] event in self?.hardware(event) ?? false }
+        input.device.onDiagnostic = { [weak meeting] event in meeting?.note("[CB08] \(event)") }
         input.external.onFault = { [weak self] in
             guard let self, self.input.binding.kind == .external, self.meeting.isRecording else { return }
             self.pauseCapture()
@@ -335,7 +336,10 @@ import Foundation
                     try await input.start(context: ExecutionContext(configurationRevision: settings.snapshot.revision,
                         operationID: UUID(), meetingID: grant.meetingID, channel: grant.channel,
                         generation: grant.generation, segmentID: grant.segmentID))
-                } catch { await input.stop(); await connection.disconnect(live); throw error }
+                } catch {
+                    if input.binding.kind == .external { input.external.reportStartupFailure(error.localizedDescription) }
+                    await input.stop(); await connection.disconnect(live); throw error
+                }
                 guard operation.isCurrent(generation: connection.generation, config: settings.config) else {
                     await input.stop(); await connection.disconnect(live); return
                 }

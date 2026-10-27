@@ -7,14 +7,16 @@ import XCTest
     final class Device: CB08DeviceControlling {
         var connected = true
         var connectionID: UUID? = UUID()
-        var recordState: Int? = 0
+        var recordState: CB08RecordingState? = .stopped
         var onPacket: ((Data) -> Void)?
         var onLoss: (() -> Void)?
         var commands: [CB08RecordAction] = []
         var discarded = 0
         var stateQueries = 0
-        var queriedState: (() async -> Int?)?
-        func refreshRecordState(timeout: Duration) async -> Int? {
+        var queriedState: (() async -> CB08RecordingState?)?
+        var acknowledgesActions = true
+        var automaticFirstPacket = true
+        func refreshRecordState(timeout: Duration) async -> CB08RecordingState? {
             stateQueries += 1
             if let queriedState { return await queriedState() }
             return recordState
@@ -22,7 +24,16 @@ import XCTest
         func discardQueuedPackets() { discarded += 1 }
         func command(_ action: CB08RecordAction) {
             commands.append(action)
-            switch action { case .start, .resume: recordState = 1; case .pause: recordState = 2; case .stop: recordState = 0 }
+            if acknowledgesActions {
+                switch action { case .start, .resume: recordState = .recording
+                case .pause: recordState = .paused; case .stop: recordState = .stopped }
+            }
+        }
+        func waitForRecordAction(timeout: Duration) async -> Bool {
+            if acknowledgesActions && automaticFirstPacket && recordState == .recording {
+                onPacket?(Data(repeating: 0, count: 160))
+            }
+            return acknowledgesActions
         }
     }
     final class Publisher: PCMAudioPublishing {
@@ -47,7 +58,6 @@ import XCTest
         let provider = CB08InputProvider(device: device, publisher: publisher, makeDecoder: { Decoder() })
         let meetingID = UUID().uuidString
         provider.bind(Room()); try await provider.start(context: context(meetingID: meetingID))
-        device.onPacket?(Data(repeating: 0, count: 160))
         XCTAssertEqual(provider.submittedSamples, 320)
         provider.closeGate()
         device.onPacket?(Data(repeating: 0, count: 160))
@@ -57,7 +67,7 @@ import XCTest
         XCTAssertEqual(device.commands, [.start, .pause, .resume])
         await provider.stop()
         device.onPacket?(Data([1]))
-        XCTAssertEqual(publisher.packets, 1)
+        XCTAssertEqual(publisher.packets, 2)
         XCTAssertEqual(publisher.stops, 2)
         XCTAssertGreaterThanOrEqual(device.discarded, 4)
     }
@@ -75,17 +85,17 @@ import XCTest
         provider.bind(Room()); try await provider.start(context: context())
         decoder.fail = true; device.onPacket?(Data([0])); decoder.fail = false
         device.onPacket?(Data([0]))
-        XCTAssertEqual(faults, 1); XCTAssertEqual(publisher.packets, 0)
+        XCTAssertEqual(faults, 1); XCTAssertEqual(publisher.packets, 1)
         XCTAssertEqual(device.commands, [.start]); XCTAssertEqual(provider.decodeFailures, 1)
         await provider.stop()
     }
     func testUnrelatedCardRecordingIsNotAdopted() async {
-        let device = Device(); device.recordState = 1
+        let device = Device(); device.recordState = .recording
         let publisher = Publisher()
         let provider = CB08InputProvider(device: device, publisher: publisher, makeDecoder: { Decoder() })
         provider.bind(Room())
         do { try await provider.start(context: context()); XCTFail("unrelated recording adopted") }
-        catch CB08InputError.alreadyRecording(let state) { XCTAssertEqual(state, 1) }
+        catch CB08InputError.alreadyRecording(let state) { XCTAssertEqual(state, .recording) }
         catch { XCTFail("unexpected error: \(error)") }
         await provider.stop()
         XCTAssertTrue(device.commands.isEmpty); XCTAssertEqual(publisher.starts, 0)
@@ -96,8 +106,8 @@ import XCTest
         let provider = CB08InputProvider(device: device, publisher: publisher, makeDecoder: { Decoder() })
         device.queriedState = {
             try? await Task.sleep(for: .milliseconds(30))
-            device.recordState = 0
-            return 0
+            device.recordState = .stopped
+            return .stopped
         }
         provider.bind(Room())
         try await provider.start(context: context())
@@ -124,8 +134,8 @@ import XCTest
         let provider = CB08InputProvider(device: device, publisher: publisher, makeDecoder: { Decoder() })
         device.queriedState = {
             try? await Task.sleep(for: .milliseconds(50))
-            device.recordState = 0
-            return 0
+            device.recordState = .stopped
+            return .stopped
         }
         provider.bind(Room())
         let start = Task { try await provider.start(context: context()) }
@@ -138,7 +148,7 @@ import XCTest
         XCTAssertTrue(device.commands.isEmpty)
     }
     func testFreshStartDoesNotAdoptUnknownPausedRecording() async {
-        let device = Device(); device.recordState = 2
+        let device = Device(); device.recordState = .paused
         let publisher = Publisher()
         let provider = CB08InputProvider(device: device, publisher: publisher, makeDecoder: { Decoder() })
         provider.bind(Room())
@@ -148,14 +158,14 @@ import XCTest
         XCTAssertEqual(publisher.starts, 0); XCTAssertTrue(device.commands.isEmpty)
     }
     func testRejectedStartCannotStopIndependentCardRecording() async {
-        let device = Device(); device.recordState = 1
+        let device = Device(); device.recordState = .recording
         let publisher = Publisher()
         let provider = CB08InputProvider(device: device, publisher: publisher, makeDecoder: { Decoder() })
         provider.bind(Room())
         do { try await provider.start(context: context()); XCTFail("independent recording adopted") } catch {}
         provider.requestHalt(.stop)
         await provider.stop()
-        XCTAssertEqual(device.recordState, 1)
+        XCTAssertEqual(device.recordState, .recording)
         XCTAssertTrue(device.commands.isEmpty)
     }
     func testPausedRecordingCannotTransferToAnotherMeetingOrConnection() async throws {
@@ -213,11 +223,114 @@ import XCTest
     }
     func testSDKStateCasingAndUnknownStateStayDistinct() {
         let bridge = CB08SDKBridge()
+        bridge.receiveEvent(#"{"cmd":2,"state":0,"data":{"connect_state":1}}"#)
         bridge.receiveEvent(#"{"cmd":9,"state":0,"data":{"recordState":"2"}}"#)
-        XCTAssertEqual(bridge.recordState, 2)
+        XCTAssertEqual(bridge.recordState, .inactive)
         bridge.receiveEvent(#"{"cmd":3,"state":0,"data":{"record_state":0}}"#)
-        XCTAssertEqual(bridge.recordState, 0)
+        XCTAssertEqual(bridge.recordState, .stopped)
         bridge.receiveEvent(#"{"cmd":9,"state":0,"data":{}}"#)
         XCTAssertNil(bridge.recordState)
+    }
+    func testInactiveQueryPreservesConfirmedPauseWithoutInventingPause() {
+        let bridge = CB08SDKBridge()
+        bridge.receiveEvent(#"{"cmd":2,"state":0,"data":{"connect_state":1}}"#)
+        bridge.receiveEvent(#"{"cmd":9,"state":0,"data":{"recordState":2}}"#)
+        XCTAssertEqual(bridge.recordState, .inactive)
+        bridge.receiveEvent(#"{"cmd":3,"state":0,"data":{"record_state":2,"fileName":"test"}}"#)
+        bridge.receiveEvent(#"{"cmd":9,"state":0,"data":{"recordState":2}}"#)
+        XCTAssertEqual(bridge.recordState, .paused)
+        bridge.receiveEvent(#"{"cmd":2,"state":0,"data":{"connect_state":1}}"#)
+        XCTAssertEqual(bridge.recordState, .paused)
+        bridge.receiveEvent(#"{"cmd":2,"state":0,"data":{"connect_state":0}}"#)
+        bridge.receiveEvent(#"{"cmd":2,"state":0,"data":{"connect_state":1}}"#)
+        bridge.receiveEvent(#"{"cmd":9,"state":0,"data":{"recordState":2}}"#)
+        XCTAssertEqual(bridge.recordState, .inactive)
+    }
+    func testInactiveQueryStartsNewRecordingRatherThanContinuingUnownedFile() async throws {
+        let device = Device(); device.recordState = .inactive
+        let publisher = Publisher()
+        let provider = CB08InputProvider(device: device, publisher: publisher, makeDecoder: { Decoder() })
+        provider.bind(Room()); try await provider.start(context: context())
+        XCTAssertEqual(device.commands, [.start])
+        XCTAssertEqual(provider.submittedSamples, 320)
+        await provider.stop()
+    }
+    func testDeviceActionWithoutAcknowledgementCannotReportPublishing() async {
+        let device = Device(); device.acknowledgesActions = false
+        let publisher = Publisher()
+        let provider = CB08InputProvider(device: device, publisher: publisher,
+            startupTimeout: .milliseconds(50), makeDecoder: { Decoder() })
+        provider.bind(Room())
+        do { try await provider.start(context: context()); XCTFail("unconfirmed action accepted") }
+        catch CB08InputError.actionNotConfirmed {} catch { XCTFail("unexpected error: \(error)") }
+        XCTAssertFalse(provider.flowing)
+        XCTAssertEqual(provider.submittedSamples, 0)
+        await provider.stop()
+        XCTAssertEqual(device.commands, [.start, .stop])
+        XCTAssertEqual(publisher.stops, 1)
+    }
+    func testRecordingAcknowledgementWithoutAudioFailsAndClosesGateOnCleanup() async {
+        let device = Device(); device.automaticFirstPacket = false
+        let publisher = Publisher()
+        let provider = CB08InputProvider(device: device, publisher: publisher,
+            startupTimeout: .milliseconds(50), makeDecoder: { Decoder() })
+        provider.bind(Room())
+        do { try await provider.start(context: context()); XCTFail("zero audio accepted") }
+        catch CB08InputError.noRealtimeAudio {} catch { XCTFail("unexpected error: \(error)") }
+        XCTAssertFalse(provider.flowing)
+        await provider.stop()
+        device.onPacket?(Data([1]))
+        XCTAssertEqual(publisher.packets, 0)
+        XCTAssertEqual(device.commands, [.start, .stop])
+        XCTAssertNotNil(provider.failure)
+    }
+    func testHardwareRequestAndActionReplyRemainVisibleAfterStatusQuery() async {
+        let bridge = CB08SDKBridge()
+        bridge.receiveEvent(#"{"cmd":2,"state":0,"data":{"connect_state":1}}"#)
+        bridge.onHardware = { _ in true }
+        bridge.receiveEvent(#"{"cmd":8,"state":0,"data":{"event":1}}"#)
+        bridge.command(.start)
+        bridge.receiveEvent(#"{"cmd":3,"state":0,"data":{"record_state":1}}"#)
+        bridge.receiveEvent(#"{"cmd":9,"state":0,"data":{"recordState":1}}"#)
+        let confirmed = await bridge.waitForRecordAction(timeout: .milliseconds(10))
+        XCTAssertTrue(confirmed)
+        XCTAssertTrue(bridge.hardwareSummary.contains("event=1"))
+        XCTAssertTrue(bridge.actionSummary.contains("record_state=1"))
+        XCTAssertTrue(bridge.querySummary.contains("recordState=1"))
+        XCTAssertTrue(bridge.diagnostics.contains { $0.contains("实体键确认") })
+    }
+    func testScanFiltersOtherDevicesAndRetainsDistinctCB08Choices() {
+        let bridge = CB08SDKBridge(); bridge.scan()
+        bridge.receiveEvent(#"{"cmd":1,"state":0,"data":{"name":"Headphones","address":"a"}}"#)
+        bridge.receiveEvent(#"{"cmd":1,"state":0,"data":{"name":"CB08","address":"b"}}"#)
+        bridge.receiveEvent(#"{"cmd":1,"state":0,"data":{"name":"CB08","address":"c"}}"#)
+        bridge.receiveEvent(#"{"cmd":1,"state":0,"data":{"name":"CB08","address":"b"}}"#)
+        XCTAssertEqual(bridge.devices.count, 2)
+        XCTAssertEqual(bridge.selectedDeviceID, "b")
+        bridge.stopScan(); XCTAssertFalse(bridge.isScanning)
+    }
+    func testStatusQueryCannotConfirmAnOutstandingRecordingAction() async {
+        let bridge = CB08SDKBridge()
+        bridge.receiveEvent(#"{"cmd":2,"state":0,"data":{"connect_state":1}}"#)
+        bridge.command(.start)
+        bridge.receiveEvent(#"{"cmd":9,"state":0,"data":{"recordState":1}}"#)
+        let queryOnly = await bridge.waitForRecordAction(timeout: .milliseconds(1))
+        XCTAssertFalse(queryOnly)
+        bridge.receiveEvent(#"{"cmd":3,"state":0,"data":{"record_state":1}}"#)
+        let actionConfirmed = await bridge.waitForRecordAction(timeout: .milliseconds(1))
+        XCTAssertTrue(actionConfirmed)
+    }
+    func testFreshQueryWaitsForCommand9RatherThanReusingAnActionReply() async {
+        let bridge = CB08SDKBridge()
+        bridge.receiveEvent(#"{"cmd":2,"state":0,"data":{"connect_state":1}}"#)
+        var completed = false
+        let query = Task { let result = await bridge.refreshRecordState(timeout: .milliseconds(500)); completed = true; return result }
+        try? await Task.sleep(for: .milliseconds(10))
+        bridge.receiveEvent(#"{"cmd":3,"state":0,"data":{"record_state":0}}"#)
+        try? await Task.sleep(for: .milliseconds(10))
+        XCTAssertFalse(completed)
+        bridge.receiveEvent(#"{"cmd":9,"state":0,"data":{"recordState":2}}"#)
+        let result = await query.value
+        XCTAssertEqual(result, .stopped)
     }
 }

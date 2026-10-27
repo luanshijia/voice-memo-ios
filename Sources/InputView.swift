@@ -17,13 +17,14 @@ struct InputView: View {
                         let tag = assistant.input.binding.kind == .external ? assistant.input.binding.sourceTag : .face2face
                         assistant.selectInput(.external, tag: tag)
                     }
-                    LabeledContent("蓝牙连接", value: assistant.input.device.connected ? "已连接" : "未连接")
-                    if assistant.input.device.connected {
-                        LabeledContent("卡片录音状态", value: cardRecordState)
-                    }
                     NavigationLink("外设控制台") {
                         ExternalDeviceView(device: assistant.input.device, provider: assistant.input.external,
-                                           controlsLocked: assistant.meeting.isRecording, assistant: assistant)
+                                           controlsLocked: assistant.meeting.isRecording)
+                    }
+                    LabeledContent("蓝牙连接", value: assistant.input.device.connectionPhase.rawValue)
+                    LabeledContent("卡片录音", value: cardRecordState)
+                    TimelineView(.periodic(from: .now, by: 1)) { timeline in
+                        LabeledContent("音频接收", value: assistant.input.external.audioStatus(at: timeline.date))
                     }
                 }
             }.font(.body)
@@ -42,8 +43,8 @@ struct InputView: View {
             .font(.body.weight(.medium))
             .padding(.horizontal, 16)
             .frame(maxWidth: .infinity, minHeight: 52)
-            .foregroundStyle(selected ? Color.white : Color.primary)
-            .background(selected ? Color.blue : Color(uiColor: .tertiarySystemFill),
+            .foregroundStyle(!assistant.canSelectInput ? Color.secondary : selected ? Color.white : Color.primary)
+            .background(selected && assistant.canSelectInput ? Color.blue : Color(uiColor: .tertiarySystemFill),
                         in: RoundedRectangle(cornerRadius: 12))
             .contentShape(Rectangle())
         }
@@ -62,11 +63,7 @@ struct InputView: View {
     }
 
     private var cardRecordState: String {
-        switch assistant.input.device.recordState {
-        case 0: return "停止"
-        case 1: return "录音中"
-        case 2: return "暂停"
-        default: return "未知"
-        }
+        guard assistant.input.device.connected else { return "未知" }
+        return assistant.input.device.recordState?.rawValue ?? "未知"
     }
 }

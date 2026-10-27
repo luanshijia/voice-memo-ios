@@ -9,10 +9,10 @@ struct MeetingView: View {
         NavigationStack {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
-                    Label(model.captureStatusText, systemImage: "waveform")
-                    Spacer()
                     Button(assistant.input.displayName) { assistant.page = .input }
                         .font(.subheadline)
+                    Spacer()
+                    Label(model.captureStatusText, systemImage: "waveform").font(.subheadline)
                 }
                 if !model.transcriptGapText.isEmpty {
                     Text(model.transcriptGapText).font(.caption).foregroundStyle(.orange)
@@ -24,59 +24,58 @@ struct MeetingView: View {
             }
             .padding(.horizontal)
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    NavigationLink("会后材料") {
-                        Group {
-                            if model.finalReportText.isEmpty {
-                                ContentUnavailableView("暂无会后材料", systemImage: "doc.text",
-                                    description: Text("收到并保存的会后报告会显示在这里。"))
-                            } else {
-                                ScrollView {
-                                    VStack(alignment: .leading, spacing: 16) {
-                                        Text("会议：\(assistant.meeting.finalReportMeetingID)")
-                                            .font(.footnote).foregroundStyle(.secondary)
-                                        Text(model.finalReportText).font(.body)
-                                    }
-                                    .textSelection(.enabled)
-                                    .frame(maxWidth: .infinity, alignment: .leading).padding()
-                                }
-                            }
-                        }
-                        .navigationTitle("会后材料")
-                        .navigationBarTitleDisplayMode(.inline)
-                    }
-                }
-            }
             .safeAreaInset(edge: .bottom, spacing: 0) {
-                VStack(spacing: 6) {
-                    HStack {
-                        if model.isRecording || model.intent == .wanted || assistant.meeting.actionPending {
-                            if model.isPaused {
-                                Button("继续采集") { assistant.accept(.resume) }
-                                    .disabled(assistant.meeting.actionPending || assistant.meeting.capture?.observedState != "paused")
-                                    .buttonStyle(.borderedProminent)
-                            } else {
-                                Button("暂停采集") { assistant.accept(.pause) }
-                                    .disabled((!model.isRecording && model.intent != .wanted) || assistant.meeting.terminating)
-                                    .buttonStyle(.borderedProminent)
-                            }
-                            Button("结束会议", role: .destructive) { confirmStop = true }
-                                .disabled(assistant.meeting.terminating)
-                                .buttonStyle(.bordered)
-                        } else {
-                            Button("开始采集") { assistant.accept(.start) }
-                                .disabled(assistant.meeting.actionPending || assistant.meeting.terminating)
-                                .buttonStyle(.borderedProminent)
-                        }
+                HStack(spacing: 8) {
+                    Button(captureButtonTitle) { assistant.accept(captureButtonAction) }
+                        .buttonStyle(WorkspaceActionButtonStyle())
+                        .disabled(captureButtonDisabled)
+                    Button("结束会议", role: .destructive) { confirmStop = true }
+                        .buttonStyle(WorkspaceActionButtonStyle(tint: .red))
+                        .disabled(assistant.meeting.terminating ||
+                                  (!model.isRecording && model.intent != .wanted && !assistant.meeting.presentation.terminateAction.enabled))
+                    NavigationLink("会后材料") {
+                        reportContent.navigationTitle("会后材料").navigationBarTitleDisplayMode(.inline)
                     }
-                    .controlSize(.large)
+                    .buttonStyle(WorkspaceActionButtonStyle())
                 }.padding().frame(maxWidth: .infinity).background(.bar)
             }
             .confirmationDialog("结束本次会议并保存已有录音？", isPresented: $confirmStop,
                                 titleVisibility: .visible) {
                 Button("结束会议", role: .destructive) { assistant.accept(.end) }
                 Button("取消", role: .cancel) {}
+            }
+        }
+    }
+    private var captureButtonTitle: String {
+        if model.isPaused { return "继续采集" }
+        if model.isRecording { return "暂停采集" }
+        return model.intent == .wanted ? "恢复采集" : "开始采集"
+    }
+    private var captureButtonAction: CaptureAction {
+        if model.isPaused { return .resume }
+        if model.isRecording { return .pause }
+        return model.intent == .wanted ? .recover : .start
+    }
+    private var captureButtonDisabled: Bool {
+        if assistant.meeting.terminating { return true }
+        if model.isPaused {
+            return assistant.meeting.actionPending || assistant.meeting.capture?.observedState != "paused" ||
+                assistant.connection.pendingDisconnect != nil
+        }
+        return !model.isRecording && assistant.meeting.actionPending
+    }
+    @ViewBuilder private var reportContent: some View {
+        if model.finalReportText.isEmpty {
+            ContentUnavailableView("暂无会后材料", systemImage: "doc.text",
+                description: Text("收到并保存的会后报告会显示在这里。"))
+        } else {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("会议：\(assistant.meeting.finalReportMeetingID)").font(.footnote).foregroundStyle(.secondary)
+                    Text(model.finalReportText).font(.body)
+                }
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading).padding()
             }
         }
     }

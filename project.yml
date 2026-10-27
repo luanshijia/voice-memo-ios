@@ -86,7 +86,7 @@ targets:
         VM_DEFAULT_DEVICE: iphone
         VM_DEFAULT_USER: owner
         MARKETING_VERSION: "0.10.0"
-        CURRENT_PROJECT_VERSION: "112"
+        CURRENT_PROJECT_VERSION: "113"
         SWIFT_VERSION: "5.0"
         # 显式锁定:接 SwiftPM 依赖后产物 Info.plist 的 MinimumOSVersion 曾变成 13.0(依赖的声明下限),
         # 而代码用了 iOS 17 的 API —— 写死避免漂移。

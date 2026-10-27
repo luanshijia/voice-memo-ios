@@ -24,14 +24,17 @@ import LiveKit
         let device = CB08SDKBridge()
         self.device = device
         external = CB08InputProvider(device: device, publisher: publisher)
-        external.onFlow = { [weak self] in self?.isCapturing = true }
+        external.onFlow = { [weak self] in
+            self?.isCapturing = true
+            self?.device.noteDevice("首个有效PCM已提交媒体发布链")
+        }
         external.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }.store(in: &subscriptions)
         device.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }.store(in: &subscriptions)
     }
     var isAvailable: Bool { binding.kind == .phone || external.isAvailable }
     var permission: CapObserved { permissionStatus.observed }
     var displayName: String {
-        binding.kind == .phone ? "手机 · 面对面" : "CB08 · \(binding.sourceTag == .call ? "通话" : "面对面")"
+        binding.kind == .phone ? "手机" : "CB08"
     }
     @discardableResult func select(_ kind: InputKind, tag: SourceTag = .face2face) -> CaptureActionResult {
         guard !configurationLocked() else { return .rejected("请先暂停并等待确认") }
