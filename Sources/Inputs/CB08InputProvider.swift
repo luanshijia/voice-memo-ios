@@ -39,22 +39,31 @@ import LiveKit
         guard device.connected, let connectionID = device.connectionID, let room else { throw CB08InputError.unavailable }
         guard context.channel == "external_audio", let meetingID = context.meetingID,
               context.segmentID != nil, context.generation != nil else { throw CB08InputError.invalidContext }
+        epoch += 1; let attempt = epoch
+        let recordState = await device.refreshRecordState(timeout: .seconds(3))
+        guard attempt == epoch, device.connected, device.connectionID == connectionID else {
+            throw CB08InputError.unavailable
+        }
+        guard let recordState else { throw CB08InputError.recordStateUnknown }
         // Do not adopt a card's unrelated existing recording into a new meeting.
         let canResume = paused && ownsRecording && recordingOwner?.meetingID == meetingID
-        guard device.recordState == 0 || (device.recordState == 2 && canResume) else {
-            throw CB08InputError.alreadyRecording
+        guard recordState == 0 || (recordState == 2 && canResume) else {
+            if recordState == 2 { throw CB08InputError.pausedRecordingNotOwned }
+            throw CB08InputError.alreadyRecording(recordState)
         }
         let decoder = try makeDecoder()
-        epoch += 1; let attempt = epoch
         try await publisher.startPCM(in: room)
         guard attempt == epoch, device.connected, device.connectionID == connectionID else {
             await publisher.stopPCM(in: room); throw CB08InputError.unavailable
+        }
+        guard device.recordState == recordState else {
+            await publisher.stopPCM(in: room); throw CB08InputError.recordStateChanged
         }
         self.decoder = decoder; self.context = context
         decodedPackets = 0; decodeFailures = 0; submittedSamples = 0
         device.discardQueuedPackets()
         failure = nil; flowing = false; accepting = true
-        let resume = device.recordState == 2 && canResume
+        let resume = recordState == 2 && canResume
         paused = false
         recordingOwner = (meetingID, connectionID); pendingHalt = nil
         device.command(resume ? .resume : .start)
@@ -99,4 +108,18 @@ import LiveKit
         }
     }
 }
-enum CB08InputError: Error { case unavailable, invalidContext, alreadyRecording }
+enum CB08InputError: LocalizedError {
+    case unavailable, invalidContext, recordStateUnknown, recordStateChanged, pausedRecordingNotOwned
+    case alreadyRecording(Int)
+
+    var errorDescription: String? {
+        switch self {
+        case .unavailable: return "CB08 未连接或连接已变化"
+        case .invalidContext: return "CB08 采集上下文无效"
+        case .recordStateUnknown: return "未收到 CB08 录音状态，请刷新设备状态后重试"
+        case .recordStateChanged: return "CB08 录音状态在启动期间发生变化，请刷新设备状态后重试"
+        case .pausedRecordingNotOwned: return "CB08 存在不属于当前会议的暂停录音，请先在设备端处理"
+        case .alreadyRecording(let state): return "CB08 当前录音状态为 \(state)，请先停止设备录音后重试"
+        }
+    }
+}

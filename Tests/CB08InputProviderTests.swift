@@ -12,6 +12,13 @@ import XCTest
         var onLoss: (() -> Void)?
         var commands: [CB08RecordAction] = []
         var discarded = 0
+        var stateQueries = 0
+        var queriedState: (() async -> Int?)?
+        func refreshRecordState(timeout: Duration) async -> Int? {
+            stateQueries += 1
+            if let queriedState { return await queriedState() }
+            return recordState
+        }
         func discardQueuedPackets() { discarded += 1 }
         func command(_ action: CB08RecordAction) {
             commands.append(action)
@@ -77,9 +84,58 @@ import XCTest
         let publisher = Publisher()
         let provider = CB08InputProvider(device: device, publisher: publisher, makeDecoder: { Decoder() })
         provider.bind(Room())
-        do { try await provider.start(context: context()); XCTFail("unrelated recording adopted") } catch {}
+        do { try await provider.start(context: context()); XCTFail("unrelated recording adopted") }
+        catch CB08InputError.alreadyRecording(let state) { XCTAssertEqual(state, 1) }
+        catch { XCTFail("unexpected error: \(error)") }
         await provider.stop()
         XCTAssertTrue(device.commands.isEmpty); XCTAssertEqual(publisher.starts, 0)
+    }
+    func testUnknownRecordStateIsRefreshedAndWaitsForSDKReply() async throws {
+        let device = Device(); device.recordState = nil
+        let publisher = Publisher()
+        let provider = CB08InputProvider(device: device, publisher: publisher, makeDecoder: { Decoder() })
+        device.queriedState = {
+            try? await Task.sleep(for: .milliseconds(30))
+            device.recordState = 0
+            return 0
+        }
+        provider.bind(Room())
+        try await provider.start(context: context())
+        XCTAssertEqual(device.stateQueries, 1)
+        XCTAssertEqual(device.commands, [.start])
+        XCTAssertEqual(publisher.starts, 1)
+        await provider.stop()
+    }
+    func testUnknownRecordStateFailsClearlyWithoutPublishingOrStartingDevice() async {
+        let device = Device(); device.recordState = nil; device.queriedState = { nil }
+        let publisher = Publisher()
+        let provider = CB08InputProvider(device: device, publisher: publisher, makeDecoder: { Decoder() })
+        provider.bind(Room())
+        do { try await provider.start(context: context()); XCTFail("unknown device state accepted") }
+        catch CB08InputError.recordStateUnknown {}
+        catch { XCTFail("unexpected error: \(error)") }
+        XCTAssertEqual(device.stateQueries, 1)
+        XCTAssertTrue(device.commands.isEmpty)
+        XCTAssertEqual(publisher.starts, 0)
+    }
+    func testHaltDuringRecordStateWaitInvalidatesLateStart() async {
+        let device = Device(); device.recordState = nil
+        let publisher = Publisher()
+        let provider = CB08InputProvider(device: device, publisher: publisher, makeDecoder: { Decoder() })
+        device.queriedState = {
+            try? await Task.sleep(for: .milliseconds(50))
+            device.recordState = 0
+            return 0
+        }
+        provider.bind(Room())
+        let start = Task { try await provider.start(context: context()) }
+        try? await Task.sleep(for: .milliseconds(10))
+        provider.requestHalt(.stop)
+        do { try await start.value; XCTFail("late start survived halt") }
+        catch CB08InputError.unavailable {}
+        catch { XCTFail("unexpected error: \(error)") }
+        XCTAssertEqual(publisher.starts, 0)
+        XCTAssertTrue(device.commands.isEmpty)
     }
     func testFreshStartDoesNotAdoptUnknownPausedRecording() async {
         let device = Device(); device.recordState = 2
@@ -114,7 +170,7 @@ import XCTest
             do {
                 try await provider.start(context: context(meetingID: replaceConnection ? meetingID : UUID().uuidString))
                 XCTFail("paused recording ownership transferred")
-            } catch CB08InputError.alreadyRecording {} catch { XCTFail("unexpected error: \(error)") }
+            } catch CB08InputError.pausedRecordingNotOwned {} catch { XCTFail("unexpected error: \(error)") }
             XCTAssertEqual(device.commands, [.start, .pause])
             XCTAssertEqual(publisher.starts, 1)
             if replaceConnection {

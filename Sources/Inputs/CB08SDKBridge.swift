@@ -18,6 +18,7 @@ enum CB08RecordAction: Int { case start = 1, stop = 3, pause = 5, resume = 7 }
     var recordState: Int? { get }
     var onPacket: ((Data) -> Void)? { get set }
     var onLoss: (() -> Void)? { get set }
+    func refreshRecordState(timeout: Duration) async -> Int?
     func command(_ action: CB08RecordAction)
     func discardQueuedPackets()
 }
@@ -111,6 +112,19 @@ private final class CB08PacketBudget: @unchecked Sendable {
         node.getFileNameOnlyRecording()
 #endif
         status = "已请求设备状态"
+    }
+    func refreshRecordState(timeout: Duration) async -> Int? {
+        guard connected else { return nil }
+        recordState = nil
+#if !targetEnvironment(simulator)
+        node.getRecordState()
+#endif
+        let clock = ContinuousClock()
+        let deadline = clock.now + timeout
+        while recordState == nil, clock.now < deadline, !Task.isCancelled {
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        return recordState
     }
     func cancelHardwareIntent(unless action: CB08RecordAction? = nil) {
         if hardwareIntent != action { hardwareIntent = nil }
