@@ -12,8 +12,8 @@ on:
 
 jobs:
   build:
-    # 使用 macOS 26 arm64 runner，作为当前构建队列的替代环境。
-    runs-on: macos-26
+    # 使用 macOS 26 Intel runner，避开 ARM64 hosted runner 容量不足的队列。
+    runs-on: macos-26-intel
     timeout-minutes: 30
 
     steps:
