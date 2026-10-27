@@ -29,6 +29,21 @@ import XCTest
         XCTAssertTrue(provider.isAvailable)
     }
 
+    func testInterruptionKeepsOldRoomUntilExplicitStopCompletes() async throws {
+        let publisher = Publisher()
+        let provider = PhoneInputProvider(publisher: publisher)
+        provider.bind(Room())
+        let context = ExecutionContext(configurationRevision: 1, operationID: UUID(),
+            meetingID: UUID().uuidString, channel: "mic", generation: 1, segmentID: nil)
+        try await provider.start(context: context)
+        let cleanup = provider.detachForInterruption()
+        await cleanup()
+        XCTAssertEqual(publisher.states, [true, false])
+        provider.bind(Room())
+        try await provider.start(context: context)
+        XCTAssertEqual(publisher.states, [true, false, true])
+        await provider.stop()
+    }
     func testPhoneProviderRejectsCaptureWithoutRoom() async {
         let provider = PhoneInputProvider(publisher: Publisher())
         let context = ExecutionContext(configurationRevision: 1, operationID: UUID(),

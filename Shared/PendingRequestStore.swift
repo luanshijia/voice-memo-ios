@@ -24,7 +24,6 @@ struct PendingRequestStore {
         defer { _ = flock(fd, LOCK_UN) }
         let file = root.appendingPathComponent(key + ".json")
         let exists = FileManager.default.fileExists(atPath: file.path)
-        legacy?.synchronize()
         let current: Data?
         let legacyFile = legacyRoots.map { $0.appendingPathComponent(key + ".json") }
             .first(where: { FileManager.default.fileExists(atPath: $0.path) })
@@ -44,13 +43,26 @@ struct PendingRequestStore {
         }
         // Migration is complete only after the replacement was saved.
         if let legacyFile { try? FileManager.default.removeItem(at: legacyFile) }
-        legacy?.removeObject(forKey: key)
-        legacy?.synchronize()
+        if legacy?.object(forKey: key) != nil { legacy?.removeObject(forKey: key) }
         return result
     }
 
     func read(_ key: String) throws -> Data? {
-        try transaction(key) { ($0, $0) }
+        guard key.range(of: "^[A-Za-z0-9._-]+$", options: .regularExpression) != nil else {
+            throw NSError(domain: "VoiceMemo.PendingRequest", code: 1)
+        }
+        let file = root.appendingPathComponent(key + ".json")
+        // Writers use atomic replacement: readers see a complete old or new snapshot.
+        // Only a legacy value requires migration under the existing exclusive lock.
+        let needsMigration = legacy?.data(forKey: key) != nil || legacyRoots.contains {
+            FileManager.default.fileExists(atPath: $0.appendingPathComponent(key + ".json").path)
+        }
+        if needsMigration { return try transaction(key) { ($0, $0) } }
+        guard FileManager.default.fileExists(atPath: file.path) else { return nil }
+        do { return try Data(contentsOf: file) }
+        catch let error as NSError where error.domain == NSCocoaErrorDomain && error.code == NSFileReadNoSuchFileError {
+            return nil // A concurrent acknowledgement may have removed this snapshot.
+        }
     }
 
     private func posixError() -> NSError {

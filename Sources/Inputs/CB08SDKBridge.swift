@@ -78,10 +78,10 @@ private final class CB08PacketBudget: @unchecked Sendable {
     @Published private(set) var firmware = "未知"
     @Published private(set) var capacity = "未知（SDK原始单位）"
     @Published private(set) var currentFile = "未知"
-    @Published private(set) var packetCount = 0
-    @Published private(set) var packetBytes = 0
-    @Published private(set) var droppedPackets = 0
-    @Published private(set) var packetSizes: [Int: Int] = [:]
+    private(set) var packetCount = 0
+    private(set) var packetBytes = 0
+    private(set) var droppedPackets = 0
+    private(set) var packetSizes: [Int: Int] = [:]
     @Published private(set) var hardwareButtonEvents: [Int: Int] = [:]
     var onPacket: ((Data) -> Void)?
     var onLoss: (() -> Void)?
@@ -97,27 +97,36 @@ private final class CB08PacketBudget: @unchecked Sendable {
     private var connectionTimeout: Task<Void, Never>?
     private let budget = CB08PacketBudget()
 #if !targetEnvironment(simulator)
-    private let node = PNode.shared()!
+    private var node: PNode?
 #endif
-    override init() {
-        super.init()
+    @Published private(set) var isSDKInitialized = false
+    override init() { super.init() }
+    /// Activation is explicit; constructing the phone workspace never starts Bluetooth.
+    func activate() {
+        guard !isSDKInitialized else { return }
 #if !targetEnvironment(simulator)
-        node.delegate = self
+        guard let shared = PNode.shared() else { status = "CB08 SDK初始化失败"; return }
+        node = shared
+        isSDKInitialized = true
+        node?.delegate = self
         PNode.setShowLog(false)
-        connected = node.isDeviceConnected()
+        connected = node?.isDeviceConnected() ?? false
         if connected {
             connectionID = UUID(); connectionPhase = .connected
             initializeConnection()
         }
 #else
+        isSDKInitialized = true
         status = "模拟器不支持CB08蓝牙，需真机验证"
 #endif
     }
     func scan() {
+        activate()
+        guard isSDKInitialized else { return }
         guard connectionPhase == .disconnected || connectionPhase == .unknown else { return }
         devices.removeAll(); isScanning = true; status = "扫描中"
 #if !targetEnvironment(simulator)
-        node.startSearch()
+        node?.startSearch()
 #else
         status = "模拟器不支持CB08蓝牙"
 #endif
@@ -125,19 +134,21 @@ private final class CB08PacketBudget: @unchecked Sendable {
     func stopScan() {
         isScanning = false
 #if !targetEnvironment(simulator)
-        node.stopSearch()
+        node?.stopSearch()
 #endif
         if status == "扫描中" { status = "已停止扫描" }
     }
     var selectedDevice: CB08Device? { devices.first { $0.id == selectedDeviceID } }
     func connect(_ device: CB08Device) {
+        activate()
+        guard isSDKInitialized else { return }
         guard !connected, connectionPhase != .connecting, connectionPhase != .disconnecting else { return }
         stopScan(); hardwareIntent = nil; connectionID = nil; status = "正在连接CB08"
         selectedDeviceID = device.id; connectionPhase = .connecting
         resetDeviceFacts(); noteDevice("发出蓝牙连接请求")
         armConnectionTimeout(for: .connecting)
 #if !targetEnvironment(simulator)
-        node.connectDeviceAndAddress(device.name, device.address)
+        node?.connectDeviceAndAddress(device.name, device.address)
 #endif
     }
     func disconnect() {
@@ -147,16 +158,16 @@ private final class CB08PacketBudget: @unchecked Sendable {
         status = "已请求断开"; noteDevice("发出断开请求，等待cmd=2确认"); onLoss?()
         armConnectionTimeout(for: .disconnecting)
 #if !targetEnvironment(simulator)
-        node.closeConnect()
+        node?.closeConnect()
 #endif
     }
     func refreshStatus() {
         guard connected else { status = "未连接"; return }
 #if !targetEnvironment(simulator)
-        node.getCBC(); node.getDeviceVersion(); node.getDeviceCapacity()
-        node.getFileNameOnlyRecording()
-        node.getDeviceGain(); node.getDeviceLowPowerRecordMode()
-        if recordState == .recording { node.getTimeOnlyRecording() }
+        node?.getCBC(); node?.getDeviceVersion(); node?.getDeviceCapacity()
+        node?.getFileNameOnlyRecording()
+        node?.getDeviceGain(); node?.getDeviceLowPowerRecordMode()
+        if recordState == .recording { node?.getTimeOnlyRecording() }
 #endif
         requestRecordQuery()
         status = "已请求设备状态"
@@ -181,7 +192,7 @@ private final class CB08PacketBudget: @unchecked Sendable {
         guard !recordQueryPending else { return }
         recordQueryPending = true
 #if !targetEnvironment(simulator)
-        node.getRecordState()
+        node?.getRecordState()
 #endif
     }
     func cancelHardwareIntent(unless action: CB08RecordAction? = nil) {
@@ -197,14 +208,14 @@ private final class CB08PacketBudget: @unchecked Sendable {
         noteDevice("发出\(acknowledge ? "实体键确认" : "App录音动作") \(action.title)，action=\(action.rawValue)")
 #if !targetEnvironment(simulator)
         switch (action, acknowledge) {
-        case (.start, true): node.startBtnBackRecord()
-        case (.stop, true): node.stopBtnBackRecord()
-        case (.pause, true): node.pauseBtnBackRecord()
-        case (.resume, true): node.continueBtnBackRecord()
-        case (.start, false): node.startRecord()
-        case (.stop, false): node.stopRecord()
-        case (.pause, false): node.pauseRecord()
-        case (.resume, false): node.continueRecord()
+        case (.start, true): node?.startBtnBackRecord()
+        case (.stop, true): node?.stopBtnBackRecord()
+        case (.pause, true): node?.pauseBtnBackRecord()
+        case (.resume, true): node?.continueBtnBackRecord()
+        case (.start, false): node?.startRecord()
+        case (.stop, false): node?.stopRecord()
+        case (.pause, false): node?.pauseRecord()
+        case (.resume, false): node?.continueRecord()
         }
 #endif
         status = "已请求设备动作，等待状态回调"
@@ -224,7 +235,7 @@ private final class CB08PacketBudget: @unchecked Sendable {
     func appState(foreground: Bool) {
         self.foreground = foreground
 #if !targetEnvironment(simulator)
-        if connected { node.sendAppShowState(foreground ? 1 : 2) }
+        if connected { node?.sendAppShowState(foreground ? 1 : 2) }
 #endif
     }
     func noteDevice(_ message: String) {
@@ -241,7 +252,7 @@ private final class CB08PacketBudget: @unchecked Sendable {
     }
     private func initializeConnection() {
 #if !targetEnvironment(simulator)
-        node.syncTime(); node.sendAppShowState(foreground ? 1 : 2)
+        node?.syncTime(); node?.sendAppShowState(foreground ? 1 : 2)
 #endif
         noteDevice("连接初始化：同步时间、通知前后台状态、查询设备信息")
         refreshStatus()
@@ -354,6 +365,7 @@ private final class CB08PacketBudget: @unchecked Sendable {
         default: break
         }
     }
+    private var nextPacketUpdate = Date.distantPast
     private func receivePacket(_ data: Data, lost: Int) {
         if lost > droppedPackets {
             droppedPackets = lost; status = "回调拥塞，已请求暂停"; onLoss?()
@@ -362,6 +374,9 @@ private final class CB08PacketBudget: @unchecked Sendable {
         if packetCount == 1 { noteDevice("首个实时Opus回调到达，\(data.count)字节") }
         packetSizes[data.count, default: 0] += 1
         onPacket?(data)
+        if Date() >= nextPacketUpdate {
+            nextPacketUpdate = Date().addingTimeInterval(0.5); objectWillChange.send()
+        }
     }
 }
 #if !targetEnvironment(simulator)

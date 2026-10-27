@@ -33,6 +33,8 @@ import Foundation
     /// Local start/halt tasks own pending execution until their cleanup completes.
     private var localControlExecutions = 0
     private var desktopReconciliationRunning = false
+    private var usageSample = RuntimeUsageSample()
+    private var observationTask: Task<Void, Never>?
     private var pendingPublishing: CaptureView?
     private var unsavedHalt: (action: String, config: LiveKitConfig, view: CaptureView?)?
 
@@ -74,7 +76,7 @@ import Foundation
         if meeting.observesDesktop {
             if let saved = MeetingClient.savedCapture() { meeting.applyCapture(saved, confirmed: false) }
             meeting.setActionPending(connection.hasPendingCapture)
-            Task { [weak self] in await self?.observeDesktop() }
+            startDesktopObservation()
         }
     }
 
@@ -152,13 +154,27 @@ import Foundation
         await connection.preflightControl()
     }
 
-    private func observeDesktop() async {
-        while !Task.isCancelled {
-            try? await MeetingClient.flushPendingBroadcastStop()
-            try? await MeetingClient.flushPendingMicStop()
-            try? await reconcileDesktopOnce()
-            try? await Task.sleep(nanoseconds: 5_000_000_000)
+    deinit { observationTask?.cancel() }
+    func startDesktopObservation() {
+        guard meeting.observesDesktop else { return }
+        if let observationTask, !observationTask.isCancelled { return }
+        let previous = observationTask
+        observationTask = Task { [weak self] in
+            await previous?.value
+            while !Task.isCancelled {
+                await self?.observeDesktopOnce()
+                do { try await Task.sleep(for: .seconds(5)) } catch { return }
+            }
         }
+    }
+    func stopDesktopObservation() { observationTask?.cancel() }
+    private func observeDesktopOnce() async {
+        if let sample = usageSample.report(capturing: input.isCapturing) { meeting.note(sample) }
+        try? await MeetingClient.flushPendingBroadcastStop()
+        guard !Task.isCancelled else { return }
+        try? await MeetingClient.flushPendingMicStop()
+        guard !Task.isCancelled else { return }
+        try? await reconcileDesktopOnce()
     }
 
     /// Polling may settle abandoned requests after relaunch, but never consume

@@ -38,8 +38,12 @@ struct ExternalDeviceView: View {
             }
             Section {
                 LabeledContent("卡片录音状态", value: device.connected ? recordWord : "未知")
-                TimelineView(.periodic(from: .now, by: 1)) { timeline in
-                    LabeledContent("音频接收", value: provider.audioStatus(at: timeline.date))
+                if provider.flowing {
+                    TimelineView(.periodic(from: .now, by: 1)) { timeline in
+                        LabeledContent("音频接收", value: provider.audioStatus(at: timeline.date))
+                    }
+                } else {
+                    LabeledContent("音频接收", value: provider.stage)
                 }
                 LabeledContent("电量", value: device.battery.map { $0 == 110 ? "充电中" : "\($0)%" } ?? "未知")
                 LabeledContent("剩余/总容量", value: device.capacity)
@@ -81,6 +85,7 @@ struct ExternalDeviceView: View {
             }
         }
         .font(.body)
+        .onAppear { device.activate() }
         .navigationTitle("外设控制台")
         .navigationBarTitleDisplayMode(.inline)
     }

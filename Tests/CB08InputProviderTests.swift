@@ -83,7 +83,9 @@ import XCTest
         let provider = CB08InputProvider(device: device, publisher: publisher, makeDecoder: { decoder })
         var faults = 0; provider.onFault = { faults += 1 }
         provider.bind(Room()); try await provider.start(context: context())
-        decoder.fail = true; device.onPacket?(Data([0])); decoder.fail = false
+        decoder.fail = true; device.onPacket?(Data([0]))
+        await provider.waitForPendingAudio()
+        decoder.fail = false
         device.onPacket?(Data([0]))
         XCTAssertEqual(faults, 1); XCTAssertEqual(publisher.packets, 1)
         XCTAssertEqual(device.commands, [.start]); XCTAssertEqual(provider.decodeFailures, 1)

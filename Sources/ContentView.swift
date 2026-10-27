@@ -28,7 +28,11 @@ struct ContentView: View {
                     .frame(maxWidth: .infinity, minHeight: 44).background(.thinMaterial)
             }
         }
-        .task { await model.refreshForegroundStateLoop() }
+        .task {
+            assistant.startDesktopObservation()
+            await model.refreshForegroundStateLoop()
+        }
+        .onDisappear { assistant.stopDesktopObservation() }
         .onChange(of: scenePhase) { _, phase in
             assistant.input.device.appState(foreground: phase == .active)
             guard phase == .active else { return }

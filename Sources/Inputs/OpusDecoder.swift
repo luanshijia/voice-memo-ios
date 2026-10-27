@@ -67,6 +67,11 @@ final class OpusDecoder: OpusDecoding {
     private let inputFormat: AVAudioFormat
     private let outputFormat: AVAudioFormat
 
+    private lazy var compressed = AVAudioCompressedBuffer(format: inputFormat,
+                                                          packetCapacity: 1,
+                                                          maximumPacketSize: CB08OpusFraming.frameBytes)
+    private lazy var output = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: 5_760)
+
     init() throws {
         var input = AudioStreamBasicDescription(
             mSampleRate: 16_000,
@@ -102,12 +107,10 @@ final class OpusDecoder: OpusDecoding {
     }
 
     private func decodeFrame(_ packet: Data) throws -> Data {
+        let compressed = self.compressed
         guard !packet.isEmpty else { throw OpusDecoderError.emptyPacket }
         guard packet.count <= Int(UInt32.max) else { throw OpusDecoderError.conversion("packet too large") }
 
-        let compressed = AVAudioCompressedBuffer(format: inputFormat,
-                                                  packetCapacity: 1,
-                                                  maximumPacketSize: packet.count)
         packet.withUnsafeBytes { source in
             if let baseAddress = source.baseAddress {
                 compressed.data.copyMemory(from: baseAddress, byteCount: packet.count)
@@ -122,10 +125,10 @@ final class OpusDecoder: OpusDecoding {
                 mDataByteSize: UInt32(packet.count))
         }
 
-        let capacity: AVAudioFrameCount = 5_760
-        guard let output = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: capacity) else {
+        guard let output else {
             throw OpusDecoderError.conversion("cannot allocate PCM output")
         }
+        output.frameLength = 0
         var supplied = false
         var conversionError: NSError?
         let status = converter.convert(to: output, error: &conversionError) { _, inputStatus in

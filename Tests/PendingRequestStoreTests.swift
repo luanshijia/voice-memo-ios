@@ -2,6 +2,11 @@ import XCTest
 @testable import VoiceMemo
 
 final class PendingRequestStoreTests: XCTestCase {
+    func testEmptyReadCreatesNoDirectoryOrLockFile() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        XCTAssertNil(try PendingRequestStore(root: root).read("pending"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.path))
+    }
     func testOldReceiptCannotDeleteAReplacedStop() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

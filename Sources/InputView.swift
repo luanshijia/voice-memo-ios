@@ -23,8 +23,12 @@ struct InputView: View {
                     }
                     LabeledContent("蓝牙连接", value: assistant.input.device.connectionPhase.rawValue)
                     LabeledContent("卡片录音", value: cardRecordState)
-                    TimelineView(.periodic(from: .now, by: 1)) { timeline in
-                        LabeledContent("音频接收", value: assistant.input.external.audioStatus(at: timeline.date))
+                    if assistant.input.external.flowing {
+                        TimelineView(.periodic(from: .now, by: 1)) { timeline in
+                            LabeledContent("音频接收", value: assistant.input.external.audioStatus(at: timeline.date))
+                        }
+                    } else {
+                        LabeledContent("音频接收", value: assistant.input.external.stage)
                     }
                 }
             }.font(.body)

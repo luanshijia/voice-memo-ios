@@ -23,6 +23,7 @@ import LiveKit
         self.provider = provider ?? PhoneInputProvider(publisher: publisher)
         let device = CB08SDKBridge()
         self.device = device
+        publisher.onFailure = { [weak device] message in device?.noteDevice(message) }
         external = CB08InputProvider(device: device, publisher: publisher)
         external.onFlow = { [weak self] in
             self?.isCapturing = true
@@ -42,11 +43,15 @@ import LiveKit
                            sourceTag: kind == .phone ? .face2face : tag))
         return .submitted
     }
-    func adopt(_ value: InputBinding) { binding = value }
+    func adopt(_ value: InputBinding) {
+        binding = value
+        if value.kind == .external { device.activate() }
+    }
     func bind(_ room: Room) {
         if binding.kind == .phone { provider.bind(room) } else { external.bind(room) }
     }
     func start(context: ExecutionContext) async throws {
+        await provider.waitForCleanup()
         guard context.channel == binding.channel else { throw CB08InputError.invalidContext }
         if binding.kind == .phone { try await provider.start(context: context); isCapturing = true }
         else { try await external.start(context: context) }
@@ -72,7 +77,9 @@ import LiveKit
         await external.stop()
     }
     func interrupted() {
-        provider.bind(nil); external.interrupted(); isCapturing = false
+        let cleanup = provider.detachForInterruption()
+        external.interrupted(); isCapturing = false
+        Task { await cleanup() }
     }
 
     func refreshMicMode(generation: Int) {

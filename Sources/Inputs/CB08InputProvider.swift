@@ -4,19 +4,21 @@ import LiveKit
 
 /// CB08 owns capture; this provider only publishes authorized PCM in the current segment.
 @MainActor final class CB08InputProvider: ObservableObject {
-    @Published private(set) var decodedFrames = 0
-    @Published private(set) var expectedSamples = 0
-    @Published private(set) var decodedPackets = 0
-    @Published private(set) var decodeFailures = 0
-    @Published private(set) var submittedSamples = 0
+    private(set) var decodedFrames = 0
+    private(set) var expectedSamples = 0
+    private(set) var decodedPackets = 0
+    private(set) var decodeFailures = 0
+    private(set) var submittedSamples = 0
     @Published private(set) var failure: String?
     @Published private(set) var flowing = false
     @Published private(set) var stage = "尚未开始"
-    @Published private(set) var lastPCMAt: Date?
+    private(set) var lastPCMAt: Date?
     private let device: CB08DeviceControlling
     private let publisher: PCMAudioPublishing
     private let makeDecoder: () throws -> OpusDecoding
-    private var decoder: OpusDecoding?
+    private var pipeline: CB08DecodePipeline?
+    private var pendingDecodes = 0
+    private var nextStatisticsUpdate = Date.distantPast
     private var room: Room?
     private var context: ExecutionContext?
     private var accepting = false
@@ -79,7 +81,7 @@ import LiveKit
         guard device.recordState == recordState else {
             await publisher.stopPCM(in: room); throw CB08InputError.recordStateChanged
         }
-        self.decoder = decoder; self.context = context
+        self.pipeline = CB08DecodePipeline(decoder: decoder); self.context = context
         decodedFrames = 0; expectedSamples = 0
         decodedPackets = 0; decodeFailures = 0; submittedSamples = 0
         device.discardQueuedPackets()
@@ -110,7 +112,11 @@ import LiveKit
         }
     }
     /// Close the gate synchronously, before any asynchronous track disconnect.
-    func closeGate() { accepting = false; flowing = false; epoch += 1; device.discardQueuedPackets() }
+    func closeGate() {
+        accepting = false; flowing = false; epoch += 1
+        pipeline?.cancel(); publisher.closePCMGate(); pendingDecodes = 0
+        device.discardQueuedPackets(); objectWillChange.send()
+    }
     func requestHalt(_ action: CB08RecordAction) {
         closeGate()
         if failure == nil { stage = action == .pause ? "已暂停音频接收" : "已停止音频接收" }
@@ -124,12 +130,12 @@ import LiveKit
     func pause() async {
         requestHalt(.pause)
         if let room { await publisher.stopPCM(in: room) }
-        room = nil; decoder = nil; context = nil
+        room = nil; pipeline = nil; context = nil
     }
     func stop() async {
         requestHalt(.stop)
         if let room { await publisher.stopPCM(in: room) }
-        room = nil; decoder = nil; context = nil
+        room = nil; pipeline = nil; context = nil
     }
     func interrupted() { closeGate() }
     private func fault(_ reason: String) {
@@ -138,22 +144,40 @@ import LiveKit
         stage = reason
         if active && !starting { onFault?() }
     }
+    func waitForPendingAudio() async {
+        while pendingDecodes > 0, accepting, !Task.isCancelled { await Task.yield() }
+    }
     private func receive(_ data: Data) {
-        guard accepting, context != nil, let decoder else { return }
-        do {
-            let result = try decoder.decode(packet: data)
-            guard accepting else { return }
-            try publisher.submitPCM(result.pcm)
-            lastPCMAt = Date()
-            decodedFrames += result.metrics.frameCount
-            expectedSamples += result.metrics.frameCount * CB08OpusFraming.samplesPerFrame
-            decodedPackets += 1; submittedSamples += result.metrics.decodedSamples
-            if !flowing { flowing = true; stage = "正在接收实时音频"; onFlow?() }
-        } catch {
-            decodeFailures += 1; fault("音频解码或提交失败，已请求暂停：\(error.localizedDescription)")
+        guard accepting, context != nil, let pipeline else { return }
+        let attempt = epoch
+        pendingDecodes += 1
+        let accepted = pipeline.submit(data) { [weak self] result in
+            guard let self, self.accepting, self.epoch == attempt else { return }
+            self.pendingDecodes -= 1
+            do {
+                let output = try result.get()
+                try self.publisher.submitPCM(output.pcm)
+                self.lastPCMAt = Date()
+                self.decodedFrames += output.metrics.frameCount
+                self.expectedSamples += output.metrics.frameCount * CB08OpusFraming.samplesPerFrame
+                self.decodedPackets += 1; self.submittedSamples += output.metrics.decodedSamples
+                if !self.flowing { self.flowing = true; self.stage = "正在接收实时音频"; self.onFlow?() }
+                if Date() >= self.nextStatisticsUpdate {
+                    self.nextStatisticsUpdate = Date().addingTimeInterval(0.5)
+                    self.objectWillChange.send()
+                }
+            } catch {
+                self.decodeFailures += 1
+                self.fault("音频解码或提交失败，已请求暂停：\(error.localizedDescription)")
+            }
+        }
+        if !accepted {
+            pendingDecodes -= 1
+            fault("音频处理队列已满，已请求暂停")
         }
     }
 }
+
 enum CB08InputError: LocalizedError {
     case unavailable, invalidContext, recordStateUnknown, recordStateChanged, pausedRecordingNotOwned
     case actionNotConfirmed, noRealtimeAudio
