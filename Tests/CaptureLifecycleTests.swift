@@ -56,31 +56,35 @@ import XCTest
         input = InputWorker(provider: PhoneInputProvider(publisher: publisher))
         view = try Self.projection()
         let control = CaptureControlOperations(
-            queueStart: { [unowned self] _, _, _, _ in pending = true },
-            queueAction: { [unowned self] _, _, action, _ in
+            queueStart: { [weak self] _, _, _, _ in self?.pending = true },
+            queueAction: { [weak self] _, _, action, _ in
+                guard let self else { return }
                 if action == "pause" || action == "end" {
                     view = try Self.projection(["desired_state": action == "pause" ? "paused" : "ended", "state_revision": 2])
                     pending = true
                 }
             },
-            flush: { [unowned self] in
+            flush: { [weak self] in
+                guard let self else { return nil }
                 flushes += 1
                 guard pending else { return nil }
                 pending = false
                 return view
             },
-            view: { [unowned self] _ in
+            view: { [weak self] _ in
+                guard let self else { return CaptureDeviceView(meeting: nil, pendingReports: []) }
                 if let viewHandler { return try await viewHandler() }
                 return CaptureDeviceView(meeting: view, pendingReports: [])
             },
-            observe: { [unowned self] _, _, observed in
+            observe: { [weak self] _, _, observed in
+                guard let self else { return }
                 observations.append(observed)
                 if let observeHandler { try await observeHandler(observed) }
                 if observed == "publishing" && failPublishing { throw URLError(.timedOut) }
-            }, hasPending: { [unowned self] in pending })
+            }, hasPending: { [weak self] in self?.pending ?? false })
         connection = ConnectionWorker(settings: settings, captureControl: control,
             connectRoom: { _, _, _ in Room() },
-            disconnectRoom: { [unowned self] _ in disconnects += 1 })
+            disconnectRoom: { [weak self] _ in self?.disconnects += 1 })
         meeting = MeetingWorker(settings: settings, input: input, transport: connection, startObserving: false)
         assistant = MeetingAssistant(meeting: meeting)
     }
