@@ -15,8 +15,8 @@ import XCTest
     var checks = 0
     var forcedLock = false
     lazy var assistant = MeetingAssistant(meeting: meeting, commands: MeetingCommands(
-        start: { [unowned self] in starts += 1; meeting.capturePreparing() },
-        end: { [unowned self] in ends += 1; meeting.captureStopped() }))
+        start: { [unowned self] in starts += 1; meeting.capturePreparing(); return .submitted },
+        end: { [unowned self] in ends += 1; meeting.captureStopped(); return .submitted }))
 
     init() {
         suite = "VoiceMemo.BusinessTests." + UUID().uuidString

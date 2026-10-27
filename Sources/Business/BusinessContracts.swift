@@ -54,7 +54,6 @@ struct ExecutionContext {
     let channel: String
     let generation: Int?
     let segmentID: String?
-    var resumesPausedDevice: Bool = false
 }
 
 enum ConfigurationField { case serverURL, deviceID, userID, credential }
@@ -62,8 +61,8 @@ enum ConfigurationField { case serverURL, deviceID, userID, credential }
 /// Commands are injected independently of the state owners. Production dispatches
 /// through MeetingAssistant; tests can substitute IO without opening a network.
 @MainActor struct MeetingCommands {
-    let start: () -> Void
-    let end: () -> Void
-    var pause: (() -> Void)? = nil
-    var resume: (() -> Void)? = nil
+    let start: () -> CaptureActionResult
+    let end: () -> CaptureActionResult
+    var pause: (() -> CaptureActionResult)? = nil
+    var resume: (() -> CaptureActionResult)? = nil
 }

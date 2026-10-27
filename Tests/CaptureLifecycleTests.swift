@@ -38,6 +38,8 @@ import XCTest
     var disconnects = 0
     var observations: [String] = []
     var failPublishing = false
+    var actionSaveHandler: (() throws -> Void)?
+    var sendHandler: (@MainActor () async -> Void)?
     var viewHandler: (@MainActor () async throws -> CaptureDeviceView)?
     var observeHandler: (@MainActor (String) async throws -> Void)?
 
@@ -59,6 +61,7 @@ import XCTest
             queueStart: { [weak self] _, _, _, _ in self?.pending = true },
             queueAction: { [weak self] _, _, action, _ in
                 guard let self else { return }
+                try actionSaveHandler?()
                 if action == "pause" || action == "end" {
                     view = try Self.projection(["desired_state": action == "pause" ? "paused" : "ended", "state_revision": 2])
                     pending = true
@@ -84,7 +87,8 @@ import XCTest
             }, hasPending: { [weak self] in self?.pending ?? false })
         connection = ConnectionWorker(settings: settings, captureControl: control,
             connectRoom: { _, _, _ in Room() },
-            disconnectRoom: { [weak self] _ in self?.disconnects += 1 })
+            disconnectRoom: { [weak self] _ in self?.disconnects += 1 },
+            sendData: { [weak self] _ in if let handler = self?.sendHandler { await handler() } })
         meeting = MeetingWorker(settings: settings, input: input, transport: connection, startObserving: false)
         assistant = MeetingAssistant(meeting: meeting)
     }
@@ -195,7 +199,7 @@ import XCTest
         f.connection.enqueueDisconnect(beforeDisconnect: { await gate.wait() }) {}
         var resumes = 0
         let assistant = MeetingAssistant(meeting: f.meeting, commands: MeetingCommands(
-            start: {}, end: {}, pause: {}, resume: { resumes += 1 }))
+            start: { .submitted }, end: { .submitted }, pause: { .submitted }, resume: { resumes += 1; return .submitted }))
         f.meeting.applyCapture(try CaptureLifecycleFixture.projection([
             "desired_state": "paused", "observed_state": "paused", "state_revision": 2]))
         XCTAssertFalse(assistant.canSelectInput)
@@ -243,6 +247,62 @@ import XCTest
         await teardown?.value
         XCTAssertNil(f.connection.live)
         try await f.cleanUp()
+    }
+
+    func testSaveFailureStillStopsInputAndRetriesWithoutRestarting() async throws {
+        for action in [CaptureAction.pause, .end] {
+            let f = try CaptureLifecycleFixture()
+            await f.start()
+            let retried = expectation(description: "unsaved halt retried after cleanup")
+            var attempts = 0
+            f.actionSaveHandler = {
+                attempts += 1
+                if attempts == 2 { retried.fulfill() }
+                throw CocoaError(.fileWriteOutOfSpace)
+            }
+            let flushes = f.flushes
+            if case .rejected = f.assistant.accept(action) {} else { XCTFail("failed save reported submitted") }
+            let teardown = f.connection.pendingDisconnect
+            await teardown?.value
+            await fulfillment(of: [retried], timeout: 2)
+            XCTAssertFalse(f.input.isCapturing)
+            XCTAssertFalse(f.meeting.isRecording)
+            XCTAssertEqual(f.publisher.microphone, [true, false])
+            XCTAssertTrue(f.meeting.actionPending)
+            XCTAssertTrue(f.settings.isLocked)
+            XCTAssertNotNil(f.assistant.message)
+            XCTAssertEqual(f.flushes, flushes)
+            f.actionSaveHandler = nil
+            try await f.assistant.reconcileDesktopOnce()
+            XCTAssertFalse(f.meeting.actionPending)
+            XCTAssertNil(f.assistant.message)
+            XCTAssertEqual(f.meeting.capture?.desiredState, action == .pause ? "paused" : "ended")
+            XCTAssertEqual(f.publisher.microphone, [true, false])
+            try await f.cleanUp()
+        }
+    }
+
+    func testLateSummarySendCannotRestartTimerAfterHalt() async throws {
+        for action in [CaptureAction.pause, .end] {
+            let f = try CaptureLifecycleFixture()
+            let gate = CaptureGate()
+            let sending = expectation(description: "summary mode waiting for transport")
+            f.sendHandler = { sending.fulfill(); await gate.wait() }
+            f.assistant.startCapture()
+            let start = f.connection.connecting
+            await fulfillment(of: [sending], timeout: 2)
+            XCTAssertEqual(f.assistant.accept(action), .submitted)
+            let teardown = f.connection.pendingDisconnect
+            gate.open()
+            await start?.value
+            await teardown?.value
+            let stoppedSeconds = f.meeting.recordedSeconds
+            try await Task.sleep(nanoseconds: 650_000_000)
+            XCTAssertEqual(f.meeting.recordedSeconds, stoppedSeconds)
+            XCTAssertFalse(f.input.isCapturing)
+            XCTAssertFalse(f.meeting.isRecording)
+            try await f.cleanUp()
+        }
     }
 
     func testEndDuringNewStartKeepsRequestBoundToNewGrantInsteadOfOldMeeting() throws {

@@ -142,7 +142,7 @@ final class MeetingWorker: ObservableObject {
         self.transport = transport
         settings.lockedByMeeting = { [weak self] in
             guard let self else { return false }
-            return self.isRecording || self.intent == .wanted || self.terminating ||
+            return self.isRecording || self.intent == .wanted || self.terminating || self.actionPending ||
                 self.meetingContext.meetingAcceptsRecovery
         }
         input.configurationLocked = { [weak settings] in settings?.isLocked ?? true }

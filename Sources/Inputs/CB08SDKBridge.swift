@@ -14,6 +14,7 @@ struct CB08Device: Identifiable, Equatable {
 enum CB08RecordAction: Int { case start = 1, stop = 3, pause = 5, resume = 7 }
 @MainActor protocol CB08DeviceControlling: AnyObject {
     var connected: Bool { get }
+    var connectionID: UUID? { get }
     var recordState: Int? { get }
     var onPacket: ((Data) -> Void)? { get set }
     var onLoss: (() -> Void)? { get set }
@@ -43,6 +44,7 @@ private final class CB08PacketBudget: @unchecked Sendable {
 @MainActor final class CB08SDKBridge: NSObject, ObservableObject, CB08DeviceControlling {
     @Published private(set) var devices: [CB08Device] = []
     @Published private(set) var connected = false
+    private(set) var connectionID: UUID?
     @Published private(set) var status = "未连接"
     @Published private(set) var eventSummary = ""
     @Published private(set) var recordState: Int?
@@ -70,6 +72,7 @@ private final class CB08PacketBudget: @unchecked Sendable {
         node.delegate = self
         PNode.setShowLog(false)
         connected = node.isDeviceConnected()
+        if connected { connectionID = UUID() }
 #else
         status = "模拟器不支持CB08蓝牙，需真机验证"
 #endif
@@ -89,13 +92,13 @@ private final class CB08PacketBudget: @unchecked Sendable {
 #endif
     }
     func connect(_ device: CB08Device) {
-        stopScan(); hardwareIntent = nil; status = "正在连接CB08"
+        stopScan(); hardwareIntent = nil; connectionID = nil; status = "正在连接CB08"
 #if !targetEnvironment(simulator)
         node.connectDeviceAndAddress(device.name, device.address)
 #endif
     }
     func disconnect() {
-        stopScan(); hardwareIntent = nil; discardQueuedPackets(); connected = false; recordState = nil
+        stopScan(); hardwareIntent = nil; discardQueuedPackets(); connected = false; connectionID = nil; recordState = nil
         status = "已请求断开"; onLoss?()
 #if !targetEnvironment(simulator)
         node.closeConnect()
@@ -157,6 +160,9 @@ private final class CB08PacketBudget: @unchecked Sendable {
             }
         case 2:
             guard let observed = integer(data["connect_state"]) else { status = "连接状态未知"; return }
+            if observed == 1 {
+                if !connected || connectionID == nil { connectionID = UUID() }
+            } else { connectionID = nil }
             connected = observed == 1; hardwareIntent = nil; discardQueuedPackets(); recordState = nil
             status = connected ? "已连接，等待刷新状态" : "已断开"
             if connected { refreshStatus() } else { onLoss?() }

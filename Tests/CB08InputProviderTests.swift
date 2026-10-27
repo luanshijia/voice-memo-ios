@@ -6,6 +6,7 @@ import XCTest
 @MainActor final class CB08InputProviderTests: XCTestCase {
     final class Device: CB08DeviceControlling {
         var connected = true
+        var connectionID: UUID? = UUID()
         var recordState: Int? = 0
         var onPacket: ((Data) -> Void)?
         var onLoss: (() -> Void)?
@@ -30,21 +31,22 @@ import XCTest
             return (Data(repeating: 1, count: 640), OpusPacketMetrics(packetBytes: packet.count, decodedSamples: 320))
         }
     }
-    func context(channel: String = "external_audio") -> ExecutionContext {
-        ExecutionContext(configurationRevision: 1, operationID: UUID(), meetingID: UUID().uuidString,
+    func context(channel: String = "external_audio", meetingID: String = UUID().uuidString) -> ExecutionContext {
+        ExecutionContext(configurationRevision: 1, operationID: UUID(), meetingID: meetingID,
                          channel: channel, generation: 1, segmentID: UUID().uuidString)
     }
     func testPauseClosesGateAndResumeUsesNewAuthorizedContext() async throws {
         let device = Device(); let publisher = Publisher()
         let provider = CB08InputProvider(device: device, publisher: publisher, makeDecoder: { Decoder() })
-        provider.bind(Room()); try await provider.start(context: context())
+        let meetingID = UUID().uuidString
+        provider.bind(Room()); try await provider.start(context: context(meetingID: meetingID))
         device.onPacket?(Data(repeating: 0, count: 160))
         XCTAssertEqual(provider.submittedSamples, 320)
         provider.closeGate()
         device.onPacket?(Data(repeating: 0, count: 160))
         XCTAssertEqual(publisher.packets, 1)
         await provider.pause()
-        provider.bind(Room()); try await provider.start(context: context())
+        provider.bind(Room()); try await provider.start(context: context(meetingID: meetingID))
         XCTAssertEqual(device.commands, [.start, .pause, .resume])
         await provider.stop()
         device.onPacket?(Data([1]))
@@ -100,6 +102,40 @@ import XCTest
         XCTAssertEqual(device.recordState, 1)
         XCTAssertTrue(device.commands.isEmpty)
     }
+    func testPausedRecordingCannotTransferToAnotherMeetingOrConnection() async throws {
+        for replaceConnection in [false, true] {
+            let device = Device(); let publisher = Publisher()
+            let provider = CB08InputProvider(device: device, publisher: publisher, makeDecoder: { Decoder() })
+            let meetingID = UUID().uuidString
+            provider.bind(Room()); try await provider.start(context: context(meetingID: meetingID))
+            await provider.pause()
+            if replaceConnection { device.connectionID = UUID() }
+            provider.bind(Room())
+            do {
+                try await provider.start(context: context(meetingID: replaceConnection ? meetingID : UUID().uuidString))
+                XCTFail("paused recording ownership transferred")
+            } catch CB08InputError.alreadyRecording {} catch { XCTFail("unexpected error: \(error)") }
+            XCTAssertEqual(device.commands, [.start, .pause])
+            XCTAssertEqual(publisher.starts, 1)
+            if replaceConnection {
+                await provider.stop()
+                XCTAssertEqual(device.commands, [.start, .pause])
+            } else { await provider.stop() }
+        }
+    }
+
+    func testSDKReconnectInvalidatesRecordingOwnershipIdentity() throws {
+        let bridge = CB08SDKBridge()
+        bridge.receiveEvent(#"{"cmd":2,"state":0,"data":{"connect_state":1}}"#)
+        let first = try XCTUnwrap(bridge.connectionID)
+        bridge.receiveEvent(#"{"cmd":2,"state":0,"data":{"connect_state":1}}"#)
+        XCTAssertEqual(bridge.connectionID, first)
+        bridge.receiveEvent(#"{"cmd":2,"state":0,"data":{"connect_state":0}}"#)
+        XCTAssertNil(bridge.connectionID)
+        bridge.receiveEvent(#"{"cmd":2,"state":0,"data":{"connect_state":1}}"#)
+        XCTAssertNotEqual(bridge.connectionID, first)
+    }
+
     func testConfirmedPausedSelectionUsesNextInputRatherThanClosedSegmentChannel() throws {
         let f = BusinessFixture(); defer { f.cleanUp() }
         let fixtures = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(SessionControlV2Contract.fixturesJSON.utf8)) as? [String: Any])

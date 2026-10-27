@@ -17,7 +17,7 @@ import XCTest
         let f = BusinessFixture(); defer { f.cleanUp() }
         var resumes = 0
         let assistant = MeetingAssistant(meeting: f.meeting, commands: MeetingCommands(
-            start: {}, end: {}, pause: {}, resume: { resumes += 1 }))
+            start: { .submitted }, end: { .submitted }, pause: { .submitted }, resume: { resumes += 1; return .submitted }))
         f.meeting.applyCapture(try projection(["desired_state":"paused","observed_state":"pending"]))
         if case .rejected = assistant.accept(.resume) {} else { XCTFail("unconfirmed pause resumed") }
         if case .rejected = assistant.accept(.recover) {} else { XCTFail("recover resumed paused input") }
@@ -29,7 +29,7 @@ import XCTest
         let f = BusinessFixture(); defer { f.cleanUp() }
         var pauses = 0
         let assistant = MeetingAssistant(meeting: f.meeting, commands: MeetingCommands(
-            start: {}, end: {}, pause: { pauses += 1 }))
+            start: { .submitted }, end: { .submitted }, pause: { pauses += 1; return .submitted }))
         f.meeting.applyCapture(try projection())
         f.meeting.capturePreparing()
         f.meeting.captureInterrupted()

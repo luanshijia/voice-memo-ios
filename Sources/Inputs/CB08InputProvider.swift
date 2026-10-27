@@ -18,7 +18,11 @@ import LiveKit
     private var accepting = false
     private var epoch = 0
     private var paused = false
-    private var ownsRecording = false
+    private var recordingOwner: (meetingID: String, connectionID: UUID)?
+    private var ownsRecording: Bool {
+        guard let owner = recordingOwner else { return false }
+        return device.connected && owner.connectionID == device.connectionID
+    }
     private var pendingHalt: CB08RecordAction?
     var onFault: (() -> Void)?
     var onFlow: (() -> Void)?
@@ -32,34 +36,39 @@ import LiveKit
     }
     func bind(_ room: Room?) { self.room = room }
     func start(context: ExecutionContext) async throws {
-        guard device.connected, let room else { throw CB08InputError.unavailable }
-        guard context.channel == "external_audio", context.meetingID != nil,
+        guard device.connected, let connectionID = device.connectionID, let room else { throw CB08InputError.unavailable }
+        guard context.channel == "external_audio", let meetingID = context.meetingID,
               context.segmentID != nil, context.generation != nil else { throw CB08InputError.invalidContext }
         // Do not adopt a card's unrelated existing recording into a new meeting.
-        guard device.recordState == 0 || (device.recordState == 2 && (paused || context.resumesPausedDevice)) else { throw CB08InputError.alreadyRecording }
+        let canResume = paused && ownsRecording && recordingOwner?.meetingID == meetingID
+        guard device.recordState == 0 || (device.recordState == 2 && canResume) else {
+            throw CB08InputError.alreadyRecording
+        }
         let decoder = try makeDecoder()
         epoch += 1; let attempt = epoch
         try await publisher.startPCM(in: room)
-        guard attempt == epoch, device.connected else {
+        guard attempt == epoch, device.connected, device.connectionID == connectionID else {
             await publisher.stopPCM(in: room); throw CB08InputError.unavailable
         }
         self.decoder = decoder; self.context = context
         decodedPackets = 0; decodeFailures = 0; submittedSamples = 0
         device.discardQueuedPackets()
         failure = nil; flowing = false; accepting = true
-        let resume = paused || device.recordState == 2
+        let resume = device.recordState == 2 && canResume
         paused = false
-        ownsRecording = true; pendingHalt = nil
+        recordingOwner = (meetingID, connectionID); pendingHalt = nil
         device.command(resume ? .resume : .start)
     }
     /// Close the gate synchronously, before any asynchronous track disconnect.
     func closeGate() { accepting = false; flowing = false; epoch += 1; device.discardQueuedPackets() }
     func requestHalt(_ action: CB08RecordAction) {
-        closeGate(); paused = action == .pause && ownsRecording
-        if pendingHalt != action, ownsRecording {
+        closeGate()
+        guard ownsRecording else { recordingOwner = nil; paused = false; return }
+        paused = action == .pause
+        if pendingHalt != action {
             device.command(action); pendingHalt = action
         }
-        if action == .stop { ownsRecording = false }
+        if action == .stop { recordingOwner = nil }
     }
     func pause() async {
         requestHalt(.pause)

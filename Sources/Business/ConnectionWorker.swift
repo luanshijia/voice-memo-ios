@@ -36,6 +36,7 @@ import LiveKit
     private let captureControl: CaptureControlOperations
     private let connectRoom: (@MainActor (String, String, String) async throws -> Room)?
     private let disconnectRoom: (@MainActor (Room) async -> Void)?
+    private let sendData: (@MainActor ([String: Any]) async -> Void)?
     private var connectionAttemptID: UUID?
     private var disconnectID: UUID?
     private var pendingInputCleanup: Task<Void, Never>?
@@ -51,6 +52,7 @@ import LiveKit
          captureControl: CaptureControlOperations? = nil,
          connectRoom: (@MainActor (String, String, String) async throws -> Room)? = nil,
          disconnectRoom: (@MainActor (Room) async -> Void)? = nil,
+         sendData: (@MainActor ([String: Any]) async -> Void)? = nil,
          probeHost: @escaping (String, UInt16) async -> Bool = { await NetProbe.check(host: $0, port: $1) }) {
         self.settings = settings
         self.room = room ?? VoiceRoom()
@@ -58,6 +60,7 @@ import LiveKit
         self.captureControl = captureControl ?? .live
         self.connectRoom = connectRoom
         self.disconnectRoom = disconnectRoom
+        self.sendData = sendData
         self.room.onState = { [weak self] _ in self?.objectWillChange.send() }
         self.room.onEndReason = { [weak self] reason in self?.endReason = reason }
         self.room.onNote = { [weak self] note in self?.onNote?(note) }
@@ -89,7 +92,9 @@ import LiveKit
     func disconnect(_ target: Room) async {
         if let disconnectRoom { await disconnectRoom(target) } else { await room.disconnect(target) }
     }
-    func send(_ payload: [String: Any]) async { await room.send(payload) }
+    func send(_ payload: [String: Any]) async {
+        if let sendData { await sendData(payload) } else { await room.send(payload) }
+    }
     @discardableResult func invalidate() -> Int { generation += 1; return generation }
     /// Capture the previous wait synchronously before scheduling a new attempt.
     /// A stop in the same event-loop turn must never become its own predecessor.
