@@ -78,7 +78,7 @@ import XCTest
         let f = BusinessFixture(); defer { f.cleanUp() }
         f.connection.recognitionProgress = { 120 }
         XCTAssertEqual(f.connection.recognitionSeconds, 120)
-        XCTAssertEqual(f.connection.desktopAudioEvidence, "尚无按分段统计的实际样本证据")
+        XCTAssertEqual(f.connection.desktopAudioEvidence, "尚无当前分段的实收证据")
     }
     func testProjectionUsesOwnersWithoutCreatingSecondState() async {
         let f = BusinessFixture(); defer { f.cleanUp() }
