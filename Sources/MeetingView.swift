@@ -58,7 +58,7 @@ struct MeetingView: View {
                                     .buttonStyle(.borderedProminent)
                             } else {
                                 Button("暂停采集") { assistant.accept(.pause) }
-                                    .disabled(!model.isRecording)
+                                    .disabled((!model.isRecording && model.intent != .wanted) || assistant.meeting.terminating)
                                     .buttonStyle(.borderedProminent)
                             }
                             Button("结束会议", role: .destructive) { confirmStop = true }

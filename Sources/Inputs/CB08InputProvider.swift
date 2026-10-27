@@ -55,7 +55,7 @@ import LiveKit
     /// Close the gate synchronously, before any asynchronous track disconnect.
     func closeGate() { accepting = false; flowing = false; epoch += 1; device.discardQueuedPackets() }
     func requestHalt(_ action: CB08RecordAction) {
-        closeGate(); paused = action == .pause
+        closeGate(); paused = action == .pause && ownsRecording
         if pendingHalt != action, ownsRecording {
             device.command(action); pendingHalt = action
         }

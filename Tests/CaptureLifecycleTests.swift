@@ -31,6 +31,7 @@ import XCTest
     let input: InputWorker
     var connection: ConnectionWorker!
     var meeting: MeetingWorker!
+    var assistant: MeetingAssistant!
     var view: CaptureView
     var pending = false
     var flushes = 0
@@ -81,6 +82,7 @@ import XCTest
             connectRoom: { _, _, _ in Room() },
             disconnectRoom: { [unowned self] _ in disconnects += 1 })
         meeting = MeetingWorker(settings: settings, input: input, transport: connection, startObserving: false)
+        assistant = MeetingAssistant(meeting: meeting)
     }
     static func projection(_ changes: [String: Any] = [:]) throws -> CaptureView {
         let fixtures = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(SessionControlV2Contract.fixturesJSON.utf8)) as? [String: Any])
@@ -90,7 +92,7 @@ import XCTest
         return try JSONDecoder().decode(CaptureView.self, from: JSONSerialization.data(withJSONObject: object))
     }
     func start() async {
-        meeting.startCapture()
+        assistant.startCapture()
         await connection.connecting?.value
     }
     func cleanUp() async throws {
@@ -106,9 +108,9 @@ import XCTest
         let f = try CaptureLifecycleFixture()
         let gate = CaptureGate()
         f.connection.enqueueDisconnect(beforeDisconnect: { await gate.wait() }) {}
-        f.meeting.startCapture()
+        f.assistant.startCapture()
         let start = f.connection.connecting
-        try await f.meeting.reconcileDesktopOnce()
+        try await f.assistant.reconcileDesktopOnce()
         XCTAssertEqual(f.flushes, 0)
         XCTAssertTrue(f.pending)
         gate.open()
@@ -130,9 +132,9 @@ import XCTest
         XCTAssertEqual(f.publisher.microphone, [true])
         XCTAssertEqual(f.observations, ["publishing"])
         f.failPublishing = false
-        try await f.meeting.reconcileDesktopOnce()
+        try await f.assistant.reconcileDesktopOnce()
         XCTAssertEqual(f.observations, ["publishing", "publishing"])
-        try await f.meeting.reconcileDesktopOnce()
+        try await f.assistant.reconcileDesktopOnce()
         XCTAssertEqual(f.observations.count, 2)
         XCTAssertEqual(f.publisher.microphone, [true])
         try await f.cleanUp()
@@ -144,7 +146,7 @@ import XCTest
             await f.start()
             f.view = try CaptureLifecycleFixture.projection([
                 "desired_state": desired, "state_revision": 2, "observed_state": "pending"])
-            try await f.meeting.reconcileDesktopOnce()
+            try await f.assistant.reconcileDesktopOnce()
             XCTAssertFalse(f.meeting.isRecording)
             XCTAssertFalse(f.input.isCapturing)
             await f.connection.pendingDisconnect?.value
@@ -152,7 +154,7 @@ import XCTest
             XCTAssertEqual(f.disconnects, 1)
             XCTAssertNil(f.connection.live)
             XCTAssertNil(f.connection.pendingDisconnect)
-            try await f.meeting.reconcileDesktopOnce()
+            try await f.assistant.reconcileDesktopOnce()
             XCTAssertEqual(f.observations.last, "stopped")
             XCTAssertEqual(f.publisher.microphone, [true, false])
             XCTAssertEqual(f.meeting.wantsCapture, desired == "paused")
@@ -170,7 +172,7 @@ import XCTest
             await gate.wait()
             return CaptureDeviceView(meeting: old, pendingReports: [])
         }
-        let poll = Task { try await f.meeting.reconcileDesktopOnce() }
+        let poll = Task { try await f.assistant.reconcileDesktopOnce() }
         await fulfillment(of: [entered], timeout: 2)
         await f.start()
         gate.open()
@@ -224,10 +226,10 @@ import XCTest
         f.observeHandler = { observed in
             if observed == "publishing" { publishing.fulfill(); await gate.wait() }
         }
-        f.meeting.startCapture()
+        f.assistant.startCapture()
         let start = f.connection.connecting
         await fulfillment(of: [publishing], timeout: 2)
-        f.meeting.terminateMeeting()
+        f.assistant.terminateMeeting()
         let teardown = f.connection.pendingDisconnect
         await fulfillment(of: [stopped], timeout: 2)
         XCTAssertEqual(f.publisher.microphone, [true, false])

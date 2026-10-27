@@ -14,7 +14,7 @@ final class MeetingWorker: ObservableObject {
     @Published private(set) var isRecording = false
     /// 「主动终止」正在跑(查账 → 停两路 → 清本机)。防重复点击与重复请求。
     @Published private(set) var terminating = false
-    /// 用户意图:**只有 `start()` / `stop()` 能改**。
+    /// 管家助手写入的采集意图投影；会议工人不编排跨块动作。
     /// SDK 被动断开时不许清它 —— 否则"掉线"会被当成"用户不想录",状态层就把故障判成正常
     /// (Codex 2026-10-18 评审第 1 条)。
     @Published private(set) var intent: LinkDesired = .notWanted
@@ -131,13 +131,12 @@ final class MeetingWorker: ObservableObject {
 
     private var timer: Timer?
     private var timerStartedAt: Date?
-    /// Local start/halt tasks own pending execution until their cleanup completes.
-    private var localControlExecutions = 0
-    private var desktopReconciliationRunning = false
-    private var pendingPublishing: CaptureView?
+    let observesDesktop: Bool
+    var onCaptureProjection: ((CaptureView, Bool) -> Void)?
 
     init(settings: SettingsWorker, input: InputWorker, transport: ConnectionWorker,
          startObserving: Bool = true) {
+        self.observesDesktop = startObserving
         self.settings = settings
         self.input = input
         self.transport = transport
@@ -155,11 +154,6 @@ final class MeetingWorker: ObservableObject {
         // 连接态的文字由 board 的 observed 承载(底栏 LivK/RepK + 设置页派生行),不再存一份旧文案。
         transport.onNote = { [weak self] s in self?.note(s) }
         transport.onProtocolIssue = { [weak self] kind in self?.noteProtocolIssue(kind) }
-        transport.onEnded = { [weak self] s in
-            guard let self else { return }
-            self.note("连接结束:\(s)")
-            self.captureInterrupted()
-        }
         transport.onTranscript = { [weak self] type, who, audioS, text, gap, ts, raw in
             guard let self else { return }
             // 契约 §三.5 / §五:v2 必须按场次过滤 —— 本机没有当前场次,或场次不符,一律丢弃。
@@ -242,12 +236,7 @@ final class MeetingWorker: ObservableObject {
         note("App 启动,v\(ver)(build \(build), LiveKit)")
         syncConfigStatus()
         syncProtocolStatus()
-        if startObserving {
-            if let saved = MeetingClient.savedCapture() { applyCapture(saved, confirmed: false) }
-            actionPending = transport.hasPendingCapture
-            loadSavedReport()
-            Task { [weak self] in await self?.observeDesktop() }
-        }
+        if startObserving { loadSavedReport() }
     }
 
     /// Foreground probes follow the root view's SwiftUI task lifetime.
@@ -264,82 +253,42 @@ final class MeetingWorker: ObservableObject {
         }
     }
 
-    private func observeDesktop() async {
-        while !Task.isCancelled {
-            try? await MeetingClient.flushPendingBroadcastStop()
-            try? await MeetingClient.flushPendingMicStop()
-            try? await reconcileDesktopOnce()
-            try? await Task.sleep(nanoseconds: 5_000_000_000)
-        }
-    }
-
-    /// Polling may settle abandoned requests after relaunch, but never consume
-    /// the grant belonging to a running local start/halt operation.
-    func reconcileDesktopOnce() async throws {
-        guard localControlExecutions == 0, !desktopReconciliationRunning else { return }
-        desktopReconciliationRunning = true
-        defer { desktopReconciliationRunning = false }
-        let pollGeneration = transport.generation
-        let pollConfig = cfg
-        if let reconciled = try await transport.flushCapture() {
-            guard pollGeneration == transport.generation, localControlExecutions == 0 else { return }
-            applyCapture(reconciled)
-        }
-        guard pollGeneration == transport.generation, localControlExecutions == 0 else { return }
-        let state = try await transport.captureView(config: pollConfig)
-        guard pollGeneration == transport.generation, localControlExecutions == 0,
-              pollConfig.url == cfg.url, pollConfig.device == cfg.device else { return }
-        if let view = state.meeting {
-            applyCapture(view, pendingReports: state.pendingReports.count)
-            // A relaunch has no active publisher. Complete a pause/end observation
-            // even when the app previously exited after the durable action ack.
-            if view.desiredState != "active", !isRecording, !input.isCapturing,
-               transport.connecting == nil, transport.pendingDisconnect == nil,
-               view.observedState == "pending" {
-                try await transport.observeCapture(config: pollConfig, view: view, observed: "stopped")
-            }
-            if let pending = pendingPublishing, isRecording,
-               view.desiredState == "active", pending.meetingID == view.meetingID,
-               pending.segmentID == view.segmentID {
-                try await transport.observeCapture(config: pollConfig, view: pending, observed: "publishing")
-                if pollGeneration == transport.generation { pendingPublishing = nil }
-            }
-        }
-        guard pollGeneration == transport.generation else { return }
-        actionPending = transport.hasPendingCapture
-        if !actionPending { localCaptureDesired = nil }
-        if artifactDeliveryTask == nil, !state.pendingReports.isEmpty {
-            artifactDeliveryTask = Task { [weak self] in
-                guard let self else { return }
-                defer { self.artifactDeliveryTask = nil }
-                await self.deliverPendingReports(state.pendingReports, config: pollConfig)
-            }
-        }
-    }
-
     func applyCapture(_ view: CaptureView, pendingReports: Int = 0, confirmed: Bool = true) {
         if let current = capture {
             if current.meetingID == view.meetingID && (current.stateRevision > view.stateRevision ||
                 (current.stateRevision == view.stateRevision && (current.observationRevision ?? 0) > (view.observationRevision ?? 0))) { return }
             if current.meetingID != view.meetingID && current.createdAt > view.createdAt { return }
         }
-        if !isRecording, view.desiredState != "ended" {
-            let kind: InputKind = view.input.channel == "external_audio" ? .external : .phone
-            input.adopt(InputBinding(kind: kind, capturePort: kind == .phone ? .nativeMicrophone : .pcmFeed,
-                                     sourceTag: SourceTag(rawValue: view.sourceTag) ?? .face2face))
-        }
         capture = view
         sessionID = view.meetingID
         meetingContext = MeetingContext(capture: view, pendingReports: pendingReports,
                                         observedAt: confirmed ? Date() : .distantPast)
-        if !transport.hasPendingCapture { localCaptureDesired = nil }
+        onCaptureProjection?(view, confirmed)
         let desired = localCaptureDesired ?? view.desiredState
         intent = desired == "ended" ? .notWanted : .wanted
-        if desired != "active" {
-            if confirmed && (isRecording || input.isCapturing || transport.live != nil) {
-                haltLocalCapture(pausing: desired == "paused")
-            }
-            isRecording = false
+        if desired != "active" { isRecording = false }
+    }
+
+    func setCaptureAction(desired: String) { localCaptureDesired = desired; actionPending = true }
+    func setActionPending(_ pending: Bool) { actionPending = pending }
+    func reconcilePendingAction(_ pending: Bool) {
+        actionPending = pending
+        if !pending { localCaptureDesired = nil }
+    }
+    func clearConfirmedCaptureIntent() { localCaptureDesired = nil }
+    func setTerminating(_ value: Bool) { terminating = value }
+    func captureHalted(pausing: Bool) {
+        completedCaptureSeconds = recordedSeconds
+        stopTimer()
+        isRecording = false
+        intent = pausing ? .wanted : .notWanted
+    }
+    func receivePendingReports(_ reports: [DeviceMeetingView.PendingReport], config: LiveKitConfig) {
+        guard artifactDeliveryTask == nil, !reports.isEmpty else { return }
+        artifactDeliveryTask = Task { [weak self] in
+            guard let self else { return }
+            defer { self.artifactDeliveryTask = nil }
+            await self.deliverPendingReports(reports, config: config)
         }
     }
 
@@ -437,97 +386,15 @@ final class MeetingWorker: ObservableObject {
         finalReportMeetingID = meetingID
     }
 
-    func startCapture() {
-        guard !isRecording, !terminating else { return }
-        beginCapture(resuming: false)
-    }
     /// Explicit local observations preserve user intent across passive disconnects.
     func capturePreparing() { isRecording = true; intent = .wanted }
     func captureInterrupted() {
-        if input.binding.kind == .external, wantsCapture, !isPaused, !terminating {
-            // A lost transport must not leave the card recording indefinitely.
-            controlCapture("pause")
-            return
-        }
         completedCaptureSeconds = recordedSeconds
         stopTimer()
         isRecording = false
-        input.interrupted()
-        transport.interrupted()
         syncBoard()
     }
     func captureStopped() { isRecording = false; intent = .notWanted }
-
-    @discardableResult func selectInput(_ binding: InputBinding) -> CaptureActionResult {
-        guard isPaused, !actionPending, capture?.observedState == "paused", let view = capture else {
-            return .rejected("请先暂停并等待电脑确认")
-        }
-        do { try transport.queueCaptureAction(config: cfg, view: view, action: "select_input", input: binding) }
-        catch { return .rejected("输入选择未保存：\(error.localizedDescription)") }
-        actionPending = true
-        localControlExecutions += 1
-        Task { [weak self] in
-            guard let self else { return }
-            defer { self.localControlExecutions -= 1 }
-            do {
-                if let result = try await self.transport.flushCapture() { self.applyCapture(result) }
-                self.actionPending = self.transport.hasPendingCapture
-            } catch { self.note("输入切换待确认：\(error.localizedDescription)") }
-        }
-        return .submitted
-    }
-
-    func pauseCapture() { controlCapture("pause") }
-    func resumeCapture() { beginCapture(resuming: true) }
-    func terminateMeeting() { controlCapture("end") }
-
-    /// Close the audio gate immediately; disconnect only after any in-flight
-    /// start has returned. Both local commands and desktop observations use it.
-    @discardableResult private func haltLocalCapture(pausing: Bool) -> Int {
-        pendingPublishing = nil
-        let generation = transport.invalidate()
-        completedCaptureSeconds = recordedSeconds
-        stopTimer()
-        isRecording = false
-        input.device.cancelHardwareIntent(unless: pausing ? .pause : .stop)
-        input.requestHalt(pausing: pausing)
-        transport.enqueueDisconnect(beforeDisconnect: { [input] in
-            if pausing { await input.pause() } else { await input.finish() }
-        }) {}
-        return generation
-    }
-
-    private func controlCapture(_ action: String) {
-        let config = cfg
-        do { try transport.queueCaptureAction(config: config, view: capture, action: action) }
-        catch { input.device.cancelHardwareIntent(); note("动作未保存：\(error.localizedDescription)"); return }
-        localCaptureDesired = action == "pause" ? "paused" : "ended"
-        actionPending = true
-        localControlExecutions += 1
-        let generation = haltLocalCapture(pausing: action == "pause")
-        if action == "end" { captureStopped() }
-        else { isRecording = false; intent = .wanted }
-        terminating = action == "end"
-        let disconnect = transport.pendingDisconnect
-        Task { [weak self] in
-            guard let self else { return }
-            defer {
-                self.localControlExecutions -= 1
-                if generation == self.transport.generation { self.terminating = false }
-            }
-            await disconnect?.value
-            do {
-                if let result = try await self.transport.flushCapture() { self.applyCapture(result) }
-                if let view = self.capture {
-                    try await self.transport.observeCapture(config: config, view: view, observed: "stopped")
-                    if let fresh = try await self.transport.captureView(config: config).meeting { self.applyCapture(fresh) }
-                }
-                guard generation == self.transport.generation else { return }
-                self.actionPending = self.transport.hasPendingCapture
-                if !self.actionPending { self.localCaptureDesired = nil }
-            } catch { self.note("本地已停止，电脑动作待确认：\(error.localizedDescription)") }
-        }
-    }
 
     /// 会中提要档位:自动 5 分钟 / 手动 10 分钟(手动更长 —— 在外面要等久一点才抓得到要点)。
     /// 切档 ≠ 立刻出一段:只是把下一次检查的周期换掉。
@@ -541,9 +408,11 @@ final class MeetingWorker: ObservableObject {
         Task { await transport.send(summodePayload(m)) }
     }
 
+    func sendSummaryMode() async { await transport.send(summodePayload(sumMode)) }
+
     /// Clear device-owned, in-memory data for the current meeting while keeping
     /// saved reports and the coordinator's authoritative lifecycle projection.
-    private func resetCurrentMeetingData() {
+    func resetCurrentMeetingData() {
         lines = []
         partials = []
         transcriptStore = TranscriptStore()
@@ -576,79 +445,6 @@ final class MeetingWorker: ObservableObject {
         meetingFacts.summary = Status(desired: .wanted,
                                observed: MetricValue(value: 0, unit: "轮"),
                                reason: nil, lastSeen: now, generation: transport.generation)
-    }
-
-    private func beginCapture(resuming: Bool) {
-        guard !terminating else { return }
-        let config = cfg
-        let previousID = capture?.meetingID
-        do {
-            if resuming {
-                guard let view = capture, view.desiredState == "paused" else { return }
-                try transport.queueCaptureAction(config: config, view: view, action: "resume")
-            } else {
-                let recoveryID = capture.flatMap { $0.canRecover ? $0.meetingID : nil }
-                try transport.queueCaptureStart(config: config, input: input.binding, meetingID: recoveryID)
-            }
-        } catch { input.device.cancelHardwareIntent(); note("开始意图未保存：\(error.localizedDescription)"); return }
-        let generation = transport.invalidate()
-        let operation = SessionOperation(generation: generation, config: config)
-        actionPending = true
-        localCaptureDesired = "active"
-        localControlExecutions += 1
-        capturePreparing()
-        transport.beginConnection { [self] in
-            defer { localControlExecutions -= 1 }
-            do {
-                try await MeetingClient.flushPendingMicStop()
-                try await MeetingClient.flushPendingBroadcastStop()
-                guard let grant = try await transport.flushCapture() else { throw CancellationError() }
-                if previousID != grant.meetingID { resetCurrentMeetingData() }
-                applyCapture(grant)
-                guard operation.isCurrent(generation: transport.generation, config: cfg),
-                      grant.desiredState == "active", let media = grant.media else { return }
-                let live = try await transport.connect(url: media.url, token: media.token, identity: media.identity)
-                guard operation.isCurrent(generation: transport.generation, config: cfg) else {
-                    await transport.disconnect(live); return
-                }
-                input.bind(live)
-                do {
-                    try await input.start(context: ExecutionContext(configurationRevision: settings.snapshot.revision,
-                        operationID: UUID(), meetingID: grant.meetingID, channel: grant.channel,
-                        generation: grant.generation, segmentID: grant.segmentID, resumesPausedDevice: resuming))
-                } catch { await input.stop(); await transport.disconnect(live); throw error }
-                guard operation.isCurrent(generation: transport.generation, config: cfg) else {
-                    await input.stop(); await transport.disconnect(live); return
-                }
-                transport.connected(live)
-                pendingPublishing = grant
-                do {
-                    try await transport.observeCapture(config: config, view: grant, observed: "publishing")
-                    if operation.isCurrent(generation: transport.generation, config: cfg) { pendingPublishing = nil }
-                } catch {
-                    // The input is already running. Keep its real state visible
-                    // and retry observation through the regular desktop poll.
-                    note("采集已启动，发布状态等待电脑确认：\(error.localizedDescription)")
-                }
-                guard operation.isCurrent(generation: transport.generation, config: cfg) else { return }
-                actionPending = transport.hasPendingCapture
-                localCaptureDesired = nil
-                await transport.send(summodePayload(sumMode))
-                startTimer()
-                syncBoard()
-            } catch {
-                guard operation.isCurrent(generation: transport.generation, config: cfg) else { return }
-                pendingPublishing = nil
-                await input.stop()
-                if let live = transport.live { await transport.disconnect(live) }
-                guard operation.isCurrent(generation: transport.generation, config: cfg) else { return }
-                transport.interrupted()
-                isRecording = false
-                input.device.cancelHardwareIntent()
-                actionPending = transport.hasPendingCapture
-                note("采集未完成，请在连接页对账：\(error.localizedDescription)")
-            }
-        }
     }
 
     /// 补取本场已确认、但没收到(或断线期间漏掉)的定稿。
@@ -690,7 +486,7 @@ final class MeetingWorker: ObservableObject {
         }
     }
 
-    private func startTimer() {
+    func startTimer() {
         stopTimer()
         recordedSeconds = completedCaptureSeconds
         timerStartedAt = Date()

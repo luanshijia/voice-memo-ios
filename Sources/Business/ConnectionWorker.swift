@@ -2,7 +2,7 @@ import Combine
 import Foundation
 import LiveKit
 
-/// Injectable control boundary; the worker remains the only owner of execution.
+/// Injectable control IO; MeetingAssistant owns the cross-worker execution order.
 @MainActor struct CaptureControlOperations {
     var queueStart: @MainActor (LiveKitConfig, Int, InputBinding, String?) throws -> Void
     var queueAction: @MainActor (LiveKitConfig, CaptureView?, String, InputBinding?) throws -> Void

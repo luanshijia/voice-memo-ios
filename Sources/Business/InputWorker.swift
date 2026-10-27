@@ -55,7 +55,8 @@ import LiveKit
     }
     func pause() async {
         isCapturing = false
-        if binding.kind == .phone { await provider.stop() } else { await external.pause() }
+        await provider.stop()
+        await external.pause()
     }
     func stop() async {
         isCapturing = false

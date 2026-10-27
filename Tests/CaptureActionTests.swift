@@ -25,6 +25,20 @@ import XCTest
         XCTAssertEqual(assistant.accept(.resume), .submitted)
         XCTAssertEqual(resumes,1)
     }
+    func testInterruptedPhoneCaptureCanStillRequestPause() throws {
+        let f = BusinessFixture(); defer { f.cleanUp() }
+        var pauses = 0
+        let assistant = MeetingAssistant(meeting: f.meeting, commands: MeetingCommands(
+            start: {}, end: {}, pause: { pauses += 1 }))
+        f.meeting.applyCapture(try projection())
+        f.meeting.capturePreparing()
+        f.meeting.captureInterrupted()
+        XCTAssertFalse(f.meeting.isRecording)
+        XCTAssertTrue(f.meeting.wantsCapture)
+        XCTAssertEqual(assistant.accept(.pause), .submitted)
+        XCTAssertEqual(pauses, 1)
+    }
+
     func testOlderActionRevisionCannotOverwriteCurrentProjection() throws {
         let f = BusinessFixture(); defer { f.cleanUp() }
         f.meeting.applyCapture(try projection(["state_revision":3,"desired_state":"ended"]))

@@ -30,6 +30,7 @@ import XCTest
         var probeCalls: (() -> Void)?
         connection = ConnectionWorker(settings: settings, probeHost: { _, _ in probeCalls?(); return true })
         meeting = MeetingWorker(settings: settings, input: input, transport: connection, startObserving: false)
+        _ = assistant
         probeCalls = { [weak self] in self?.checks += 1 }
         settings.lockedByMeeting = { [weak self] in
             guard let self else { return false }

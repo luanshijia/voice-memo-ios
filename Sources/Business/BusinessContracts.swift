@@ -60,7 +60,7 @@ struct ExecutionContext {
 enum ConfigurationField { case serverURL, deviceID, userID, credential }
 
 /// Commands are injected independently of the state owners. Production dispatches
-/// to MeetingWorker; tests can exercise the assistant without opening a network.
+/// through MeetingAssistant; tests can substitute IO without opening a network.
 @MainActor struct MeetingCommands {
     let start: () -> Void
     let end: () -> Void

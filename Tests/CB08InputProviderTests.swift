@@ -84,6 +84,8 @@ import XCTest
         let publisher = Publisher()
         let provider = CB08InputProvider(device: device, publisher: publisher, makeDecoder: { Decoder() })
         provider.bind(Room())
+        // A phone meeting's pause must not confer ownership of this card.
+        provider.requestHalt(.pause)
         do { try await provider.start(context: context()); XCTFail("unrelated paused recording adopted") } catch {}
         XCTAssertEqual(publisher.starts, 0); XCTAssertTrue(device.commands.isEmpty)
     }

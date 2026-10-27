@@ -27,9 +27,13 @@ import Foundation
     let input: InputWorker
     let connection: ConnectionWorker
     let meeting: MeetingWorker
-    private let commands: MeetingCommands
+    private var commands = MeetingCommands(start: {}, end: {})
     private var subscription: AnyCancellable?
     private var checking = false
+    /// Local start/halt tasks own pending execution until their cleanup completes.
+    private var localControlExecutions = 0
+    private var desktopReconciliationRunning = false
+    private var pendingPublishing: CaptureView?
 
     init(meeting: MeetingWorker, commands: MeetingCommands? = nil) {
         self.meeting = meeting
@@ -37,15 +41,37 @@ import Foundation
         input = meeting.input
         connection = meeting.transport
         self.commands = commands ?? MeetingCommands(
-            start: { meeting.startCapture() },
-            end: { meeting.terminateMeeting() },
-            pause: { meeting.pauseCapture() }, resume: { meeting.resumeCapture() })
+            start: { [weak self] in self?.startCapture() },
+            end: { [weak self] in self?.terminateMeeting() },
+            pause: { [weak self] in self?.pauseCapture() }, resume: { [weak self] in self?.resumeCapture() })
+        connection.onEnded = { [weak self] reason in
+            self?.meeting.note("连接结束:\(reason)")
+            self?.captureInterrupted()
+        }
+        meeting.onCaptureProjection = { [weak self] view, confirmed in
+            guard let self else { return }
+            if !self.connection.hasPendingCapture { self.meeting.clearConfirmedCaptureIntent() }
+            if !self.meeting.isRecording, view.desiredState != "ended" {
+                let kind: InputKind = view.input.channel == "external_audio" ? .external : .phone
+                self.input.adopt(InputBinding(kind: kind, capturePort: kind == .phone ? .nativeMicrophone : .pcmFeed,
+                    sourceTag: SourceTag(rawValue: view.sourceTag) ?? .face2face))
+            }
+            let desired = self.meeting.localCaptureDesired ?? view.desiredState
+            if confirmed, desired != "active", self.meeting.isRecording || self.input.isCapturing || self.connection.live != nil {
+                self.haltLocalCapture(pausing: desired == "paused")
+            }
+        }
         input.device.onHardware = { [weak self] event in self?.hardware(event) ?? false }
         input.external.onFault = { [weak self] in
             guard let self, self.input.binding.kind == .external, self.meeting.isRecording else { return }
-            self.meeting.pauseCapture()
+            self.pauseCapture()
         }
         subscription = meeting.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+        if meeting.observesDesktop {
+            if let saved = MeetingClient.savedCapture() { meeting.applyCapture(saved, confirmed: false) }
+            meeting.setActionPending(connection.hasPendingCapture)
+            Task { [weak self] in await self?.observeDesktop() }
+        }
     }
 
     var readiness: ReadinessSnapshot {
@@ -75,7 +101,7 @@ import Foundation
                 commands.end(); result = .submitted
             } else { result = .rejected("当前没有可结束的采集") }
         case .pause:
-            if meeting.isRecording, !meeting.terminating, let pause = commands.pause {
+            if (meeting.isRecording || meeting.wantsCapture), !meeting.isPaused, !meeting.terminating, let pause = commands.pause {
                 pause(); result = .submitted
             } else { result = .rejected("当前无法暂停采集") }
         case .resume:
@@ -98,7 +124,7 @@ import Foundation
         guard canSelectInput else { message = "请先暂停并等待确认"; return }
         let binding = InputBinding(kind: kind, capturePort: kind == .phone ? .nativeMicrophone : .pcmFeed,
                                    sourceTag: kind == .phone ? .face2face : tag)
-        let result = meeting.isPaused ? meeting.selectInput(binding) : input.select(kind, tag: tag)
+        let result = meeting.isPaused ? selectPausedInput(binding) : input.select(kind, tag: tag)
         if case .rejected(let reason) = result { message = reason } else { message = nil }
         objectWillChange.send()
     }
@@ -121,4 +147,201 @@ import Foundation
         defer { checking = false }
         await connection.preflightControl()
     }
+
+    private func observeDesktop() async {
+        while !Task.isCancelled {
+            try? await MeetingClient.flushPendingBroadcastStop()
+            try? await MeetingClient.flushPendingMicStop()
+            try? await reconcileDesktopOnce()
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+        }
+    }
+
+    /// Polling may settle abandoned requests after relaunch, but never consume
+    /// the grant belonging to a running local start/halt operation.
+    func reconcileDesktopOnce() async throws {
+        guard localControlExecutions == 0, !desktopReconciliationRunning else { return }
+        desktopReconciliationRunning = true
+        defer { desktopReconciliationRunning = false }
+        let pollGeneration = connection.generation
+        let pollConfig = settings.config
+        if let reconciled = try await connection.flushCapture() {
+            guard pollGeneration == connection.generation, localControlExecutions == 0 else { return }
+            meeting.applyCapture(reconciled)
+        }
+        guard pollGeneration == connection.generation, localControlExecutions == 0 else { return }
+        let state = try await connection.captureView(config: pollConfig)
+        guard pollGeneration == connection.generation, localControlExecutions == 0,
+              pollConfig.url == settings.config.url, pollConfig.device == settings.config.device else { return }
+        if let view = state.meeting {
+            meeting.applyCapture(view, pendingReports: state.pendingReports.count)
+            // A relaunch has no active publisher. Complete a pause/end observation
+            // even when the app previously exited after the durable action ack.
+            if view.desiredState != "active", !meeting.isRecording, !input.isCapturing,
+               connection.connecting == nil, connection.pendingDisconnect == nil,
+               view.observedState == "pending" {
+                try await connection.observeCapture(config: pollConfig, view: view, observed: "stopped")
+            }
+            if let pending = pendingPublishing, meeting.isRecording,
+               view.desiredState == "active", pending.meetingID == view.meetingID,
+               pending.segmentID == view.segmentID {
+                try await connection.observeCapture(config: pollConfig, view: pending, observed: "publishing")
+                if pollGeneration == connection.generation { pendingPublishing = nil }
+            }
+        }
+        guard pollGeneration == connection.generation else { return }
+        meeting.reconcilePendingAction(connection.hasPendingCapture)
+        meeting.receivePendingReports(state.pendingReports, config: pollConfig)
+    }
+
+    func startCapture() {
+        guard !meeting.isRecording, !meeting.terminating else { return }
+        beginCapture(resuming: false)
+    }
+    func captureInterrupted() {
+        if input.binding.kind == .external, meeting.wantsCapture, !meeting.isPaused, !meeting.terminating {
+            // A lost connection must not leave the card recording indefinitely.
+            controlCapture("pause")
+            return
+        }
+        input.interrupted()
+        connection.interrupted()
+        meeting.captureInterrupted()
+    }
+    @discardableResult func selectPausedInput(_ binding: InputBinding) -> CaptureActionResult {
+        guard meeting.isPaused, !meeting.actionPending, meeting.capture?.observedState == "paused", let view = meeting.capture else {
+            return .rejected("请先暂停并等待电脑确认")
+        }
+        do { try connection.queueCaptureAction(config: settings.config, view: view, action: "select_input", input: binding) }
+        catch { return .rejected("输入选择未保存：\(error.localizedDescription)") }
+        meeting.setActionPending(true)
+        localControlExecutions += 1
+        Task { [weak self] in
+            guard let self else { return }
+            defer { self.localControlExecutions -= 1 }
+            do {
+                if let result = try await self.connection.flushCapture() { self.meeting.applyCapture(result) }
+                self.meeting.setActionPending(self.connection.hasPendingCapture)
+            } catch { self.meeting.note("输入切换待确认：\(error.localizedDescription)") }
+        }
+        return .submitted
+    }
+
+    func pauseCapture() { controlCapture("pause") }
+    func resumeCapture() { beginCapture(resuming: true) }
+    func terminateMeeting() { controlCapture("end") }
+
+    /// Close the audio gate immediately; disconnect only after any in-flight
+    /// start has returned. Both local commands and desktop observations use it.
+    @discardableResult private func haltLocalCapture(pausing: Bool) -> Int {
+        pendingPublishing = nil
+        let generation = connection.invalidate()
+        meeting.captureHalted(pausing: pausing)
+        input.device.cancelHardwareIntent(unless: pausing ? .pause : .stop)
+        input.requestHalt(pausing: pausing)
+        connection.enqueueDisconnect(beforeDisconnect: { [input] in
+            if pausing { await input.pause() } else { await input.finish() }
+        }) {}
+        return generation
+    }
+
+    private func controlCapture(_ action: String) {
+        let config = settings.config
+        do { try connection.queueCaptureAction(config: config, view: meeting.capture, action: action) }
+        catch { input.device.cancelHardwareIntent(); meeting.note("动作未保存：\(error.localizedDescription)"); return }
+        meeting.setCaptureAction(desired: action == "pause" ? "paused" : "ended")
+        localControlExecutions += 1
+        let generation = haltLocalCapture(pausing: action == "pause")
+        meeting.setTerminating(action == "end")
+        let disconnect = connection.pendingDisconnect
+        Task { [weak self] in
+            guard let self else { return }
+            defer {
+                self.localControlExecutions -= 1
+                if generation == self.connection.generation { self.meeting.setTerminating(false) }
+            }
+            await disconnect?.value
+            do {
+                if let result = try await self.connection.flushCapture() { self.meeting.applyCapture(result) }
+                if let view = self.meeting.capture {
+                    try await self.connection.observeCapture(config: config, view: view, observed: "stopped")
+                    if let fresh = try await self.connection.captureView(config: config).meeting { self.meeting.applyCapture(fresh) }
+                }
+                guard generation == self.connection.generation else { return }
+                self.meeting.reconcilePendingAction(self.connection.hasPendingCapture)
+            } catch { self.meeting.note("本地已停止，电脑动作待确认：\(error.localizedDescription)") }
+        }
+    }
+
+    private func beginCapture(resuming: Bool) {
+        guard !meeting.terminating else { return }
+        let config = settings.config
+        let previousID = meeting.capture?.meetingID
+        do {
+            if resuming {
+                guard let view = meeting.capture, view.desiredState == "paused" else { return }
+                try connection.queueCaptureAction(config: config, view: view, action: "resume")
+            } else {
+                let recoveryID = meeting.capture.flatMap { $0.canRecover ? $0.meetingID : nil }
+                try connection.queueCaptureStart(config: config, input: input.binding, meetingID: recoveryID)
+            }
+        } catch { input.device.cancelHardwareIntent(); meeting.note("开始意图未保存：\(error.localizedDescription)"); return }
+        let generation = connection.invalidate()
+        let operation = SessionOperation(generation: generation, config: config)
+        meeting.setCaptureAction(desired: "active")
+        localControlExecutions += 1
+        meeting.capturePreparing()
+        connection.beginConnection { [self] in
+            defer { localControlExecutions -= 1 }
+            do {
+                try await MeetingClient.flushPendingMicStop()
+                try await MeetingClient.flushPendingBroadcastStop()
+                guard let grant = try await connection.flushCapture() else { throw CancellationError() }
+                if previousID != grant.meetingID { meeting.resetCurrentMeetingData() }
+                meeting.applyCapture(grant)
+                guard operation.isCurrent(generation: connection.generation, config: settings.config),
+                      grant.desiredState == "active", let media = grant.media else { return }
+                let live = try await connection.connect(url: media.url, token: media.token, identity: media.identity)
+                guard operation.isCurrent(generation: connection.generation, config: settings.config) else {
+                    await connection.disconnect(live); return
+                }
+                input.bind(live)
+                do {
+                    try await input.start(context: ExecutionContext(configurationRevision: settings.snapshot.revision,
+                        operationID: UUID(), meetingID: grant.meetingID, channel: grant.channel,
+                        generation: grant.generation, segmentID: grant.segmentID, resumesPausedDevice: resuming))
+                } catch { await input.stop(); await connection.disconnect(live); throw error }
+                guard operation.isCurrent(generation: connection.generation, config: settings.config) else {
+                    await input.stop(); await connection.disconnect(live); return
+                }
+                connection.connected(live)
+                pendingPublishing = grant
+                do {
+                    try await connection.observeCapture(config: config, view: grant, observed: "publishing")
+                    if operation.isCurrent(generation: connection.generation, config: settings.config) { pendingPublishing = nil }
+                } catch {
+                    // The input is already running. Keep its real state visible
+                    // and retry observation through the regular desktop poll.
+                    meeting.note("采集已启动，发布状态等待电脑确认：\(error.localizedDescription)")
+                }
+                guard operation.isCurrent(generation: connection.generation, config: settings.config) else { return }
+                meeting.reconcilePendingAction(connection.hasPendingCapture)
+                await meeting.sendSummaryMode()
+                meeting.startTimer()
+                meeting.syncBoard()
+            } catch {
+                guard operation.isCurrent(generation: connection.generation, config: settings.config) else { return }
+                pendingPublishing = nil
+                await input.stop()
+                if let live = connection.live { await connection.disconnect(live) }
+                guard operation.isCurrent(generation: connection.generation, config: settings.config) else { return }
+                connection.interrupted()
+                meeting.captureInterrupted()
+                input.device.cancelHardwareIntent()
+                meeting.setActionPending(connection.hasPendingCapture)
+                meeting.note("采集未完成，请在连接页对账：\(error.localizedDescription)")
+            }
+        }
+    }
+
 }
