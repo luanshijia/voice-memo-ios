@@ -149,7 +149,23 @@ import LiveKit
     var media: LinkObserved { status(desired: .wanted).observed }
     var controlIsFresh: Bool { controlObservation().isFresh() }
     var recognitionSeconds: Double { recognitionProgress() }
-    var desktopAudioEvidence: String { "尚无按分段统计的实际样本证据" }
+    @Published private var receipt: CaptureAudioReceipt?
+    @Published private var receiptCheckedAt: Date?
+    var currentCapture: () -> CaptureView? = { nil }
+    func updateAudioReceipt(_ state: CaptureDeviceView) {
+        guard let view = state.meeting, let evidence = state.audioReceipt,
+              evidence.matches(view) else { receipt = nil; receiptCheckedAt = nil; return }
+        receipt = evidence; receiptCheckedAt = Date()
+    }
+    var desktopAudioEvidence: String {
+        guard let view = currentCapture(), let receipt, receipt.matches(view), let receiptCheckedAt else {
+            return "尚无当前分段的实收证据"
+        }
+        let seconds = Double(receipt.receivedSamples) / Double(receipt.sampleRate)
+        let stale = Date().timeIntervalSince(receiptCheckedAt) > 15
+        return String(format: "%.2f 秒 · %ld 样本%@", seconds, receipt.receivedSamples,
+                      stale ? "（上次查询，已过期）" : "（电脑实收）")
+    }
     func status(desired: LinkDesired) -> Status<LinkDesired, LinkObserved, LinkReason> {
         let observed: LinkObserved
         switch room.connectionState {

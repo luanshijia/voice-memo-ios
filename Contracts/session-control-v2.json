@@ -307,6 +307,50 @@
           "optional": true
         }
       ]
+    },
+    "audio_receipt": {
+      "kind": "object",
+      "fields": [
+        {
+          "name": "meeting_id",
+          "kind": "string",
+          "format": "uuid"
+        },
+        {
+          "name": "segment_id",
+          "kind": "string",
+          "format": "uuid"
+        },
+        {
+          "name": "generation",
+          "kind": "integer",
+          "minimum": 1
+        },
+        {
+          "name": "channel",
+          "kind": "string",
+          "enum": [
+            "mic",
+            "external_audio"
+          ]
+        },
+        {
+          "name": "sample_rate",
+          "kind": "integer",
+          "minimum": 16000,
+          "maximum": 16000
+        },
+        {
+          "name": "received_samples",
+          "kind": "integer",
+          "minimum": 0
+        },
+        {
+          "name": "last_received_at",
+          "kind": "number",
+          "minimum": 0
+        }
+      ]
     }
   },
   "revision_semantics": {
@@ -330,5 +374,11 @@
     "preparing",
     "active",
     "interrupted_pending"
-  ]
+  ],
+  "device_audio_receipt": {
+    "field": "audio_receipt",
+    "optional": true,
+    "nullable": true,
+    "description": "Runtime PCM samples for the exact meeting, segment, generation and channel in device_view.meeting. Null/missing means no measured receipt evidence. Counters are independent of recognized speech; historical totals are not substituted."
+  }
 }

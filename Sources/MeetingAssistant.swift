@@ -69,6 +69,7 @@ import Foundation
             guard let self, self.input.binding.kind == .external, self.meeting.isRecording else { return }
             self.pauseCapture()
         }
+        connection.currentCapture = { [weak meeting] in meeting?.capture }
         subscription = meeting.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         if meeting.observesDesktop {
             if let saved = MeetingClient.savedCapture() { meeting.applyCapture(saved, confirmed: false) }
@@ -177,6 +178,7 @@ import Foundation
         let state = try await connection.captureView(config: pollConfig)
         guard pollGeneration == connection.generation, localControlExecutions == 0,
               pollConfig.url == settings.config.url, pollConfig.device == settings.config.device else { return }
+        connection.updateAudioReceipt(state)
         if let view = state.meeting {
             meeting.applyCapture(view, pendingReports: state.pendingReports.count)
             // A relaunch has no active publisher. Complete a pause/end observation

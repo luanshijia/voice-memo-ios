@@ -64,6 +64,9 @@ struct ExternalDeviceView: View {
                 LabeledContent("SDK累计字节", value: "\(device.packetBytes)")
                 LabeledContent("队列丢包", value: "\(device.droppedPackets)")
                 LabeledContent("解码成功/失败", value: "\(provider.decodedPackets) / \(provider.decodeFailures)")
+                LabeledContent("解码帧数", value: "\(provider.decodedFrames)")
+                LabeledContent("帧对应音频", value: String(format: "%.2f 秒", Double(provider.expectedSamples) / 16_000))
+                LabeledContent("已提交音频", value: String(format: "%.2f 秒", Double(provider.submittedSamples) / 16_000))
                 LabeledContent("提交PCM样本", value: "\(provider.submittedSamples)")
                 if let failure = provider.failure { Text(failure).foregroundStyle(.orange) }
                 DisclosureGroup("诊断详情") {

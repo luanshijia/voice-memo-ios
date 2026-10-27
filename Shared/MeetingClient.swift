@@ -630,10 +630,30 @@ struct CaptureView: Codable, Equatable {
         case createdAt = "created_at", identity, media
     }
 }
+struct CaptureAudioReceipt: Decodable {
+    let meetingID: String
+    let segmentID: String
+    let generation: Int
+    let channel: String
+    let sampleRate: Int
+    let receivedSamples: Int
+    let lastReceivedAt: Double
+    enum CodingKeys: String, CodingKey {
+        case meetingID = "meeting_id", segmentID = "segment_id", generation, channel
+        case sampleRate = "sample_rate", receivedSamples = "received_samples"
+        case lastReceivedAt = "last_received_at"
+    }
+    func matches(_ view: CaptureView) -> Bool {
+        meetingID == view.meetingID && segmentID == view.segmentID && generation == view.generation &&
+        channel == view.channel && sampleRate == 16_000 && receivedSamples >= 0 &&
+        lastReceivedAt.isFinite && lastReceivedAt >= 0
+    }
+}
 struct CaptureDeviceView: Decodable {
+    var audioReceipt: CaptureAudioReceipt? = nil
     let meeting: CaptureView?
     let pendingReports: [DeviceMeetingView.PendingReport]
-    enum CodingKeys: String, CodingKey { case meeting; case pendingReports = "pending_reports" }
+    enum CodingKeys: String, CodingKey { case meeting; case audioReceipt = "audio_receipt"; case pendingReports = "pending_reports" }
 }
 
 extension MeetingClient {
@@ -700,6 +720,11 @@ extension MeetingClient {
     static func captureDeviceView(config: LiveKitConfig) async throws -> CaptureDeviceView {
         let path = SessionControlV2Contract.device_viewPath.replacingOccurrences(of: "{device_id}", with: config.device)
         let data = try await captureRequest(serverURL: config.url, path: path)
+        if let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let receipt = object["audio_receipt"], !(receipt is NSNull),
+           let problem = SessionControlV2Contract.responseProblem("audio_receipt", object: receipt) {
+            throw failure(62, "实收回包不符合契约：" + problem)
+        }
         let view = try JSONDecoder().decode(CaptureDeviceView.self, from: data)
         if let capture = view.meeting { _ = try decodeCapture(JSONEncoder().encode(capture)) }
         return view

@@ -4,6 +4,8 @@ import LiveKit
 
 /// CB08 owns capture; this provider only publishes authorized PCM in the current segment.
 @MainActor final class CB08InputProvider: ObservableObject {
+    @Published private(set) var decodedFrames = 0
+    @Published private(set) var expectedSamples = 0
     @Published private(set) var decodedPackets = 0
     @Published private(set) var decodeFailures = 0
     @Published private(set) var submittedSamples = 0
@@ -78,6 +80,7 @@ import LiveKit
             await publisher.stopPCM(in: room); throw CB08InputError.recordStateChanged
         }
         self.decoder = decoder; self.context = context
+        decodedFrames = 0; expectedSamples = 0
         decodedPackets = 0; decodeFailures = 0; submittedSamples = 0
         device.discardQueuedPackets()
         failure = nil; flowing = false; accepting = true; lastPCMAt = nil
@@ -142,10 +145,12 @@ import LiveKit
             guard accepting else { return }
             try publisher.submitPCM(result.pcm)
             lastPCMAt = Date()
+            decodedFrames += result.metrics.frameCount
+            expectedSamples += result.metrics.frameCount * CB08OpusFraming.samplesPerFrame
             decodedPackets += 1; submittedSamples += result.metrics.decodedSamples
             if !flowing { flowing = true; stage = "正在接收实时音频"; onFlow?() }
         } catch {
-            decodeFailures += 1; fault("音频解码或提交失败，已请求暂停")
+            decodeFailures += 1; fault("音频解码或提交失败，已请求暂停：\(error.localizedDescription)")
         }
     }
 }
