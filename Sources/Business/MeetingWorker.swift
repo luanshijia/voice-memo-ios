@@ -107,7 +107,7 @@ final class MeetingWorker: ObservableObject {
     @Published private(set) var finalReportText = ""
     @Published private(set) var finalReportMeetingID = ""
     @Published private(set) var sumMode = "auto"                // auto=自动 5 分钟 / manual=手动 10 分钟
-    @Published private(set) var sumState = "等待提要…"           // 状态区文案:由家里推来的 sumstatus 驱动
+    @Published private(set) var sumState = "等待提要"           // 状态区文案:由家里推来的 sumstatus 驱动
     @Published private(set) var sumCode = "wait_period"         // 家里给的判定码:no_session/short/quality/busy_*/go
     let settings: SettingsWorker
     let input: InputWorker
@@ -444,7 +444,7 @@ final class MeetingWorker: ObservableObject {
         sessionDrops = 0
         didResyncSumMode = false
         summaries = []
-        sumState = "等待提要…"
+        sumState = "等待提要"
         sumCode = "wait_period"
         sessionID = ""
         transport.resetEndReason()

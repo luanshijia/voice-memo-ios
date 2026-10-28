@@ -53,7 +53,6 @@ struct MeetingView: View {
                     Text(model.captureStatusText)
                     Text("·").foregroundStyle(.secondary)
                     Text(model.sumState).foregroundStyle(sumStateColor)
-                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .font(.caption).lineLimit(1).minimumScaleFactor(0.8)
                 .padding(.horizontal).padding(.vertical, 8)
