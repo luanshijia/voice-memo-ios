@@ -1,9 +1,14 @@
 import SwiftUI
 
 /// 设置页:连接参数、黑匣子信息都收在这里,平时主界面干净
+@MainActor
 struct SettingsView: View {
     @ObservedObject var model: SessionModel
     let worker: SettingsWorker
+    @ObservedObject private var metrics: DeviceTelemetry
+    init(model: SessionModel, worker: SettingsWorker) {
+        self.model = model; self.worker = worker; metrics = model.metrics
+    }
 
     var body: some View {
         NavigationStack {

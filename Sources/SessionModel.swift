@@ -28,6 +28,8 @@ struct TranscriptPartial: Identifiable {
         self.meeting = meeting
         subscription = meeting.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
     }
+    var metrics: DeviceTelemetry { meeting.metrics }
+    var transcriptRevision: Int { meeting.transcriptRevision }
     var lines: [TranscriptLine] { meeting.lines }
     var partials: [TranscriptPartial] { meeting.partials }
     var transcriptGapText: String { meeting.transcriptGapText }

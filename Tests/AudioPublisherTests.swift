@@ -64,4 +64,24 @@ import XCTest
         XCTAssertFalse(manual)
         XCTAssertEqual(publisher.state, .idle)
     }
+    func testFailedCleanupCanRetryWhileIdleWithoutStartingAudio() async throws {
+        var manual = false, failExit = false
+        var actions: [Bool] = []
+        let publisher = AudioPublisher(engine: AudioEngineControl(microphone: { _, enabled in actions.append(enabled) },
+            manualMode: { enabled in
+                if !enabled && failExit { throw Failure.injected }
+                manual = enabled
+            }, isManual: { manual }))
+        let room = Room()
+        try await publisher.startPCM(in: room)
+        failExit = true
+        await publisher.stopPCM(in: room)
+        XCTAssertNotNil(publisher.cleanupProblem)
+        failExit = false
+        await publisher.retryCleanup()
+        XCTAssertNil(publisher.cleanupProblem)
+        XCTAssertEqual(publisher.state, .idle)
+        XCTAssertEqual(actions, [true, false, false])
+    }
+
 }

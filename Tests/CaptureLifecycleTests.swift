@@ -17,11 +17,13 @@ import XCTest
     final class Publisher: AudioPublishing {
         var microphone: [Bool] = []
         var failStart = false
+        var failStop = false
         var onDisable: (() -> Void)?
         func setNativeMicrophone(_ enabled: Bool, in room: Room) async throws {
             microphone.append(enabled)
             if !enabled { onDisable?() }
             if enabled && failStart { throw URLError(.cannotConnectToHost) }
+            if !enabled && failStop { throw URLError(.cannotCloseFile) }
         }
     }
     let suite: String
@@ -350,4 +352,23 @@ import XCTest
         XCTAssertFalse(try MeetingClient.completeCaptureRequest(requestID: request, view: grant, store: reopened))
         XCTAssertEqual(try reopened.read(key), saved)
     }
+    func testFailedLocalCleanupIsVisibleAndCannotAcknowledgeStopped() async throws {
+        let f = try CaptureLifecycleFixture()
+        await f.start()
+        f.publisher.failStop = true
+        XCTAssertEqual(f.assistant.accept(.end), .submitted)
+        await f.connection.pendingDisconnect?.value
+        for _ in 0..<50 where f.meeting.terminating { try await Task.sleep(for: .milliseconds(1)) }
+        XCTAssertNotNil(f.input.cleanupProblem)
+        XCTAssertFalse(f.meeting.isRecording)
+        XCTAssertTrue(f.meeting.captureStatusText.contains("待确认"))
+        XCTAssertFalse(f.observations.contains("stopped"))
+        XCTAssertFalse(f.assistant.canSelectInput)
+        f.publisher.failStop = false
+        try await f.assistant.reconcileDesktopOnce()
+        XCTAssertNil(f.input.cleanupProblem)
+        XCTAssertEqual(f.observations.last, "stopped")
+        try await f.cleanUp()
+    }
+
 }

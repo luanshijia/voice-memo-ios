@@ -22,17 +22,17 @@ struct TranscriptStore {
     private var previous: [Entry] = []
     private let limit = 4000
 
-    var entries: [Entry] {
-        Array((previous + current.keys.sorted().compactMap { current[$0] }).suffix(limit))
-    }
+    private(set) var entries: [Entry] = []
 
     /// Old in-flight pages must not switch the store back to an earlier epoch.
     @discardableResult
     mutating func merge(_ items: [Entry], epoch incoming: String?,
                         oldest: Int? = nil, truncated: Bool = false) -> Bool {
+        var changed = false
         if let incoming {
             guard UUID(uuidString: incoming) != nil, !retiredEpochs.contains(incoming) else { return false }
             if incoming != epoch {
+                changed = true
                 if let old = epoch { retiredEpochs.insert(old) }
                 if epoch != nil || !current.isEmpty {
                     previous = entries
@@ -47,11 +47,13 @@ struct TranscriptStore {
             return false // legacy/late data cannot overwrite a known epoch
         }
         if truncated, let oldest, oldest > cursor + 1 {
+            changed = true
             cursor = oldest - 1
             received = received.filter { $0 > cursor }
             gapMessage = "部分历史字幕已超出补取范围，存在缺口"
         }
         for item in items where item.seq > cursor && current[item.seq] == nil {
+            changed = true
             current[item.seq] = item
             received.insert(item.seq)
         }
@@ -61,6 +63,9 @@ struct TranscriptStore {
                 current.removeValue(forKey: key)
             }
         }
-        return true
+        if changed {
+            entries = Array((previous + current.keys.sorted().compactMap { current[$0] }).suffix(limit))
+        }
+        return changed
     }
 }

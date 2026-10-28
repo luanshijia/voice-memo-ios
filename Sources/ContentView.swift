@@ -39,6 +39,7 @@ struct ContentView: View {
             assistant.setRuntimeForeground(phase == .active)
             assistant.input.device.appState(foreground: phase == .active)
             guard phase == .active else { return }
+            assistant.meeting.refreshForegroundObservations()
             MeetingClient.refreshControlStorage()
             assistant.settings.refreshPendingControls()
             Task {

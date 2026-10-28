@@ -4,6 +4,7 @@ import LiveKit
 
 /// CB08 owns capture; this provider only publishes authorized PCM in the current segment.
 @MainActor final class CB08InputProvider: ObservableObject {
+    let telemetry = DeviceTelemetry()
     private(set) var decodedFrames = 0
     private(set) var expectedSamples = 0
     private(set) var decodedPackets = 0
@@ -29,6 +30,8 @@ import LiveKit
         guard let owner = recordingOwner else { return false }
         return device.connected && owner.connectionID == device.connectionID
     }
+    private var haltProblem: String?
+    var cleanupProblem: String? { haltProblem ?? publisher.cleanupProblem }
     private var pendingHalt: CB08RecordAction?
     private var starting = false
     private let startupTimeout: Duration
@@ -60,6 +63,7 @@ import LiveKit
         guard device.connected, let connectionID = device.connectionID, let room else { throw CB08InputError.unavailable }
         guard context.channel == "external_audio", let meetingID = context.meetingID,
               context.segmentID != nil, context.generation != nil else { throw CB08InputError.invalidContext }
+        guard cleanupProblem == nil else { throw AudioPublishError.cleanupFailed }
         epoch += 1; let attempt = epoch
         failure = nil; stage = "查询设备录音状态"
         let recordState = await device.refreshRecordState(timeout: .seconds(3))
@@ -121,22 +125,45 @@ import LiveKit
         closeGate()
         if failure == nil { stage = action == .pause ? "已暂停音频接收" : "已停止音频接收" }
         guard ownsRecording else { recordingOwner = nil; paused = false; return }
-        paused = action == .pause
         if pendingHalt != action {
             device.command(action); pendingHalt = action
         }
-        if action == .stop { recordingOwner = nil }
     }
-    func pause() async {
-        requestHalt(.pause)
+    private func finishHalt(_ action: CB08RecordAction) async {
+        requestHalt(action)
+        let owner = recordingOwner
+        let haltEpoch = epoch
         if let room { await publisher.stopPCM(in: room) }
+        else { await publisher.retryCleanup() }
         room = nil; pipeline = nil; context = nil
+        guard let owner, ownsRecording else {
+            haltProblem = nil
+            return
+        }
+        let confirmed = await device.waitForRecordAction(timeout: startupTimeout)
+        guard epoch == haltEpoch else { return }
+        guard recordingOwner?.connectionID == owner.connectionID,
+              device.connectionID == owner.connectionID else {
+            // A new connection cannot confirm or inherit the old card's recording.
+            recordingOwner = nil; pendingHalt = nil; paused = false
+            haltProblem = nil
+            failure = "旧CB08连接已变化，无法确认原设备停止；本地音频已关闭"
+            stage = failure!
+            return
+        }
+        if confirmed {
+            haltProblem = nil; pendingHalt = nil
+            paused = action == .pause
+            if action == .stop { recordingOwner = nil }
+            if failure == nil { stage = action == .pause ? "设备已确认暂停" : "设备已确认停止" }
+        } else {
+            pendingHalt = nil // A later bounded reconciliation may resend to this same owned connection.
+            haltProblem = "本地音频已关闭，CB08\(action.title)尚未确认"
+            stage = haltProblem!
+        }
     }
-    func stop() async {
-        requestHalt(.stop)
-        if let room { await publisher.stopPCM(in: room) }
-        room = nil; pipeline = nil; context = nil
-    }
+    func pause() async { await finishHalt(.pause) }
+    func stop() async { await finishHalt(.stop) }
     func interrupted() { closeGate() }
     private func fault(_ reason: String) {
         let active = accepting
@@ -165,7 +192,7 @@ import LiveKit
                 if !self.flowing { self.flowing = true; self.stage = "正在接收实时音频"; self.onFlow?() }
                 if Date() >= self.nextStatisticsUpdate {
                     self.nextStatisticsUpdate = Date().addingTimeInterval(0.5)
-                    self.objectWillChange.send()
+                    self.telemetry.changed()
                 }
             } catch {
                 self.decodeFailures += 1

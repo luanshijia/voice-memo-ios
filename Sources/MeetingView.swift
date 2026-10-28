@@ -12,7 +12,7 @@ struct MeetingView: View {
                     Text(model.transcriptGapText).font(.caption).foregroundStyle(.orange)
                 }
                 TranscriptView(partials: model.partials, lines: model.lines,
-                               localIdentity: model.identity, isRecording: model.isRecording) { _ in
+                               localIdentity: model.identity, isRecording: model.isRecording, revision: model.transcriptRevision) { _ in
                     summaryPanel
                 }
             }

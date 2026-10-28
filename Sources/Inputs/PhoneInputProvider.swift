@@ -8,6 +8,8 @@ import LiveKit
     private let publisher: AudioPublishing
     private var room: Room?
     private var epoch = 0
+    private var failedRoom: Room?
+    private(set) var cleanupProblem: String?
     private var cleanupTask: Task<Void, Never>?
 
     init(publisher: AudioPublishing? = nil) {
@@ -43,14 +45,19 @@ import LiveKit
     /// Invalidate immediately but keep the old room inside the cleanup closure.
     func detachForInterruption() -> @MainActor () async -> Void {
         epoch += 1
-        let oldRoom = room
+        let oldRoom = room ?? failedRoom
         room = nil
         let previous = cleanupTask
-        let task = Task { [publisher] in
+        let task = Task { [weak self, publisher] in
             await previous?.value
             guard let oldRoom else { return }
-            do { try await publisher.setNativeMicrophone(false, in: oldRoom) }
-            catch { /* Publisher records the failure and retains recovery ownership. */ }
+            do {
+                try await publisher.setNativeMicrophone(false, in: oldRoom)
+                self?.failedRoom = nil; self?.cleanupProblem = publisher.cleanupProblem
+            } catch {
+                self?.failedRoom = oldRoom
+                self?.cleanupProblem = "手机音频关闭失败：\(error.localizedDescription)"
+            }
         }
         cleanupTask = task
         return { await task.value }

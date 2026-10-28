@@ -2,16 +2,23 @@ import AVFoundation
 import LiveKit
 
 @MainActor protocol AudioPublishing: AnyObject {
+    var cleanupProblem: String? { get }
     func setNativeMicrophone(_ enabled: Bool, in room: Room) async throws
 }
 @MainActor protocol PCMAudioPublishing: AnyObject {
+    var cleanupProblem: String? { get }
+    func retryCleanup() async
     func startPCM(in room: Room) async throws
     func submitPCM(_ data: Data) throws
     func stopPCM(in room: Room) async
     func closePCMGate()
 }
 
+extension AudioPublishing { var cleanupProblem: String? { nil } }
+
 extension PCMAudioPublishing {
+    var cleanupProblem: String? { nil }
+    func retryCleanup() async {}
     func closePCMGate() {}
 }
 
@@ -50,6 +57,10 @@ private final class PCMFeed: @unchecked Sendable {
 @MainActor final class AudioPublisher: AudioPublishing, PCMAudioPublishing {
     enum State: Equatable { case idle, native, external, cleanupFailed }
     private(set) var state: State = .idle
+    var cleanupProblem: String? { state == .cleanupFailed ? "音频资源清理尚未完成" : nil }
+    func retryCleanup() async {
+        if state == .cleanupFailed, let recoveryRoom { await cleanup(recoveryRoom) }
+    }
     private var feed: PCMFeed?
     private let usesLiveEngine: Bool
     private let engine: AudioEngineControl

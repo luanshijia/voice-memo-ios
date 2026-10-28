@@ -7,6 +7,8 @@ import LiveKit
 @MainActor final class InputWorker: ObservableObject {
     @Published private(set) var binding = InputBinding.phone
     @Published private(set) var isCapturing = false
+    @Published private(set) var cleanupProblem: String?
+    private var haltedByPause = false
     private(set) var micModeText = "读取中"
     private(set) var permissionStatus = Status<LinkDesired, CapObserved, CapReason>(
         desired: .wanted, observed: .unknownState)
@@ -45,41 +47,59 @@ import LiveKit
     }
     func adopt(_ value: InputBinding) {
         if binding != value { binding = value }
-        if value.kind == .external { device.activate() }
+        if value.kind == .external { device.activate() } else { device.stopScan() }
     }
     func bind(_ room: Room) {
         if binding.kind == .phone { provider.bind(room) } else { external.bind(room) }
     }
     func start(context: ExecutionContext) async throws {
         await provider.waitForCleanup()
+        guard cleanupProblem == nil else { throw AudioPublishError.cleanupFailed }
         guard context.channel == binding.channel else { throw CB08InputError.invalidContext }
         if binding.kind == .phone { try await provider.start(context: context); isCapturing = true }
         else { try await external.start(context: context) }
     }
     func requestHalt(pausing: Bool) {
+        haltedByPause = pausing
         isCapturing = false
         // SDK commands are local BLE writes: do not wait for network/room cleanup.
         external.requestHalt(pausing ? .pause : .stop)
     }
     func pause() async {
+        haltedByPause = true
         isCapturing = false
         await provider.stop()
         await external.pause()
+        updateCleanupProblem()
     }
     func stop() async {
+        haltedByPause = false
         isCapturing = false
         await provider.stop()
         await external.stop()
+        updateCleanupProblem()
     }
     func finish() async {
+        haltedByPause = false
         isCapturing = false
         await provider.stop()
         await external.stop()
+        updateCleanupProblem()
+    }
+    private func updateCleanupProblem() {
+        let problem = provider.cleanupProblem ?? external.cleanupProblem
+        if cleanupProblem != problem { cleanupProblem = problem }
+    }
+    func retryCleanup() async {
+        guard cleanupProblem != nil else { return }
+        await provider.stop()
+        if haltedByPause { await external.pause() } else { await external.stop() }
+        updateCleanupProblem()
     }
     func interrupted() {
         let cleanup = provider.detachForInterruption()
         external.interrupted(); isCapturing = false
-        Task { await cleanup() }
+        Task { [weak self] in await cleanup(); self?.updateCleanupProblem() }
     }
 
     func refreshMicMode(generation: Int) {

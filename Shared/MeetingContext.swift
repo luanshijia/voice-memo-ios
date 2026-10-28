@@ -19,6 +19,7 @@ struct MeetingContext: Equatable {
     let lastSeen: Date
     let pendingReports: Int
     let revision: Int
+    let freshFor: TimeInterval
 
     /// 投影多久算过期。`observeDesktop` 每 5 秒探一轮，12 秒 = 容两轮抖动
     /// （断网后最迟 12 秒底栏就该说「未知」、按钮就该不可点）。
@@ -34,7 +35,7 @@ struct MeetingContext: Equatable {
                  mic: AppSharedContract.ChannelState?, micGeneration: Int?,
                  systemAudio: AppSharedContract.ChannelState?,
                  systemAudioGeneration: Int?, recoveryDeadline: Date?, lastSeen: Date,
-                 pendingReports: Int, revision: Int) {
+                 pendingReports: Int, revision: Int, freshFor: TimeInterval = MeetingContext.staleAfter) {
         self.meetingID = meetingID
         self.meeting = meeting
         self.mic = mic
@@ -45,6 +46,7 @@ struct MeetingContext: Equatable {
         self.lastSeen = lastSeen
         self.pendingReports = pendingReports
         self.revision = revision
+        self.freshFor = freshFor
     }
 
     init(view: DeviceMeetingView) {
@@ -60,31 +62,32 @@ struct MeetingContext: Equatable {
         self.systemAudioGeneration = meeting?.channels["system_audio"].map { $0.generation ?? 0 }
         self.pendingReports = view.pendingReports.count
         self.revision = view.stateRevision
+        self.freshFor = Self.staleAfter
         self.recoveryDeadline = meeting?.recoveryDeadline
         self.lastSeen = Date()
     }
 
-    init(capture: CaptureView, pendingReports: Int = 0, observedAt: Date = Date()) {
+    init(capture: CaptureView, pendingReports: Int = 0, observedAt: Date = Date(), freshFor: TimeInterval = MeetingContext.staleAfter) {
         self.init(meetingID: capture.meetingID,
                   meeting: AppSharedContract.meetingState(capture.status),
                   mic: capture.channel == "mic" && capture.desiredState == "active" ? .active : nil,
                   micGeneration: capture.channel == "mic" ? capture.generation : nil,
                   systemAudio: nil, systemAudioGeneration: nil, recoveryDeadline: nil,
-                  lastSeen: observedAt, pendingReports: pendingReports, revision: capture.stateRevision)
+                  lastSeen: observedAt, pendingReports: pendingReports, revision: capture.stateRevision, freshFor: freshFor)
     }
 
     func hasSameProjection(as other: MeetingContext) -> Bool {
         meetingID == other.meetingID && meeting == other.meeting && mic == other.mic &&
         micGeneration == other.micGeneration && systemAudio == other.systemAudio &&
         systemAudioGeneration == other.systemAudioGeneration && recoveryDeadline == other.recoveryDeadline &&
-        pendingReports == other.pendingReports && revision == other.revision
+        pendingReports == other.pendingReports && revision == other.revision && freshFor == other.freshFor
     }
 
     // MARK: - 底栏要显示的两个词
 
     /// 这份投影还新不新。不动它就会把断网前的「已激活」一直挂在底栏上。
     func isFresh(now: Date = Date()) -> Bool {
-        now.timeIntervalSince(lastSeen) < Self.staleAfter
+        now.timeIntervalSince(lastSeen) < freshFor
     }
 
     var meetingAlias: String {

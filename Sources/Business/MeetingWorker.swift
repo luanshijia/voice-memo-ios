@@ -4,6 +4,7 @@ import LiveKit
 
 @MainActor
 final class MeetingWorker: ObservableObject {
+    private(set) var transcriptRevision = 0
     @Published private(set) var lines: [TranscriptLine] = []
     private var transcriptStore = TranscriptStore()
     @Published private(set) var transcriptGapText = ""
@@ -25,8 +26,10 @@ final class MeetingWorker: ObservableObject {
     @Published private(set) var actionPending = false
     @Published private(set) var localCaptureDesired: String?
     private var completedCaptureSeconds = 0.0
+    private var recordedAt = Date.distantPast
     var isPaused: Bool { (localCaptureDesired ?? capture?.desiredState) == "paused" }
     var captureStatusText: String {
+        if input.cleanupProblem != nil { return "本地已停 · 设备或资源待确认" }
         let desired = localCaptureDesired ?? capture?.desiredState
         if !actionPending && capture != nil && !meetingContext.isFresh() { return "会议状态待对账" }
         if actionPending || (capture?.observedState == "pending" && desired != "active") {
@@ -38,7 +41,8 @@ final class MeetingWorker: ObservableObject {
         if isRecording { return input.isCapturing ? "采集中" : "正在准备采集" }
         return desired == "active" ? "采集中断 · 可恢复" : "无会议"
     }
-    @Published private(set) var recordedSeconds: Double = 0     // 本地推流时长
+    let metrics = DeviceTelemetry()
+    private(set) var recordedSeconds: Double = 0 { willSet { if recordedSeconds != newValue { metrics.changed() } } } // 本地推流时长
     @Published private(set) var serverSeconds: Double = 0       // 家里已识别到的音频秒数(agent 回传,按来源分开记)
 
     // ---- 状态面板(规范见 notes/规范-状态显示.md;站 1 = App Group / 链路探测 / LiveKit)----
@@ -50,6 +54,8 @@ final class MeetingWorker: ObservableObject {
     @Published private var meetingFacts = StatusBoard()
     var board: StatusBoard {
         var result = meetingFacts
+        result.recorded = Status(desired: intent, observed: MetricValue(value: recordedSeconds, unit: "秒"),
+                                 reason: nil, lastSeen: recordedAt, generation: transport.generation)
         result.livekit = transport.status(desired: intent)
         result.probe = transport.probe
         result.micPermission = input.permissionStatus
@@ -144,7 +150,7 @@ final class MeetingWorker: ObservableObject {
         settings.lockedByMeeting = { [weak self] in
             guard let self else { return false }
             return self.isRecording || self.intent == .wanted || self.terminating || self.actionPending ||
-                self.meetingContext.meetingAcceptsRecovery
+                self.meetingContext.meetingAcceptsRecovery || self.input.cleanupProblem != nil
         }
         input.configurationLocked = { [weak settings] in settings?.isLocked ?? true }
         transport.controlObservation = { [weak self] in self?.meetingContext ?? .empty }
@@ -207,12 +213,12 @@ final class MeetingWorker: ObservableObject {
                 }
                 if !text.isEmpty || raw["seq"] != nil {
                     if let seq = WireContract.strictInteger(raw["seq"]) {
-                        self.transcriptStore.merge([
+                        if self.transcriptStore.merge([
                             .init(seq: seq, who: who, source: raw["source"] as? String ?? "",
                                   text: text, gap: gap, ts: ts)
-                        ], epoch: raw["transcript_epoch"] as? String)
-                        self.syncTranscript()
+                        ], epoch: raw["transcript_epoch"] as? String) { self.syncTranscript() }
                     } else {
+                        self.transcriptRevision += 1
                         self.lines.append(TranscriptLine(who: who, source: raw["source"] as? String ?? "",
                                                          text: text, gap: gap, ts: ts))
                         if self.lines.count > 4000 { self.lines.removeFirst(self.lines.count - 4000) }
@@ -241,17 +247,29 @@ final class MeetingWorker: ObservableObject {
     }
 
     /// Foreground probes follow the root view's SwiftUI task lifetime.
+    var runtimeForeground = true
+    private var nextMicRefresh = Date.distantPast
+    private var nextNetworkProbe = Date.distantPast
+    private var needsLiveObservation: Bool { isRecording || wantsCapture || actionPending || terminating }
     func refreshForegroundStateLoop() async {
-        await refreshNet()
-        refreshMicMode()
-        var tick = 0
         while !Task.isCancelled {
-            try? await Task.sleep(nanoseconds: 3_000_000_000)
-            guard !Task.isCancelled else { return }
-            refreshMicMode()
-            tick += 1
-            if tick % 2 == 0 { await refreshNet() }
+            if runtimeForeground {
+                let now = Date()
+                if now >= nextMicRefresh {
+                    refreshMicMode()
+                    nextMicRefresh = now.addingTimeInterval(needsLiveObservation ? 3 : 30)
+                }
+                if now >= nextNetworkProbe {
+                    await refreshNet()
+                    nextNetworkProbe = Date().addingTimeInterval(needsLiveObservation ? 6 : 30)
+                }
+            }
+            do { try await Task.sleep(for: .seconds(3)) } catch { return }
         }
+    }
+    func refreshForegroundObservations() {
+        nextMicRefresh = .distantPast; nextNetworkProbe = .distantPast
+        refreshMicMode()
     }
 
     func applyCapture(_ view: CaptureView, pendingReports: Int = 0, confirmed: Bool = true) {
@@ -263,7 +281,9 @@ final class MeetingWorker: ObservableObject {
         if capture != view { capture = view }
         if sessionID != view.meetingID { sessionID = view.meetingID }
         let freshContext = MeetingContext(capture: view, pendingReports: pendingReports,
-                                         observedAt: confirmed ? Date() : .distantPast)
+                                         observedAt: confirmed ? Date() : .distantPast,
+                                         freshFor: view.desiredState == "ended" && pendingReports == 0 &&
+                                             !["preparing", "active", "interrupted_pending", "finishing"].contains(view.status) ? 45 : MeetingContext.staleAfter)
         if !meetingContext.hasSameProjection(as: freshContext) || meetingContext.isFresh() != freshContext.isFresh() {
             objectWillChange.send()
         }
@@ -271,7 +291,7 @@ final class MeetingWorker: ObservableObject {
         contextExpiry?.cancel()
         if confirmed {
             contextExpiry = Task { [weak self] in
-                do { try await Task.sleep(for: .seconds(MeetingContext.staleAfter)) } catch { return }
+                do { try await Task.sleep(for: .seconds(freshContext.freshFor)) } catch { return }
                 self?.objectWillChange.send()
             }
         }
@@ -293,8 +313,8 @@ final class MeetingWorker: ObservableObject {
     func clearConfirmedCaptureIntent() { if localCaptureDesired != nil { localCaptureDesired = nil } }
     func setTerminating(_ value: Bool) { if terminating != value { terminating = value } }
     func captureHalted(pausing: Bool) {
-        completedCaptureSeconds = recordedSeconds
         stopTimer()
+        completedCaptureSeconds = recordedSeconds
         isRecording = false
         intent = pausing ? .wanted : .notWanted
     }
@@ -404,8 +424,8 @@ final class MeetingWorker: ObservableObject {
     /// Explicit local observations preserve user intent across passive disconnects.
     func capturePreparing() { isRecording = true; intent = .wanted }
     func captureInterrupted() {
-        completedCaptureSeconds = recordedSeconds
         stopTimer()
+        completedCaptureSeconds = recordedSeconds
         isRecording = false
         syncBoard()
     }
@@ -431,8 +451,10 @@ final class MeetingWorker: ObservableObject {
         lines = []
         partials = []
         transcriptStore = TranscriptStore()
+        transcriptRevision += 1
         transcriptGapText = ""
         lastCatchUpAt = .distantPast
+        recordedAt = Date()
         recordedSeconds = 0
         completedCaptureSeconds = 0
         serverSeconds = 0
@@ -479,10 +501,10 @@ final class MeetingWorker: ObservableObject {
             guard meeting == sessionID, generation == transport.generation else { return }
             // Realtime may establish a newer epoch while the HTTP page is in flight.
             guard transcriptStore.epoch == requestedEpoch || page.epoch == transcriptStore.epoch else { return }
-            transcriptStore.merge(page.items.map {
+            let changed = transcriptStore.merge(page.items.map {
                 .init(seq: $0.seq, who: $0.who, source: $0.source, text: $0.text, gap: $0.gapS, ts: $0.ts)
             }, epoch: page.epoch, oldest: page.oldest, truncated: page.truncated == true)
-            syncTranscript()
+            if changed { syncTranscript() }
             lastCatchUpAt = Date()
         } catch {
             // 断线、家里重启失败都是常态:一行记录即可,不刷屏、不影响推流
@@ -492,6 +514,7 @@ final class MeetingWorker: ObservableObject {
     }
 
     private func syncTranscript() {
+        transcriptRevision += 1
         lines = transcriptStore.entries.filter { !$0.text.isEmpty }.map {
             TranscriptLine(id: $0.id, who: $0.who, source: $0.source, text: $0.text, gap: $0.gap, ts: $0.ts)
         }
@@ -505,15 +528,13 @@ final class MeetingWorker: ObservableObject {
         stopTimer()
         recordedSeconds = completedCaptureSeconds
         timerStartedAt = Date()
+        recordedAt = Date()
         // .common 模式:滚动字幕时定时器不停;publish 的秒数按真实时间差算,漏掉的 tick 自动补回来
-        let t = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
+        let t = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self, let start = self.timerStartedAt else { return }
+                self.recordedAt = Date()
                 self.recordedSeconds = self.completedCaptureSeconds + Date().timeIntervalSince(start)
-                self.meetingFacts.recorded = Status(desired: LinkDesired.wanted,
-                                             observed: MetricValue(value: self.recordedSeconds, unit: "秒"),
-                                             reason: nil, lastSeen: Date(),
-                                             generation: self.transport.generation)
                 self.conditionNote("Metric.Recorded", .ok, detail: "录=\(Int(self.recordedSeconds))秒(墙钟)")
                 self.conditionNote("Metric.Progress",
                                    self.board.receivedCondition(currentGeneration: self.transport.generation),
@@ -528,7 +549,13 @@ final class MeetingWorker: ObservableObject {
         timer = t
     }
 
-    private func stopTimer() { timer?.invalidate(); timer = nil; timerStartedAt = nil }
+    private func stopTimer() {
+        if let start = timerStartedAt {
+            recordedAt = Date()
+            recordedSeconds = completedCaptureSeconds + Date().timeIntervalSince(start)
+        }
+        timer?.invalidate(); timer = nil; timerStartedAt = nil
+    }
 
     // MARK: - 状态面板(站 1:App Group / 链路探测 / LiveKit)
     // 规范见 `notes/规范-状态显示.md`。这一节只做两件事:把事实写进五列面板、把影子对照写进 notes。

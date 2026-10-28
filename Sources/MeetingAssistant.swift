@@ -42,10 +42,20 @@ import Foundation
     }
     func setRuntimeForeground(_ foreground: Bool) {
         runtimeForeground = foreground
+        meeting.runtimeForeground = foreground
+        if foreground { nextDesktopPoll = .distantPast }
         observeRuntimePhase()
     }
     func observeRuntimePhase() {
         if let sample = usageSample.report(context: runtimeContext, foreground: runtimeForeground) { meeting.note(sample) }
+    }
+    private var cleanupMessage: String?
+    private var nextDesktopPoll = Date.distantPast
+    var usesIdlePolling: Bool {
+        !meeting.isRecording && !meeting.wantsCapture && !meeting.actionPending && !meeting.terminating &&
+        localControlExecutions == 0 && unsavedHalt == nil && !connection.hasPendingCapture &&
+        !AppStorage.hasPendingControl() && meeting.meetingContext.pendingReports == 0 &&
+        !meeting.meetingContext.hasOpenMeeting && input.cleanupProblem == nil
     }
     private var observationTask: Task<Void, Never>?
     private var pendingPublishing: CaptureView?
@@ -135,7 +145,7 @@ import Foundation
     }
 
     var canSelectInput: Bool {
-        !meeting.actionPending && !meeting.terminating && !meeting.isRecording && connection.pendingDisconnect == nil &&
+        input.cleanupProblem == nil && !meeting.actionPending && !meeting.terminating && !meeting.isRecording && connection.pendingDisconnect == nil &&
         ((!meeting.wantsCapture && !settings.isLocked) ||
          (meeting.isPaused && meeting.capture?.observedState == "paused"))
     }
@@ -184,6 +194,10 @@ import Foundation
     private func observeDesktopOnce() async {
         observeRuntimePhase()
         settings.refreshPendingControls()
+        let idle = usesIdlePolling
+        if !runtimeForeground && idle { return }
+        if idle && Date() < nextDesktopPoll { return }
+        nextDesktopPoll = Date().addingTimeInterval(idle ? 15 : 5)
         try? await MeetingClient.flushPendingBroadcastStop()
         guard !Task.isCancelled else { return }
         try? await MeetingClient.flushPendingMicStop()
@@ -197,6 +211,13 @@ import Foundation
         guard localControlExecutions == 0, !desktopReconciliationRunning else { return }
         desktopReconciliationRunning = true
         defer { desktopReconciliationRunning = false }
+        await input.retryCleanup()
+        if let problem = input.cleanupProblem {
+            cleanupMessage = problem
+            if message != problem { message = problem }
+        } else if let cleanupMessage, message == cleanupMessage {
+            message = nil; self.cleanupMessage = nil
+        }
         try persistUnsavedHalt()
         let pollGeneration = connection.generation
         let pollConfig = settings.config
@@ -214,7 +235,7 @@ import Foundation
             // A relaunch has no active publisher. Complete a pause/end observation
             // even when the app previously exited after the durable action ack.
             if view.desiredState != "active", !meeting.isRecording, !input.isCapturing,
-               connection.connecting == nil, connection.pendingDisconnect == nil,
+               connection.connecting == nil, connection.pendingDisconnect == nil, input.cleanupProblem == nil,
                view.observedState == "pending" {
                 try await connection.observeCapture(config: pollConfig, view: view, observed: "stopped")
             }
@@ -316,7 +337,12 @@ import Foundation
             do {
                 try self.persistUnsavedHalt()
                 if let result = try await self.connection.flushCapture() { self.meeting.applyCapture(result) }
-                if let view = self.meeting.capture {
+                if let problem = self.input.cleanupProblem {
+                    self.cleanupMessage = problem
+                    if self.message != problem { self.message = problem }
+                    self.meeting.note(problem)
+                }
+                if self.input.cleanupProblem == nil, let view = self.meeting.capture {
                     try await self.connection.observeCapture(config: config, view: view, observed: "stopped")
                     if let fresh = try await self.connection.captureView(config: config).meeting { self.meeting.applyCapture(fresh) }
                 }
@@ -329,6 +355,9 @@ import Foundation
 
     private func beginCapture(resuming: Bool) -> CaptureActionResult {
         guard !meeting.terminating else { return .rejected("会议正在结束") }
+        if let problem = input.cleanupProblem { return .rejected(problem) }
+        meeting.refreshForegroundObservations()
+        nextDesktopPoll = .distantPast
         let config = settings.config
         let previousID = meeting.capture?.meetingID
         do {

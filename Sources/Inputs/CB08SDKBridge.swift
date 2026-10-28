@@ -56,33 +56,73 @@ private final class CB08PacketBudget: @unchecked Sendable {
     }
 }
 
+struct CB08SDKEvent: @unchecked Sendable {
+    let command: Int
+    let state: Int?
+    let data: [String: Any]
+    static func parse(_ text: String) -> Self? {
+        RuntimeActivity.add(.sdkEvent)
+        guard let bytes = text.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any] else { return nil }
+        func integer(_ value: Any?) -> Int? {
+            if let n = value as? NSNumber { return n.intValue }
+            return (value as? String).flatMap(Int.init)
+        }
+        guard let command = integer(object["cmd"]),
+              [1, 2, 3, 6, 8, 9, 10, 11, 13, 15, 17, 22].contains(command) else { return nil }
+        RuntimeActivity.recordSDKCommand(command)
+        let data = object["data"] as? [String: Any] ?? [:]
+        if command == 1 {
+            guard let name = data["name"] as? String,
+                  name.trimmingCharacters(in: .whitespacesAndNewlines).uppercased().hasPrefix("CB08") else { return nil }
+        }
+        return Self(command: command, state: integer(object["state"]), data: data)
+    }
+}
+
+/// Only stable informational events may be deduplicated; action/query/key events always pass.
+final class CB08EventFilter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var last: [Int: String] = [:]
+    func reset() { lock.lock(); last.removeAll(); lock.unlock() }
+    func accept(_ event: CB08SDKEvent, raw: String) -> Bool {
+        guard event.state == 0, [6, 10, 11, 13, 15, 17, 22].contains(event.command) else { return true }
+        lock.lock(); defer { lock.unlock() }
+        guard last[event.command] != raw else { return false }
+        last[event.command] = raw
+        return true
+    }
+}
+
 @MainActor final class CB08SDKBridge: NSObject, ObservableObject, CB08DeviceControlling {
-    @Published private(set) var devices: [CB08Device] = []
-    @Published private(set) var connected = false
-    @Published private(set) var connectionPhase: CB08ConnectionPhase = .disconnected
-    @Published private(set) var isScanning = false
-    @Published var selectedDeviceID: String?
+    let objectWillChange = ObservableObjectPublisher()
+    let telemetry = DeviceTelemetry()
+    private(set) var devices: [CB08Device] = [] { willSet { if devices != newValue { objectWillChange.send() } } }
+    private(set) var connected = false { willSet { if connected != newValue { objectWillChange.send() } } }
+    private(set) var connectionPhase: CB08ConnectionPhase = .disconnected { willSet { if connectionPhase != newValue { objectWillChange.send() } } }
+    private(set) var isScanning = false { willSet { if isScanning != newValue { objectWillChange.send() } } }
+    var selectedDeviceID: String? { willSet { if selectedDeviceID != newValue { objectWillChange.send() } } }
     private(set) var connectionID: UUID?
-    @Published private(set) var status = "未连接"
-    @Published private(set) var eventSummary = ""
-    @Published private(set) var recordState: CB08RecordingState?
-    @Published private(set) var querySummary = "尚未查询"
-    @Published private(set) var actionSummary = "尚无录音动作"
-    @Published private(set) var hardwareSummary = "尚无实体键请求"
-    @Published private(set) var connectionSummary = "尚无连接回调"
-    @Published private(set) var diagnostics: [String] = []
-    @Published private(set) var lowPowerRecording: Bool?
-    @Published private(set) var gain: Int?
-    @Published private(set) var deviceRecordingSeconds: Int?
-    @Published private(set) var battery: Int?
-    @Published private(set) var firmware = "未知"
-    @Published private(set) var capacity = "未知（SDK原始单位）"
-    @Published private(set) var currentFile = "未知"
+    private(set) var status = "未连接" { willSet { if status != newValue { telemetry.changed() } } }
+    private(set) var eventSummary = "" { willSet { if eventSummary != newValue { telemetry.changed() } } }
+    private(set) var recordState: CB08RecordingState? { willSet { if recordState != newValue { objectWillChange.send() } } }
+    private(set) var querySummary = "尚未查询" { willSet { if querySummary != newValue { telemetry.changed() } } }
+    private(set) var actionSummary = "尚无录音动作" { willSet { if actionSummary != newValue { telemetry.changed() } } }
+    private(set) var hardwareSummary = "尚无实体键请求" { willSet { if hardwareSummary != newValue { telemetry.changed() } } }
+    private(set) var connectionSummary = "尚无连接回调" { willSet { if connectionSummary != newValue { telemetry.changed() } } }
+    private(set) var diagnostics: [String] = [] { willSet { if diagnostics != newValue { telemetry.changed() } } }
+    private(set) var lowPowerRecording: Bool? { willSet { if lowPowerRecording != newValue { telemetry.changed() } } }
+    private(set) var gain: Int? { willSet { if gain != newValue { telemetry.changed() } } }
+    private(set) var deviceRecordingSeconds: Int? { willSet { if deviceRecordingSeconds != newValue { telemetry.changed() } } }
+    private(set) var battery: Int? { willSet { if battery != newValue { telemetry.changed() } } }
+    private(set) var firmware = "未知" { willSet { if firmware != newValue { telemetry.changed() } } }
+    private(set) var capacity = "未知（SDK原始单位）" { willSet { if capacity != newValue { telemetry.changed() } } }
+    private(set) var currentFile = "未知" { willSet { if currentFile != newValue { telemetry.changed() } } }
     private(set) var packetCount = 0
     private(set) var packetBytes = 0
     private(set) var droppedPackets = 0
     private(set) var packetSizes: [Int: Int] = [:]
-    @Published private(set) var hardwareButtonEvents: [Int: Int] = [:]
+    private(set) var hardwareButtonEvents: [Int: Int] = [:] { willSet { if hardwareButtonEvents != newValue { telemetry.changed() } } }
     var onPacket: ((Data) -> Void)?
     var onLoss: (() -> Void)?
     var onHardware: ((CB08RecordAction) -> Bool)?
@@ -95,12 +135,16 @@ private final class CB08PacketBudget: @unchecked Sendable {
     private var confirmedActionRevision = -1
     private var pendingAction: CB08RecordAction?
     private var connectionTimeout: Task<Void, Never>?
+    private var scanTimeout: Task<Void, Never>?
+    private var lastDiagnostic: String?
     private let budget = CB08PacketBudget()
+    private let eventFilter = CB08EventFilter()
 #if !targetEnvironment(simulator)
     private var node: PNode?
 #endif
-    @Published private(set) var isSDKInitialized = false
+    private(set) var isSDKInitialized = false { willSet { if isSDKInitialized != newValue { objectWillChange.send() } } }
     override init() { super.init() }
+    deinit { scanTimeout?.cancel(); connectionTimeout?.cancel() }
     /// Activation is explicit; constructing the phone workspace never starts Bluetooth.
     func activate() {
         guard !isSDKInitialized else { return }
@@ -125,6 +169,11 @@ private final class CB08PacketBudget: @unchecked Sendable {
         guard isSDKInitialized else { return }
         guard connectionPhase == .disconnected || connectionPhase == .unknown else { return }
         devices.removeAll(); isScanning = true; status = "扫描中"
+        scanTimeout?.cancel()
+        scanTimeout = Task { [weak self] in
+            do { try await Task.sleep(for: .seconds(15)) } catch { return }
+            self?.stopScan()
+        }
 #if !targetEnvironment(simulator)
         node?.startSearch()
 #else
@@ -132,6 +181,8 @@ private final class CB08PacketBudget: @unchecked Sendable {
 #endif
     }
     func stopScan() {
+        scanTimeout?.cancel(); scanTimeout = nil
+        guard isScanning else { return }
         isScanning = false
 #if !targetEnvironment(simulator)
         node?.stopSearch()
@@ -234,16 +285,20 @@ private final class CB08PacketBudget: @unchecked Sendable {
     }
     func appState(foreground: Bool) {
         self.foreground = foreground
+        if !foreground { stopScan() }
 #if !targetEnvironment(simulator)
         if connected { node?.sendAppShowState(foreground ? 1 : 2) }
 #endif
     }
     func noteDevice(_ message: String) {
+        guard message != lastDiagnostic else { return }
+        lastDiagnostic = message
         diagnostics.append("\(Date().formatted(date: .omitted, time: .standard)) \(message)")
         if diagnostics.count > 30 { diagnostics.removeFirst(diagnostics.count - 30) }
         onDiagnostic?(message)
     }
     private func resetDeviceFacts() {
+        eventFilter.reset(); lastDiagnostic = nil
         recordState = nil; battery = nil; firmware = "未知"; capacity = "未知（SDK原始单位）"
         currentFile = "未知"; gain = nil; lowPowerRecording = nil; deviceRecordingSeconds = nil
         pendingAction = nil; actionRevision += 1
@@ -272,12 +327,14 @@ private final class CB08PacketBudget: @unchecked Sendable {
     }
     // Retain only selected facts. Raw SDK JSON can contain addresses and serials.
     func receiveEvent(_ text: String) {
-        guard let bytes = text.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any] else { return }
-        let cmd = integer(object["cmd"])
-        let state = integer(object["state"])
-        let data = object["data"] as? [String: Any] ?? [:]
-        eventSummary = "cmd=\(cmd.map(String.init) ?? "?"), state=\(state.map(String.init) ?? "?")"
+        guard let event = CB08SDKEvent.parse(text), eventFilter.accept(event, raw: text) else { return }
+        receiveEvent(event)
+    }
+    private func receiveEvent(_ event: CB08SDKEvent) {
+        let cmd = event.command, state = event.state, data = event.data
+        guard cmd == 1 || cmd == 2 || connected else { return }
+        if cmd == 1 && !isScanning { return }
+        eventSummary = "cmd=\(String(cmd)), state=\(state.map(String.init) ?? "?")"
         guard state == 0 else {
             status = "设备返回异常状态"
             if cmd == 3 { pendingAction = nil; actionSummary = eventSummary }
@@ -297,6 +354,8 @@ private final class CB08PacketBudget: @unchecked Sendable {
         case 2:
             guard let observed = integer(data["connect_state"]) else { status = "连接状态未知"; return }
             guard observed == 0 || observed == 1 else { status = "连接状态未知"; return }
+            let phase: CB08ConnectionPhase = observed == 1 ? .connected : .disconnected
+            if connected == (observed == 1), connectionPhase == phase { return }
             connectionSummary = "cmd=2, connect_state=\(observed)"
             noteDevice(connectionSummary)
             if connectionPhase == .disconnecting && observed == 1 {
@@ -320,8 +379,8 @@ private final class CB08PacketBudget: @unchecked Sendable {
             let raw = integer(data["record_state"])
             switch raw { case 0: recordState = .stopped; case 1: recordState = .recording
             case 2: recordState = .paused; default: recordState = nil }
-            actionSummary = "cmd=3, record_state=\(raw.map(String.init) ?? "?")"
-            noteDevice(actionSummary)
+            let summary = "cmd=3, record_state=\(raw.map(String.init) ?? "?")"
+            if actionSummary != summary { actionSummary = summary; noteDevice(summary) }
             if let action = pendingAction {
                 let expected: CB08RecordingState = action == .stop ? .stopped : action == .pause ? .paused : .recording
                 if recordState == expected {
@@ -335,13 +394,15 @@ private final class CB08PacketBudget: @unchecked Sendable {
             recordQueryPending = false
             queryRevision += 1
             let raw = integer(data["recordState"])
-            querySummary = "cmd=9, recordState=\(raw.map(String.init) ?? "?")"
+            let summary = "cmd=9, recordState=\(raw.map(String.init) ?? "?")"
+            let changed = querySummary != summary
+            querySummary = summary
             // Query 2 only means inactive; preserve finer cmd=3 evidence in this connection.
             if raw == 1 { recordState = .recording }
             else if raw == 2 {
                 if recordState != .paused && recordState != .stopped { recordState = .inactive }
             } else { recordState = nil }
-            noteDevice(querySummary)
+            if changed { noteDevice(querySummary) }
         case 6: battery = integer(data["cbc"])
         case 8:
             if let raw = integer(data["event"]), let action = CB08RecordAction(rawValue: raw) {
@@ -375,14 +436,15 @@ private final class CB08PacketBudget: @unchecked Sendable {
         packetSizes[data.count, default: 0] += 1
         onPacket?(data)
         if Date() >= nextPacketUpdate {
-            nextPacketUpdate = Date().addingTimeInterval(0.5); objectWillChange.send()
+            nextPacketUpdate = Date().addingTimeInterval(0.5); telemetry.changed()
         }
     }
 }
 #if !targetEnvironment(simulator)
 extension CB08SDKBridge: WindBleDelegate {
     nonisolated func deviceDataEvent(_ data: String) {
-        Task { @MainActor [weak self] in self?.receiveEvent(data) }
+        guard let event = CB08SDKEvent.parse(data), eventFilter.accept(event, raw: data) else { return }
+        Task { @MainActor [weak self] in self?.receiveEvent(event) }
     }
     nonisolated func deviceRecord(_ recordData: Data) {
         RuntimeActivity.add(.sdkPacket)

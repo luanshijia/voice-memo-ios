@@ -7,28 +7,23 @@ struct TranscriptView<Summary: View>: View {
     let lines: [TranscriptLine]
     let localIdentity: String
     let isRecording: Bool
+    let revision: Int
     private let summary: (CGFloat) -> Summary
 
     @State private var followsLatestFinal = true
-    @State private var rows: [DisplayRow] = []
+    @State private var rowBuilder = TranscriptRows()
+    private var rows: [TranscriptRows.Row] { rowBuilder.rows }
 
     init(partials: [TranscriptPartial], lines: [TranscriptLine],
-         localIdentity: String, isRecording: Bool,
+         localIdentity: String, isRecording: Bool, revision: Int,
          @ViewBuilder summary: @escaping (CGFloat) -> Summary) {
         self.partials = partials
         self.lines = lines
         self.localIdentity = localIdentity
         self.isRecording = isRecording
+        self.revision = revision
         self.summary = summary
     }
-
-    private struct DisplayRow: Identifiable {
-        let id: String
-        let who: String
-        var text: String
-    }
-
-    private static var gapThreshold: Double { 2.4 }
 
     var body: some View {
         GeometryReader { geo in
@@ -80,13 +75,13 @@ struct TranscriptView<Summary: View>: View {
                 .simultaneousGesture(DragGesture(minimumDistance: 5).onChanged { _ in
                     followsLatestFinal = false
                 })
-                .onChange(of: lines.last?.id) { _, _ in
-                    rows = buildRows()
+                .onChange(of: revision) { _, _ in
+                    rowBuilder.update(lines)
                     guard followsLatestFinal, let last = rows.last else { return }
                     proxy.scrollTo(last.id, anchor: .bottom)
                 }
                 .onAppear {
-                    if rows.isEmpty { rows = buildRows() }
+                    rowBuilder.update(lines)
                 }
 
                 if !followsLatestFinal, let last = rows.last {
@@ -107,40 +102,11 @@ struct TranscriptView<Summary: View>: View {
         }
     }
 
-    private func buildRows() -> [DisplayRow] {
-        var output: [DisplayRow] = []
-        var previousSpeaker = ""
-        for (index, line) in lines.enumerated() {
-            let speakerKey = "\(line.source)|\(line.who)"
-            if speakerKey == previousSpeaker, !output.isEmpty {
-                if let gap = line.gap, gap >= Self.gapThreshold {
-                    output[output.count - 1].text += " " + Self.gapLabel(gap)
-                }
-                output[output.count - 1].text += line.text
-            } else {
-                output.append(DisplayRow(
-                    id: "line-\(index)",
-                    who: displayWho(line.who, source: line.source),
-                    text: line.text))
-            }
-            previousSpeaker = speakerKey
-        }
-        return output
-    }
-
     private func displayWho(_ who: String, source: String) -> String {
         if source == localIdentity { return "本地1" }
         if source.hasSuffix("-livekit") { return "现场·\(who)" }
         if source.hasSuffix("-replaykit") { return "在线1" }
         return source.isEmpty ? who : "\(source)·\(who)"
-    }
-
-    private static func gapLabel(_ seconds: Double) -> String {
-        guard seconds >= 30 else { return "~" }
-        let total = Int(seconds.rounded())
-        let minutes = total / 60
-        let remainder = total % 60
-        return remainder == 0 ? "~ \(minutes)分钟" : "~ \(minutes)分\(remainder)秒"
     }
 
     private func paragraph(who: String, text: String, color: Color) -> some View {

@@ -10,6 +10,7 @@ struct RuntimeUsageSample {
     private var lastObservation: Double
     private var context: String?
     private var counts = RuntimeActivity.snapshot()
+    private var commands = RuntimeActivity.commandSnapshot()
     init(clock: (() -> Double)? = nil, cpuTime: (() -> Double)? = nil) {
         let clock = clock ?? { ProcessInfo.processInfo.systemUptime }
         let cpuTime = cpuTime ?? { RuntimeUsageSample.cpuSeconds() }
@@ -24,7 +25,7 @@ struct RuntimeUsageSample {
     }
     private mutating func reset(context: String, now: Double, cpu: Double) {
         self.context = context; uptime = now; lastObservation = now
-        self.cpu = cpu; counts = RuntimeActivity.snapshot()
+        self.cpu = cpu; counts = RuntimeActivity.snapshot(); commands = RuntimeActivity.commandSnapshot()
     }
     mutating func report(context: String, foreground: Bool) -> String? {
         let now = clock(), current = cpuTime()
@@ -40,9 +41,14 @@ struct RuntimeUsageSample {
         let deltas = RuntimeActivity.Item.allCases.map { item in
             "\(item.rawValue)=\(max(0, latest[item, default: 0] - counts[item, default: 0]))"
         }.joined(separator: " ")
+        let commandCounts = RuntimeActivity.commandSnapshot()
+        let events = commandCounts.keys.sorted().compactMap { command -> String? in
+            let count = commandCounts[command, default: 0] - commands[command, default: 0]
+            return count > 0 ? "cmd\(command)=\(count)" : nil
+        }.joined(separator: " ")
         let message = String(format: "[功耗观察] %@ · 完整窗口 %.0f秒 · CPU %.1f%%（单核口径）· 热状态 %ld · %@",
             context, elapsed, max(0, current - cpu) / elapsed * 100,
-            ProcessInfo.processInfo.thermalState.rawValue, deltas)
+            ProcessInfo.processInfo.thermalState.rawValue, deltas + " " + events)
         reset(context: context, now: now, cpu: current)
         return message
     }

@@ -1,9 +1,16 @@
 import SwiftUI
 
+@MainActor
 struct ExternalDeviceView: View {
     @ObservedObject var device: CB08SDKBridge
     @ObservedObject var provider: CB08InputProvider
     let controlsLocked: Bool
+    @ObservedObject private var deviceTelemetry: DeviceTelemetry
+    @ObservedObject private var audioTelemetry: DeviceTelemetry
+    init(device: CB08SDKBridge, provider: CB08InputProvider, controlsLocked: Bool) {
+        self.device = device; self.provider = provider; self.controlsLocked = controlsLocked
+        deviceTelemetry = device.telemetry; audioTelemetry = provider.telemetry
+    }
     var body: some View {
         List {
             Section("CB08连接") {
@@ -86,6 +93,7 @@ struct ExternalDeviceView: View {
         }
         .font(.body)
         .onAppear { device.activate() }
+        .onDisappear { device.stopScan() }
         .navigationTitle("外设控制台")
         .navigationBarTitleDisplayMode(.inline)
     }

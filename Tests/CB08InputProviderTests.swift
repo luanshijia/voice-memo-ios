@@ -335,4 +335,47 @@ import XCTest
         let result = await query.value
         XCTAssertEqual(result, .stopped)
     }
+    func testMissingStopAckRetainsOwnershipAndRetriesOnlySameConnection() async throws {
+        let device = Device(), publisher = Publisher()
+        let provider = CB08InputProvider(device: device, publisher: publisher, makeDecoder: { Decoder() })
+        provider.bind(Room()); try await provider.start(context: context())
+        device.acknowledgesActions = false
+        await provider.stop()
+        XCTAssertNotNil(provider.cleanupProblem)
+        XCTAssertFalse(provider.flowing)
+        XCTAssertEqual(device.commands, [.start, .stop])
+        device.acknowledgesActions = true
+        await provider.stop()
+        XCTAssertNil(provider.cleanupProblem)
+        XCTAssertEqual(device.commands, [.start, .stop, .stop])
+        await provider.stop()
+        XCTAssertEqual(device.commands, [.start, .stop, .stop])
+    }
+    func testLostStopAckNeverStopsRecordingOnAnotherConnection() async throws {
+        let device = Device(), publisher = Publisher()
+        let provider = CB08InputProvider(device: device, publisher: publisher, makeDecoder: { Decoder() })
+        provider.bind(Room()); try await provider.start(context: context())
+        device.acknowledgesActions = false
+        await provider.stop()
+        device.connectionID = UUID(); device.recordState = .recording
+        await provider.stop()
+        XCTAssertEqual(device.commands, [.start, .stop])
+        XCTAssertEqual(device.recordState, .recording)
+    }
+    func testPauseWithoutAckCannotBeUsedAsConfirmedResumeOwnership() async throws {
+        let device = Device(), publisher = Publisher()
+        let provider = CB08InputProvider(device: device, publisher: publisher, makeDecoder: { Decoder() })
+        let capture = context()
+        provider.bind(Room()); try await provider.start(context: capture)
+        device.acknowledgesActions = false
+        await provider.pause()
+        XCTAssertNotNil(provider.cleanupProblem)
+        provider.bind(Room())
+        do { try await provider.start(context: capture); XCTFail("unconfirmed pause resumed") } catch {}
+        XCTAssertEqual(device.commands, [.start, .pause])
+        device.acknowledgesActions = true
+        await provider.pause()
+        XCTAssertNil(provider.cleanupProblem)
+    }
+
 }
