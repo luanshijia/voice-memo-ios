@@ -50,9 +50,12 @@ struct ContentView: View {
             MeetingClient.refreshControlStorage()
             assistant.settings.refreshPendingControls()
             Task {
-                await model.refreshNet()
+                await assistant.checkConnection()
                 await model.catchUpNow()
             }
+        }
+        .onChange(of: assistant.settings.snapshot.revision) { _, _ in
+            Task { await assistant.checkConnection() }
         }
     }
 }

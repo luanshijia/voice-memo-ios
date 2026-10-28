@@ -6,6 +6,12 @@ struct InputView: View {
     var body: some View {
         NavigationStack {
             List {
+                Section {
+                    LabeledContent("服务器", value: assistant.connection.serverPhase.rawValue)
+                    if !assistant.canStartCapture {
+                        Text("服务器未就绪，输入暂不可用").font(.footnote).foregroundStyle(.secondary)
+                    }
+                }
                 Section("手机") {
                     inputButton("iPhone 麦克风", icon: "iphone", kind: .phone) {
                         assistant.selectInput(.phone)

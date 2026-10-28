@@ -77,6 +77,7 @@ struct MeetingView: View {
         return model.intent == .wanted ? .recover : .start
     }
     private var captureButtonDisabled: Bool {
+        if !model.isRecording && !assistant.canStartCapture { return true }
         if assistant.meeting.terminating { return true }
         if model.isPaused {
             return assistant.meeting.actionPending || assistant.meeting.capture?.observedState != "paused" ||

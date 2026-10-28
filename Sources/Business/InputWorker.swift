@@ -20,6 +20,7 @@ import LiveKit
     private var subscriptions = Set<AnyCancellable>()
     private let provider: PhoneInputProvider
     var configurationLocked: () -> Bool = { false }
+    var serverAvailable: () -> Bool = { false }
 
     init(provider: PhoneInputProvider? = nil) {
         let publisher = AudioPublisher()
@@ -29,6 +30,7 @@ import LiveKit
         deviceManagement = CB08DeviceManager(device: device)
         publisher.onFailure = { [weak device] message in device?.noteDevice(message) }
         external = CB08InputProvider(device: device, publisher: publisher)
+        device.connectionAllowed = { [weak self] in self?.serverAvailable() ?? false }
         external.onFlow = { [weak self] in
             self?.isCapturing = true
             self?.device.noteDevice("首个有效PCM已提交媒体发布链")
@@ -43,6 +45,7 @@ import LiveKit
         binding.kind == .phone ? "手机" : "CB08"
     }
     @discardableResult func select(_ kind: InputKind, tag: SourceTag = .face2face) -> CaptureActionResult {
+        guard serverAvailable() else { return .rejected("服务器未就绪，输入暂不可用") }
         guard !configurationLocked() else { return .rejected("请先暂停并等待确认") }
         adopt(InputBinding(kind: kind, capturePort: kind == .phone ? .nativeMicrophone : .pcmFeed,
                            sourceTag: kind == .phone ? .face2face : tag))
@@ -57,6 +60,7 @@ import LiveKit
     }
     func start(context: ExecutionContext) async throws {
         await provider.waitForCleanup()
+        guard serverAvailable() else { throw CB08InputError.serverUnavailable }
         guard cleanupProblem == nil else { throw AudioPublishError.cleanupFailed }
         guard context.channel == binding.channel else { throw CB08InputError.invalidContext }
         if binding.kind == .phone { try await provider.start(context: context); isCapturing = true }

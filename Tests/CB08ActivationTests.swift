@@ -11,6 +11,7 @@ import XCTest
     }
     func testExternalSelectionActivatesSDKOnlyOnce() {
         let input = InputWorker()
+        input.serverAvailable = { true }
         _ = input.select(.external)
         XCTAssertTrue(input.device.isSDKInitialized)
         input.device.activate()

@@ -70,6 +70,7 @@ import XCTest
 
     func testBackgroundAndPhoneSelectionStopScanning() {
         let input = InputWorker()
+        input.serverAvailable = { true }
         input.device.scan()
         XCTAssertTrue(input.device.isScanning)
         input.device.appState(foreground: false)

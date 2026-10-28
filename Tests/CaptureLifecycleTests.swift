@@ -93,6 +93,7 @@ import XCTest
             sendData: { [weak self] _ in if let handler = self?.sendHandler { await handler() } })
         meeting = MeetingWorker(settings: settings, input: input, transport: connection, startObserving: false)
         assistant = MeetingAssistant(meeting: meeting)
+        connection.recordServerOutcome(success: true, revision: settings.snapshot.revision)
     }
     static func projection(_ changes: [String: Any] = [:]) throws -> CaptureView {
         let fixtures = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(SessionControlV2Contract.fixturesJSON.utf8)) as? [String: Any])
@@ -114,6 +115,37 @@ import XCTest
 }
 
 @MainActor final class CaptureLifecycleTests: XCTestCase {
+    func testFailedAuthenticatedPreflightDoesNotQueueMeetingOrStartMicrophone() async throws {
+        let f = try CaptureLifecycleFixture()
+        f.viewHandler = { throw URLError(.notConnectedToInternet) }
+        await f.start()
+        XCTAssertFalse(f.pending); XCTAssertEqual(f.flushes, 0)
+        XCTAssertTrue(f.publisher.microphone.isEmpty)
+        XCTAssertFalse(f.input.isCapturing); XCTAssertFalse(f.meeting.isRecording)
+        XCTAssertFalse(f.meeting.wantsCapture)
+        XCTAssertFalse(f.connection.serverReady)
+        try await f.cleanUp()
+    }
+    func testConfirmedServerLossStopsMicrophoneAndRecoveryDoesNotRestartIt() async throws {
+        let f = try CaptureLifecycleFixture()
+        await f.start()
+        f.connection.recordServerOutcome(success: false, revision: f.settings.snapshot.revision)
+        XCTAssertTrue(f.input.isCapturing)
+        f.connection.recordServerOutcome(success: false, revision: f.settings.snapshot.revision)
+        await f.connection.pendingDisconnect?.value
+        XCTAssertFalse(f.input.isCapturing)
+        XCTAssertTrue(f.meeting.isPaused)
+        XCTAssertEqual(f.publisher.microphone, [true, false])
+        f.connection.recordServerOutcome(success: true, revision: f.settings.snapshot.revision)
+        for _ in 0..<100 {
+            if f.assistant.canStartCapture { break }
+            try await Task.sleep(for: .milliseconds(1))
+        }
+        XCTAssertTrue(f.assistant.canStartCapture)
+        XCTAssertFalse(f.input.isCapturing)
+        XCTAssertEqual(f.publisher.microphone, [true, false])
+        try await f.cleanUp()
+    }
     func testPollCannotConsumeStartWhileItWaitsForPreviousDisconnect() async throws {
         let f = try CaptureLifecycleFixture()
         let gate = CaptureGate()
@@ -122,7 +154,7 @@ import XCTest
         let start = f.connection.connecting
         try await f.assistant.reconcileDesktopOnce()
         XCTAssertEqual(f.flushes, 0)
-        XCTAssertTrue(f.pending)
+        XCTAssertFalse(f.pending) // No start request is persisted until the authenticated preflight succeeds.
         gate.open()
         await start?.value
         XCTAssertTrue(f.meeting.isRecording)
@@ -184,6 +216,7 @@ import XCTest
         }
         let poll = Task { try await f.assistant.reconcileDesktopOnce() }
         await fulfillment(of: [entered], timeout: 2)
+        f.viewHandler = nil // The old request retains its handler; the new start gets a fresh response.
         await f.start()
         gate.open()
         try await poll.value

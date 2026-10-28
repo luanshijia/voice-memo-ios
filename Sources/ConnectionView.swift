@@ -5,6 +5,11 @@ struct ConnectionView: View {
     var body: some View {
         NavigationStack {
             List {
+                Section("服务器") {
+                    LabeledContent("状态", value: assistant.connection.serverPhase.rawValue)
+                    Text(assistant.connection.serverDetail).font(.footnote).foregroundStyle(.secondary)
+                    Button("重新检测") { Task { await assistant.checkConnection() } }
+                }
                 Section {
                     LabeledContent("当前输入", value: assistant.input.displayName)
                     if assistant.input.binding.kind == .external {
@@ -12,7 +17,6 @@ struct ConnectionView: View {
                         LabeledContent("提交PCM样本", value: "\(assistant.input.external.submittedSamples)")
                     }
                     LabeledContent("手机 → 电脑入口", value: word(assistant.connection.network))
-                    LabeledContent("电脑会议管家", value: assistant.connection.controlIsFresh ? "最近查询成功" : "无新鲜鉴权证据")
                     LabeledContent("媒体连接", value: word(assistant.connection.media))
                     LabeledContent("电脑实际收音", value: assistant.connection.desktopAudioEvidence)
                     LabeledContent("已识别音频", value: "\(Int(assistant.connection.recognitionSeconds)) 秒")

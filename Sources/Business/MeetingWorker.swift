@@ -255,27 +255,22 @@ final class MeetingWorker: ObservableObject {
     /// Foreground probes follow the root view's SwiftUI task lifetime.
     var runtimeForeground = true
     private var nextMicRefresh = Date.distantPast
-    private var nextNetworkProbe = Date.distantPast
     private var needsLiveObservation: Bool { isRecording || wantsCapture || actionPending || terminating }
     func refreshForegroundStateLoop() async {
         while !Task.isCancelled {
             if runtimeForeground {
                 let now = Date()
-                if now >= nextMicRefresh {
+                if input.serverAvailable(), now >= nextMicRefresh {
                     refreshMicMode()
                     nextMicRefresh = now.addingTimeInterval(needsLiveObservation ? 3 : 30)
-                }
-                if now >= nextNetworkProbe {
-                    await refreshNet()
-                    nextNetworkProbe = Date().addingTimeInterval(needsLiveObservation ? 6 : 30)
                 }
             }
             do { try await Task.sleep(for: .seconds(3)) } catch { return }
         }
     }
     func refreshForegroundObservations() {
-        nextMicRefresh = .distantPast; nextNetworkProbe = .distantPast
-        refreshMicMode()
+        nextMicRefresh = .distantPast
+        if input.serverAvailable() { refreshMicMode() }
     }
 
     func applyCapture(_ view: CaptureView, pendingReports: Int = 0, confirmed: Bool = true) {

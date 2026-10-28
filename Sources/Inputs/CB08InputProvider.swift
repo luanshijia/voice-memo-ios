@@ -216,13 +216,14 @@ import LiveKit
 }
 
 enum CB08InputError: LocalizedError {
-    case unavailable, invalidContext, recordStateUnknown, recordStateChanged, pausedRecordingNotOwned, deviceBusy
+    case unavailable, invalidContext, recordStateUnknown, recordStateChanged, pausedRecordingNotOwned, deviceBusy, serverUnavailable
     case actionNotConfirmed, noRealtimeAudio
     case alreadyRecording(CB08RecordingState)
 
     var errorDescription: String? {
         switch self {
         case .unavailable: return "CB08 未连接或连接已变化"
+        case .serverUnavailable: return "服务器未就绪，采集暂不可用"
         case .invalidContext: return "CB08 采集上下文无效"
         case .recordStateUnknown: return "未收到 CB08 录音状态，请刷新设备状态后重试"
         case .deviceBusy: return "设备动作正在确认，请稍候"

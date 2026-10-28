@@ -144,10 +144,12 @@ final class CB08EventFilter: @unchecked Sendable {
     private var node: PNode?
 #endif
     private(set) var isSDKInitialized = false { willSet { if isSDKInitialized != newValue { objectWillChange.send() } } }
+    var connectionAllowed: () -> Bool = { true }
     override init() { super.init() }
     deinit { scanTimeout?.cancel(); connectionTimeout?.cancel() }
     /// Activation is explicit; constructing the phone workspace never starts Bluetooth.
     func activate() {
+        guard connectionAllowed() else { status = "服务器未就绪，蓝牙暂不可用"; return }
         guard !isSDKInitialized else { return }
 #if !targetEnvironment(simulator)
         guard let shared = PNode.shared() else { status = "CB08 SDK初始化失败"; return }
@@ -166,6 +168,7 @@ final class CB08EventFilter: @unchecked Sendable {
 #endif
     }
     func scan() {
+        guard connectionAllowed() else { status = "服务器未就绪，蓝牙暂不可用"; return }
         activate()
         guard isSDKInitialized else { return }
         guard connectionPhase == .disconnected || connectionPhase == .unknown else { return }
@@ -192,6 +195,7 @@ final class CB08EventFilter: @unchecked Sendable {
     }
     var selectedDevice: CB08Device? { devices.first { $0.id == selectedDeviceID } }
     func connect(_ device: CB08Device) {
+        guard connectionAllowed() else { status = "服务器未就绪，蓝牙暂不可用"; return }
         activate()
         guard isSDKInitialized else { return }
         guard !connected, connectionPhase != .connecting, connectionPhase != .disconnecting else { return }

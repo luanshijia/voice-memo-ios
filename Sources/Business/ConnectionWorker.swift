@@ -45,6 +45,52 @@ import LiveKit
     var onProtocolIssue: ((String) -> Void)?
     var onEnded: ((String) -> Void)?
     var onTranscript: ((String, String, Double, String, Double?, Double, [String: Any]) -> Void)?
+    var onServerUnavailable: (() -> Void)?
+    var onServerAvailable: (() -> Void)?
+    private(set) var serverAvailability = ServerAvailability()
+    private var serverRequest = 0
+    private var serverCheckTask: Task<Bool, Never>?
+    private var serverExpiry: Task<Void, Never>?
+    var serverPhase: ServerAvailability.Phase { serverAvailability.phase(revision: settings.snapshot.revision) }
+    var serverReady: Bool { serverPhase == .ready }
+    var serverDetail: String {
+        if let problem = settings.snapshot.problems.first { return problem }
+        if serverReady { return "服务器鉴权查询成功，可以开始采集" }
+        return serverAvailability.failures > 0 ? "连接未确认，请检查XEdge、家中服务及设备登记设置" : "等待服务器检测，采集功能暂不可用"
+    }
+    /// A validated HTTPS response also proves transport reachability, including when no meeting exists.
+    func recordServerOutcome(success: Bool, revision: Int) {
+        guard revision == settings.snapshot.revision else { return }
+        let previous = serverPhase
+        var next = serverAvailability
+        next.record(success: success, revision: revision)
+        if previous != next.phase(revision: revision) { objectWillChange.send() }
+        serverAvailability = next
+        serverExpiry?.cancel()
+        if success {
+            setProbe(true)
+            serverExpiry = Task { [weak self] in
+                do { try await Task.sleep(for: .seconds(ServerAvailability.freshness)) } catch { return }
+                self?.objectWillChange.send()
+            }
+            onServerAvailable?()
+        } else if serverPhase == .unavailable { onServerUnavailable?() }
+    }
+    @discardableResult func checkServer() async -> Bool {
+        if let serverCheckTask { return await serverCheckTask.value }
+        let task = Task { [self] in
+            guard settings.snapshot.problems.isEmpty else {
+                recordServerOutcome(success: false, revision: settings.snapshot.revision); return false
+            }
+            await preflightControl()
+            do { _ = try await captureView(config: settings.config); return serverReady }
+            catch { return false }
+        }
+        serverCheckTask = task
+        let result = await task.value
+        serverCheckTask = nil
+        return result
+    }
     var controlObservation: () -> MeetingContext = { .empty }
     var recognitionProgress: () -> Double = { 0 }
 
@@ -80,7 +126,21 @@ import LiveKit
     var hasPendingCapture: Bool { captureControl.hasPending() }
     func flushCapture() async throws -> CaptureView? { try await captureControl.flush() }
     func captureView(config: LiveKitConfig) async throws -> CaptureDeviceView {
-        try await captureControl.view(config)
+        let revision = settings.snapshot.revision
+        guard SessionOperation(generation: generation, config: config).isCurrent(generation: generation, config: settings.config) else {
+            throw CancellationError()
+        }
+        serverRequest += 1; let request = serverRequest
+        do {
+            let state = try await captureControl.view(config)
+            if request == serverRequest { recordServerOutcome(success: true, revision: revision) }
+            return state
+        } catch {
+            if !(error is CancellationError), !Task.isCancelled, request == serverRequest {
+                recordServerOutcome(success: false, revision: revision)
+            }
+            throw error
+        }
     }
     func observeCapture(config: LiveKitConfig, view: CaptureView, observed: String) async throws {
         try await captureControl.observe(config, view, observed)
@@ -153,7 +213,11 @@ import LiveKit
     private var receiptCheckedAt: Date?
     private var probeExpiry: Task<Void, Never>?
     private var receiptExpiry: Task<Void, Never>?
-    deinit { probeExpiry?.cancel(); receiptExpiry?.cancel() }
+    deinit { probeExpiry?.cancel(); receiptExpiry?.cancel(); serverExpiry?.cancel(); serverCheckTask?.cancel() }
+    var hasFreshAudioReceipt: Bool {
+        guard let view = currentCapture(), let receipt, receipt.matches(view), let receiptCheckedAt else { return false }
+        return Date().timeIntervalSince(receiptCheckedAt) <= 15
+    }
     var currentCapture: () -> CaptureView? = { nil }
     func updateAudioReceipt(_ state: CaptureDeviceView) {
         let evidence = state.meeting.flatMap { view in state.audioReceipt.flatMap { $0.matches(view) ? $0 : nil } }
@@ -200,6 +264,9 @@ import LiveKit
         if let hp = NetProbe.hostPort(from: config.url) { ok = await probeHost(hp.host, hp.port) }
         else { ok = false }
         guard revision == settings.snapshot.revision, requestGeneration == generation else { return }
+        setProbe(ok)
+    }
+    private func setProbe(_ ok: Bool) {
         let next = Status<LinkDesired, LinkObserved, LinkReason>(desired: .wanted,
             observed: ok ? .connected : .disconnected, reason: ok ? nil : .probeTimeout,
             lastSeen: Date(), generation: generation)

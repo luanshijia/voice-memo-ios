@@ -41,8 +41,9 @@ struct ReadinessSnapshot {
     let input: InputBinding
     let inputAvailable: Bool
     let configurationLocked: Bool
+    var serverReady = false
     var problems: [String] {
-        configuration.problems + (inputAvailable ? [] : ["当前输入尚未接入"])
+        configuration.problems + (serverReady ? [] : ["服务器未就绪，采集暂不可用"]) + (inputAvailable ? [] : ["当前输入尚未接入"])
     }
 }
 
