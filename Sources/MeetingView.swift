@@ -21,10 +21,10 @@ struct MeetingView: View {
             .safeAreaInset(edge: .top, spacing: 0) {
                 HStack(spacing: 8) {
                     Button(captureButtonTitle) { assistant.accept(captureButtonAction) }
-                        .buttonStyle(WorkspaceActionButtonStyle())
+                        .buttonStyle(WorkspaceActionButtonStyle(filled: false))
                         .disabled(captureButtonDisabled)
                     Button("结束会议", role: .destructive) { confirmStop = true }
-                        .buttonStyle(WorkspaceActionButtonStyle(tint: .red))
+                        .buttonStyle(WorkspaceActionButtonStyle(tint: .red, filled: false))
                         .disabled(assistant.meeting.terminating ||
                                   (!model.isRecording && model.intent != .wanted && !assistant.meeting.presentation.terminateAction.enabled))
                     Menu {
@@ -35,12 +35,12 @@ struct MeetingView: View {
                             Label("手动", systemImage: model.sumMode == "manual" ? "checkmark.circle.fill" : "circle")
                         }
                     } label: { Text("会中提要").lineLimit(1).minimumScaleFactor(0.75) }
-                    .buttonStyle(WorkspaceActionButtonStyle())
+                    .buttonStyle(WorkspaceActionButtonStyle(filled: false))
                     .accessibilityValue(model.sumMode == "auto" ? "自动" : "手动")
                     NavigationLink("会后材料") {
                         reportContent.navigationTitle("会后材料").navigationBarTitleDisplayMode(.inline)
                     }
-                    .buttonStyle(WorkspaceActionButtonStyle())
+                    .buttonStyle(WorkspaceActionButtonStyle(filled: false))
                 }
                 .lineLimit(1).minimumScaleFactor(0.75)
                 .padding(.horizontal).padding(.vertical, 8)
