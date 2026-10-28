@@ -38,6 +38,7 @@ import LiveKit
     var onFault: (() -> Void)?
     var onFlow: (() -> Void)?
     var isAvailable: Bool { device.connected }
+    var canResumeOwnedRecording: Bool { paused && ownsRecording }
 
     init(device: CB08DeviceControlling, publisher: PCMAudioPublishing,
          startupTimeout: Duration = .seconds(8),
@@ -125,6 +126,7 @@ import LiveKit
         closeGate()
         if failure == nil { stage = action == .pause ? "已暂停音频接收" : "已停止音频接收" }
         guard ownsRecording else { recordingOwner = nil; paused = false; return }
+        if action == .pause && device.recordState == .paused && pendingHalt == nil { return }
         if pendingHalt != action {
             device.command(action); pendingHalt = action
         }
@@ -140,7 +142,9 @@ import LiveKit
             haltProblem = nil
             return
         }
-        let confirmed = await device.waitForRecordAction(timeout: startupTimeout)
+        let confirmed: Bool
+        if action == .pause && device.recordState == .paused && pendingHalt == nil { confirmed = true }
+        else { confirmed = await device.waitForRecordAction(timeout: startupTimeout) }
         guard epoch == haltEpoch else { return }
         guard recordingOwner?.connectionID == owner.connectionID,
               device.connectionID == owner.connectionID else {
@@ -165,6 +169,11 @@ import LiveKit
     func pause() async { await finishHalt(.pause) }
     func stop() async { await finishHalt(.stop) }
     func interrupted() { closeGate() }
+    /// A precise unsolicited stop ends ownership; a pause retains it for this connection.
+    func observeUnexpectedState(_ state: CB08RecordingState) {
+        closeGate()
+        if state == .stopped || state == .inactive { recordingOwner = nil; paused = false }
+    }
     private func fault(_ reason: String) {
         let active = accepting
         closeGate(); failure = reason
@@ -207,7 +216,7 @@ import LiveKit
 }
 
 enum CB08InputError: LocalizedError {
-    case unavailable, invalidContext, recordStateUnknown, recordStateChanged, pausedRecordingNotOwned
+    case unavailable, invalidContext, recordStateUnknown, recordStateChanged, pausedRecordingNotOwned, deviceBusy
     case actionNotConfirmed, noRealtimeAudio
     case alreadyRecording(CB08RecordingState)
 
@@ -216,6 +225,7 @@ enum CB08InputError: LocalizedError {
         case .unavailable: return "CB08 未连接或连接已变化"
         case .invalidContext: return "CB08 采集上下文无效"
         case .recordStateUnknown: return "未收到 CB08 录音状态，请刷新设备状态后重试"
+        case .deviceBusy: return "设备动作正在确认，请稍候"
         case .recordStateChanged: return "CB08 录音状态在启动期间发生变化，请刷新设备状态后重试"
         case .pausedRecordingNotOwned: return "CB08 存在不属于当前会议的暂停录音，请先在设备端处理"
         case .alreadyRecording(let state): return "CB08 当前状态：\(state.rawValue)，请先处理设备独立录音后重试"

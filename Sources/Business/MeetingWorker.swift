@@ -7,6 +7,8 @@ final class MeetingWorker: ObservableObject {
     private(set) var transcriptRevision = 0
     @Published private(set) var lines: [TranscriptLine] = []
     private var transcriptStore = TranscriptStore()
+    private var clearedDisplaySessionID: String?
+    private var displayIsCleared: Bool { clearedDisplaySessionID == sessionID }
     @Published private(set) var transcriptGapText = ""
     private var lastCatchUpAt = Date.distantPast
     private var catchUpRunning = false
@@ -150,7 +152,7 @@ final class MeetingWorker: ObservableObject {
         settings.lockedByMeeting = { [weak self] in
             guard let self else { return false }
             return self.isRecording || self.intent == .wanted || self.terminating || self.actionPending ||
-                self.meetingContext.meetingAcceptsRecovery || self.input.cleanupProblem != nil
+                self.meetingContext.meetingAcceptsRecovery || self.input.cleanupProblem != nil || self.input.deviceManagement.busy
         }
         input.configurationLocked = { [weak settings] in settings?.isLocked ?? true }
         transport.controlObservation = { [weak self] in self?.meetingContext ?? .empty }
@@ -176,6 +178,7 @@ final class MeetingWorker: ObservableObject {
             self.noteUnknownFields(type: type, raw: raw)
             switch type {
             case "summary":
+                guard !self.displayIsCleared else { return }
                 // 会中提要:只追加,不顶走上面的定稿;每条都带手机本地时间(家里的 clock 不一定对得上)
                 // 时间口径(Codex 2026-10-18 评审第 6 条):优先服务端 clock(HH:MM:SS),
                 // 其次家里的 ts(epoch 秒),最后才退回手机本地钟 —— 手机钟与家里钟不是一回事。
@@ -190,6 +193,7 @@ final class MeetingWorker: ObservableObject {
                 self.summaries.append(SummaryItem(clock: clockText, text: text))
                 if self.summaries.count > 60 { self.summaries.removeFirst(self.summaries.count - 60) }
             case "sumstatus":
+                guard !self.displayIsCleared else { return }
                 // 状态区:家里每 60 秒推一次(哪怕这轮不出提要)—— 显示的是"为什么没出"
                 self.sumState = text
                 if let m = raw["mode"] as? String, !m.isEmpty { self.sumMode = m }
@@ -203,6 +207,7 @@ final class MeetingWorker: ObservableObject {
                 self.conditionNote("Metric.SummaryRound", self.board.summaryRoundCondition(),
                                    detail: "码=\(self.sumCode)")
             case "final":
+                guard !self.displayIsCleared else { return }
                 self.noteProgress(source: raw["source"] as? String ?? "", seconds: audioS)
                 // 电脑端在还没有场次时会拒收 summode(stage=no_session),导致重连后家里退回默认档位。
                 // 因此收到**本场首条有效 final** 后补发一次当前档位:每场只一次,带 v2 + 当前 session_id。
@@ -226,6 +231,7 @@ final class MeetingWorker: ObservableObject {
                 }
                 self.clearPartial(source: raw["source"] as? String ?? "", who: who)
             case "partial":
+                guard !self.displayIsCleared else { return }
                 self.noteProgress(source: raw["source"] as? String ?? "", seconds: audioS)
                 self.updatePartial(source: raw["source"] as? String ?? "", who: who, text: text)
             default:
@@ -297,6 +303,7 @@ final class MeetingWorker: ObservableObject {
         }
         onCaptureProjection?(view, confirmed)
         let desired = localCaptureDesired ?? view.desiredState
+        if desired == "ended" { clearMeetingDisplay() }
         let nextIntent: LinkDesired = desired == "ended" ? .notWanted : .wanted
         if intent != nextIntent { intent = nextIntent }
         if desired != "active", isRecording { isRecording = false }
@@ -412,7 +419,7 @@ final class MeetingWorker: ObservableObject {
                 "• \(item["task"] as? String ?? "")  负责人：\(item["owner"] as? String ?? "—")"
             }
         }
-        lines += ["", "精转逐字稿"]
+        lines += [""]
         lines += segments.compactMap { item in
             guard let text = item["text"] as? String else { return nil }
             return "\(item["clock"] as? String ?? "") \(item["speaker"] as? String ?? "")  \(text)"
@@ -447,7 +454,15 @@ final class MeetingWorker: ObservableObject {
 
     /// Clear device-owned, in-memory data for the current meeting while keeping
     /// saved reports and the coordinator's authoritative lifecycle projection.
+    func clearMeetingDisplay() {
+        guard !displayIsCleared else { return }
+        clearedDisplaySessionID = sessionID
+        transcriptRevision += 1
+        lines = []; partials = []; summaries = []; transcriptGapText = ""
+        sumState = "等待提要"; sumCode = "wait_period"
+    }
     func resetCurrentMeetingData() {
+        clearedDisplaySessionID = nil
         lines = []
         partials = []
         transcriptStore = TranscriptStore()
@@ -487,7 +502,7 @@ final class MeetingWorker: ObservableObject {
     /// 补取本场已确认、但没收到(或断线期间漏掉)的定稿。
     /// 实时和补取共用连续游标与去重入口。
     func catchUpNow() async {
-        guard !sessionID.isEmpty, !catchUpRunning else { return }
+        guard !sessionID.isEmpty, !displayIsCleared, !catchUpRunning else { return }
         catchUpRunning = true
         defer { catchUpRunning = false }
         let meeting = sessionID
@@ -498,7 +513,7 @@ final class MeetingWorker: ObservableObject {
             let page = try await MeetingClient.fetchTranscript(
                 serverURL: cfg.url, meetingID: meeting, deviceID: cfg.device,
                 after: cursor, epoch: requestedEpoch)
-            guard meeting == sessionID, generation == transport.generation else { return }
+            guard meeting == sessionID, !displayIsCleared, generation == transport.generation else { return }
             // Realtime may establish a newer epoch while the HTTP page is in flight.
             guard transcriptStore.epoch == requestedEpoch || page.epoch == transcriptStore.epoch else { return }
             let changed = transcriptStore.merge(page.items.map {

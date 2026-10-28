@@ -28,6 +28,13 @@ struct ContentView: View {
                     .frame(maxWidth: .infinity, minHeight: 44).background(.thinMaterial)
             }
         }
+        .alert("停止并保存", isPresented: Binding(get: { assistant.showingDeviceStop },
+                                              set: { assistant.showingDeviceStop = $0 })) {
+            Button("停止并保存", role: .destructive) { assistant.confirmDeviceStop() }
+            Button("取消", role: .cancel) { assistant.cancelDeviceStop() }
+        } message: {
+            Text(assistant.deviceStopMessage)
+        }
         .task {
             assistant.setRuntimeForeground(scenePhase == .active)
             assistant.startDesktopObservation()

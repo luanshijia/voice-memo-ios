@@ -16,6 +16,7 @@ import LiveKit
         desired: .wanted, observed: .unknownState)
     let device: CB08SDKBridge
     let external: CB08InputProvider
+    let deviceManagement: CB08DeviceManager
     private var subscriptions = Set<AnyCancellable>()
     private let provider: PhoneInputProvider
     var configurationLocked: () -> Bool = { false }
@@ -25,6 +26,7 @@ import LiveKit
         self.provider = provider ?? PhoneInputProvider(publisher: publisher)
         let device = CB08SDKBridge()
         self.device = device
+        deviceManagement = CB08DeviceManager(device: device)
         publisher.onFailure = { [weak device] message in device?.noteDevice(message) }
         external = CB08InputProvider(device: device, publisher: publisher)
         external.onFlow = { [weak self] in
@@ -33,6 +35,7 @@ import LiveKit
         }
         external.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }.store(in: &subscriptions)
         device.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }.store(in: &subscriptions)
+        deviceManagement.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }.store(in: &subscriptions)
     }
     var isAvailable: Bool { binding.kind == .phone || external.isAvailable }
     var permission: CapObserved { permissionStatus.observed }

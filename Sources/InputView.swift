@@ -18,8 +18,7 @@ struct InputView: View {
                         assistant.selectInput(.external, tag: tag)
                     }
                     NavigationLink("外设控制台") {
-                        ExternalDeviceView(device: assistant.input.device, provider: assistant.input.external,
-                                           controlsLocked: assistant.meeting.isRecording)
+                        ExternalDeviceView(assistant: assistant)
                     }
                     LabeledContent("蓝牙连接", value: assistant.input.device.connectionPhase.rawValue)
                     LabeledContent("卡片录音", value: cardRecordState)

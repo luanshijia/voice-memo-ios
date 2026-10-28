@@ -126,6 +126,7 @@ final class CB08EventFilter: @unchecked Sendable {
     var onPacket: ((Data) -> Void)?
     var onLoss: (() -> Void)?
     var onHardware: ((CB08RecordAction) -> Bool)?
+    var onRecordingObservation: ((CB08RecordingState) -> Void)?
     var onDiagnostic: ((String) -> Void)?
     private var hardwareIntent: CB08RecordAction?
     private var foreground = true
@@ -304,6 +305,8 @@ final class CB08EventFilter: @unchecked Sendable {
         pendingAction = nil; actionRevision += 1
         recordQueryPending = false
         querySummary = "尚未查询"; actionSummary = "尚无录音动作"
+        hardwareIntent = nil; hardwareSummary = "本次连接尚无实体键请求"
+        hardwareButtonEvents = [:]
     }
     private func initializeConnection() {
 #if !targetEnvironment(simulator)
@@ -376,6 +379,8 @@ final class CB08EventFilter: @unchecked Sendable {
             }
         case 3:
             guard connected else { return }
+            let previous = recordState
+            let wasPending = pendingAction != nil
             let raw = integer(data["record_state"])
             switch raw { case 0: recordState = .stopped; case 1: recordState = .recording
             case 2: recordState = .paused; default: recordState = nil }
@@ -389,8 +394,10 @@ final class CB08EventFilter: @unchecked Sendable {
                 }
             }
             if let name = data["fileName"] as? String { currentFile = name }
+            if !wasPending, let recordState, recordState != previous { onRecordingObservation?(recordState) }
         case 9:
             guard connected else { return }
+            let previous = recordState
             recordQueryPending = false
             queryRevision += 1
             let raw = integer(data["recordState"])
@@ -403,6 +410,7 @@ final class CB08EventFilter: @unchecked Sendable {
                 if recordState != .paused && recordState != .stopped { recordState = .inactive }
             } else { recordState = nil }
             if changed { noteDevice(querySummary) }
+            if pendingAction == nil, let recordState, recordState != previous { onRecordingObservation?(recordState) }
         case 6: battery = integer(data["cbc"])
         case 8:
             if let raw = integer(data["event"]), let action = CB08RecordAction(rawValue: raw) {

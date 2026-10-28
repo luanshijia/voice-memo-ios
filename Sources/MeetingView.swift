@@ -49,12 +49,13 @@ struct MeetingView: View {
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 HStack(spacing: 6) {
                     Button(assistant.input.displayName) { assistant.page = .input }
+                        .buttonStyle(.plain).foregroundStyle(.blue)
                     Text("·").foregroundStyle(.secondary)
                     Text(model.captureStatusText)
                     Text("·").foregroundStyle(.secondary)
                     Text(model.sumState).foregroundStyle(sumStateColor)
                 }
-                .font(.caption).lineLimit(1).minimumScaleFactor(0.8)
+                .font(.caption.weight(.regular)).lineLimit(1).minimumScaleFactor(0.8)
                 .padding(.horizontal).padding(.vertical, 8)
                 .frame(maxWidth: .infinity).background(.bar)
             }
@@ -90,7 +91,6 @@ struct MeetingView: View {
         } else {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    Text("会议：\(assistant.meeting.finalReportMeetingID)").font(.footnote).foregroundStyle(.secondary)
                     Text(model.finalReportText).font(.body)
                 }
                 .textSelection(.enabled)

@@ -2,13 +2,17 @@ import SwiftUI
 
 @MainActor
 struct ExternalDeviceView: View {
+    @ObservedObject var assistant: MeetingAssistant
     @ObservedObject var device: CB08SDKBridge
     @ObservedObject var provider: CB08InputProvider
-    let controlsLocked: Bool
+    private var controlsLocked: Bool { assistant.deviceConnectionLocked }
     @ObservedObject private var deviceTelemetry: DeviceTelemetry
     @ObservedObject private var audioTelemetry: DeviceTelemetry
-    init(device: CB08SDKBridge, provider: CB08InputProvider, controlsLocked: Bool) {
-        self.device = device; self.provider = provider; self.controlsLocked = controlsLocked
+    init(assistant: MeetingAssistant) {
+        self.assistant = assistant
+        let device = assistant.input.device
+        let provider = assistant.input.external
+        self.device = device; self.provider = provider
         deviceTelemetry = device.telemetry; audioTelemetry = provider.telemetry
     }
     var body: some View {
@@ -29,7 +33,7 @@ struct ExternalDeviceView: View {
                     .disabled(controlsLocked || device.connectionPhase == .connecting || device.connectionPhase == .disconnecting ||
                               (device.connectionPhase == .disconnected && device.selectedDevice == nil))
                 }
-                LabeledContent(device.selectedDevice?.name ?? "CB08", value: device.connectionPhase.rawValue)
+                LabeledContent(device.selectedDevice?.name ?? "", value: device.connectionPhase.rawValue)
                 if device.devices.count > 1 {
                     Picker("选择设备", selection: $device.selectedDeviceID) {
                         ForEach(Array(device.devices.enumerated()), id: \.element.id) { index, item in
@@ -41,7 +45,28 @@ struct ExternalDeviceView: View {
                 if device.devices.isEmpty && !device.connected {
                     Text(device.isScanning ? "正在查找CB08" : "尚未发现CB08").foregroundStyle(.secondary)
                 }
-                if controlsLocked { Text("采集中，连接操作已锁定").font(.footnote).foregroundStyle(.secondary) }
+                if controlsLocked { Text("会议或设备动作进行中，连接操作已锁定").font(.footnote).foregroundStyle(.secondary) }
+            }
+            Section("录音控制") {
+                HStack(spacing: 8) {
+                    Button(assistant.deviceStartTitle) { assistant.startFromDeviceConsole() }
+                        .buttonStyle(WorkspaceActionButtonStyle())
+                        .disabled(!assistant.deviceCanStart)
+                    Button("暂停") { assistant.accept(.pause) }
+                        .buttonStyle(WorkspaceActionButtonStyle())
+                        .disabled(!assistant.deviceCanPause)
+                    Button("停止并保存") { assistant.requestDeviceStop() }
+                        .buttonStyle(WorkspaceActionButtonStyle(tint: .red))
+                        .disabled(!assistant.deviceCanStop)
+                }
+                Text(assistant.deviceControlStatus)
+                    .font(.callout)
+                    .foregroundStyle(assistant.deviceIndependentWarning ? Color.red : Color.primary)
+                    .accessibilityLabel("设备状态：\(assistant.deviceControlStatus)")
+                if assistant.input.binding.kind != .external {
+                    Text("开始会议采集前，请在输入页选择CB08。")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
             }
             Section {
                 LabeledContent("卡片录音状态", value: device.connected ? recordWord : "未知")
@@ -59,7 +84,7 @@ struct ExternalDeviceView: View {
                 HStack {
                     Text("设备状态")
                     Spacer()
-                    Button("刷新") { device.refreshStatus() }.disabled(!device.connected)
+                    Button("刷新") { device.refreshStatus() }.disabled(!device.connected || assistant.deviceConnectionLocked)
                 }
             }
             Section("设备参数") {

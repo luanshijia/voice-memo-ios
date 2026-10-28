@@ -25,6 +25,8 @@ import Foundation
 @MainActor final class MeetingAssistant: ObservableObject {
     @Published var page: WorkspacePage = .meeting
     @Published private(set) var message: String?
+    @Published var showingDeviceStop = false
+    private var deviceStopTarget: (connection: UUID, meeting: String?, endsMeeting: Bool)?
     let settings: SettingsWorker
     let input: InputWorker
     let connection: ConnectionWorker
@@ -89,6 +91,15 @@ import Foundation
             }
         }
         input.device.onHardware = { [weak self] event in self?.hardware(event) ?? false }
+        input.device.onRecordingObservation = { [weak self] state in
+            guard let self, self.input.binding.kind == .external,
+                  (self.meeting.isRecording || self.meeting.isPaused), !self.meeting.actionPending,
+                  self.localControlExecutions == 0, !self.input.deviceManagement.busy,
+                  (self.meeting.isPaused ? state == .recording : state != .recording) else { return }
+            self.input.external.observeUnexpectedState(state)
+            self.meeting.note("卡端状态变化为\(state.rawValue)，协调会议暂停")
+            self.pauseCapture()
+        }
         input.device.onDiagnostic = { [weak meeting] event in meeting?.note("[CB08] \(event)") }
         input.external.onFault = { [weak self] in
             guard let self, self.input.binding.kind == .external, self.meeting.isRecording else { return }
@@ -109,6 +120,10 @@ import Foundation
     }
 
     @discardableResult func accept(_ action: CaptureAction) -> CaptureActionResult {
+        if input.deviceManagement.busy || showingDeviceStop {
+            message = "请先完成设备动作确认"
+            return .rejected("请先完成设备动作确认")
+        }
         let result: CaptureActionResult
         switch action {
         case .start, .recover:
@@ -145,7 +160,7 @@ import Foundation
     }
 
     var canSelectInput: Bool {
-        input.cleanupProblem == nil && !meeting.actionPending && !meeting.terminating && !meeting.isRecording && connection.pendingDisconnect == nil &&
+        !input.deviceManagement.busy && !showingDeviceStop && input.cleanupProblem == nil && !meeting.actionPending && !meeting.terminating && !meeting.isRecording && connection.pendingDisconnect == nil &&
         ((!meeting.wantsCapture && !settings.isLocked) ||
          (meeting.isPaused && meeting.capture?.observedState == "paused"))
     }
@@ -159,7 +174,13 @@ import Foundation
     }
     /// No key event can claim another source's active meeting.
     func hardware(_ event: CB08RecordAction) -> Bool {
-        guard input.binding.kind == .external, !meeting.actionPending else { return false }
+        guard input.binding.kind == .external, !meeting.actionPending,
+              !input.deviceManagement.busy, !showingDeviceStop else { return false }
+        if event == .stop {
+            guard deviceCanStop, let connection = input.device.connectionID else { return false }
+            return executeDeviceStop(connection: connection, meetingID: hasExternalMeeting ? meeting.capture?.meetingID : nil,
+                                     endsMeeting: hasExternalMeeting, fromHardware: true)
+        }
         let action: CaptureAction
         switch event {
         case .start: action = .start
@@ -168,6 +189,97 @@ import Foundation
         case .resume: action = .resume
         }
         return accept(action) == .submitted
+    }
+
+    private var hasExternalMeeting: Bool {
+        input.binding.kind == .external && (meeting.wantsCapture || meeting.isRecording || meeting.presentation.terminateAction.enabled)
+    }
+    private var deviceControlsBusy: Bool {
+        input.deviceManagement.busy || showingDeviceStop || meeting.actionPending || meeting.terminating ||
+        localControlExecutions > 0 || desktopReconciliationRunning || connection.pendingDisconnect != nil || input.cleanupProblem != nil
+    }
+    var deviceConnectionLocked: Bool { deviceControlsBusy || meeting.isRecording || meeting.wantsCapture }
+    var deviceStartTitle: String { meeting.isPaused ? "继续" : meeting.wantsCapture ? "恢复" : "开始" }
+    var deviceCanStart: Bool {
+        guard input.device.connected, input.binding.kind == .external, !deviceControlsBusy,
+              !meeting.isRecording, readiness.problems.isEmpty, input.deviceManagement.problem == nil else { return false }
+        let state = input.device.recordState
+        if meeting.isPaused {
+            return meeting.capture?.observedState == "paused" &&
+                (state == .stopped || state == .inactive || (state == .paused && input.external.canResumeOwnedRecording))
+        }
+        return state == .stopped || state == .inactive
+    }
+    var deviceCanPause: Bool {
+        input.device.connected && !deviceControlsBusy && input.binding.kind == .external &&
+        meeting.isRecording && !meeting.isPaused && input.device.recordState == .recording
+    }
+    var deviceCanStop: Bool {
+        guard input.device.connected, !deviceControlsBusy else { return false }
+        if hasExternalMeeting { return true }
+        guard !meeting.wantsCapture, !meeting.isRecording, !meeting.meetingContext.hasOpenMeeting else { return false }
+        return input.device.recordState != .stopped || input.deviceManagement.problem != nil
+    }
+    var deviceIndependentWarning: Bool {
+        input.device.connected && !hasExternalMeeting &&
+        (input.device.recordState == .recording || input.device.recordState == .paused)
+    }
+    var deviceControlStatus: String {
+        guard input.device.connected else { return "CB08未连接" }
+        if input.deviceManagement.busy { return "设备准备中 · 等待确认" }
+        if let problem = input.deviceManagement.problem ?? input.cleanupProblem { return problem }
+        if deviceIndependentWarning { return "CB08：\(input.device.recordState!.rawValue) · App未采集此录音" }
+        if hasExternalMeeting { return "CB08：\(input.device.recordState?.rawValue ?? "未知") · \(meeting.captureStatusText)" }
+        if let state = input.device.recordState {
+            return state == .stopped || state == .inactive ? "CB08：\(state.rawValue) · 可开始新采集" : "CB08：\(state.rawValue)"
+        }
+        return "CB08状态未确认 · 请刷新"
+    }
+    func startFromDeviceConsole() {
+        guard deviceCanStart else { return }
+        accept(meeting.isPaused ? .resume : meeting.wantsCapture ? .recover : .start)
+    }
+    @discardableResult func requestDeviceStop() -> Bool {
+        guard deviceCanStop, let connection = input.device.connectionID else { return false }
+        deviceStopTarget = (connection, hasExternalMeeting ? meeting.capture?.meetingID : nil, hasExternalMeeting)
+        showingDeviceStop = true
+        return true
+    }
+    var deviceStopMessage: String {
+        if deviceStopTarget?.endsMeeting == true {
+            return "将停止CB08录音并结束本次会议，已有内容保留。与会议页“结束会议”执行相同操作。"
+        }
+        return "将停止并保存CB08卡端当前录音。App没有采集此录音，本操作不会创建或结束App会议。"
+    }
+    func cancelDeviceStop() {
+        showingDeviceStop = false; deviceStopTarget = nil
+        input.device.cancelHardwareIntent()
+    }
+    func confirmDeviceStop() {
+        showingDeviceStop = false
+        guard let target = deviceStopTarget else { return }
+        deviceStopTarget = nil
+        _ = executeDeviceStop(connection: target.connection, meetingID: target.meeting,
+                              endsMeeting: target.endsMeeting, fromHardware: false)
+    }
+    private func executeDeviceStop(connection: UUID, meetingID: String?, endsMeeting: Bool, fromHardware: Bool) -> Bool {
+        guard input.device.connectionID == connection, deviceCanStop, endsMeeting == hasExternalMeeting,
+              meetingID == (hasExternalMeeting ? meeting.capture?.meetingID : nil) else {
+            input.device.cancelHardwareIntent(); message = "设备或会议已变化，请重新确认"; return false
+        }
+        if !fromHardware { input.device.cancelHardwareIntent() }
+        if hasExternalMeeting { return accept(.end) == .submitted }
+        guard let stop = input.deviceManagement.stopIndependent(cleanup: { [input] in
+            await input.stop()
+            return input.cleanupProblem == nil
+        }) else { return false }
+        Task { [weak self] in
+            guard let self else { return }
+            let stopped = await stop.value
+            self.input.device.cancelHardwareIntent()
+            self.message = stopped ? nil : self.input.deviceManagement.problem
+        }
+        return true
     }
 
     func checkConnection() async {
@@ -208,7 +320,8 @@ import Foundation
     /// Polling may settle abandoned requests after relaunch, but never consume
     /// the grant belonging to a running local start/halt operation.
     func reconcileDesktopOnce() async throws {
-        guard localControlExecutions == 0, !desktopReconciliationRunning else { return }
+        guard localControlExecutions == 0, !desktopReconciliationRunning,
+              !input.deviceManagement.busy, !showingDeviceStop else { return }
         desktopReconciliationRunning = true
         defer { desktopReconciliationRunning = false }
         await input.retryCleanup()
@@ -295,6 +408,7 @@ import Foundation
         pendingPublishing = nil
         let generation = connection.invalidate()
         meeting.captureHalted(pausing: pausing)
+        if !pausing { meeting.clearMeetingDisplay() }
         input.device.cancelHardwareIntent(unless: pausing ? .pause : .stop)
         input.requestHalt(pausing: pausing)
         connection.enqueueDisconnect(beforeDisconnect: { [input] in
@@ -353,9 +467,41 @@ import Foundation
         return result
     }
 
-    private func beginCapture(resuming: Bool) -> CaptureActionResult {
+    private func beginCapture(resuming: Bool, devicePrepared: Bool = false) -> CaptureActionResult {
         guard !meeting.terminating else { return .rejected("会议正在结束") }
         if let problem = input.cleanupProblem { return .rejected(problem) }
+        if input.binding.kind == .external, let problem = input.deviceManagement.problem { return .rejected(problem) }
+        if input.binding.kind == .external && !devicePrepared {
+            let deviceConnection = input.device.connectionID
+            let config = settings.config
+            let generation = connection.generation
+            let configurationRevision = settings.snapshot.revision
+            let meetingID = meeting.capture?.meetingID
+            meeting.setActionPending(true)
+            localControlExecutions += 1
+            Task { [weak self] in
+                guard let self else { return }
+                defer { self.localControlExecutions -= 1 }
+                do {
+                    try await self.input.deviceManagement.checkForCapture(canResume: self.input.external.canResumeOwnedRecording)
+                    self.meeting.setActionPending(false)
+                    guard self.input.device.connectionID == deviceConnection, self.input.binding.kind == .external,
+                          SessionOperation(generation: generation, config: config).isCurrent(
+                            generation: self.connection.generation, config: self.settings.config),
+                          self.settings.snapshot.revision == configurationRevision, self.meeting.capture?.meetingID == meetingID,
+                          !self.meeting.terminating else {
+                        self.input.device.cancelHardwareIntent(); self.message = "设备或会议已变化，请重试"; return
+                    }
+                    let result = self.beginCapture(resuming: resuming, devicePrepared: true)
+                    if case .rejected(let reason) = result { self.message = reason; self.input.device.cancelHardwareIntent() }
+                } catch {
+                    self.meeting.setActionPending(false)
+                    self.input.device.cancelHardwareIntent()
+                    self.message = error.localizedDescription
+                }
+            }
+            return .submitted
+        }
         meeting.refreshForegroundObservations()
         nextDesktopPoll = .distantPast
         let config = settings.config
