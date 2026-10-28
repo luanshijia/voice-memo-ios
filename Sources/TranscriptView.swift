@@ -145,9 +145,6 @@ struct TranscriptView<Summary: View>: View {
 
     private func paragraph(who: String, text: String, color: Color) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            if !who.isEmpty {
-                Text(who).font(.system(size: 10)).foregroundStyle(.secondary)
-            }
             Text(text)
                 .font(.system(size: 15))
                 .lineSpacing(6)

@@ -10,14 +10,14 @@ struct ContentView: View {
 
     var body: some View {
         TabView(selection: Binding(get: { assistant.page }, set: { assistant.page = $0 })) {
-            SettingsView(model: model, worker: assistant.settings)
-                .tabItem { Label("设置", systemImage: "gearshape") }.tag(WorkspacePage.settings)
-            InputView(assistant: assistant)
-                .tabItem { Label("输入", systemImage: "mic") }.tag(WorkspacePage.input)
-            ConnectionView(assistant: assistant)
-                .tabItem { Label("连接", systemImage: "network") }.tag(WorkspacePage.connection)
             MeetingView(model: model, assistant: assistant)
                 .tabItem { Label("会议", systemImage: "text.bubble") }.tag(WorkspacePage.meeting)
+            ConnectionView(assistant: assistant)
+                .tabItem { Label("连接", systemImage: "network") }.tag(WorkspacePage.connection)
+            InputView(assistant: assistant)
+                .tabItem { Label("输入", systemImage: "mic") }.tag(WorkspacePage.input)
+            SettingsView(model: model, worker: assistant.settings)
+                .tabItem { Label("设置", systemImage: "gearshape") }.tag(WorkspacePage.settings)
         }
         .safeAreaInset(edge: .top, spacing: 0) {
             if let message = assistant.message {

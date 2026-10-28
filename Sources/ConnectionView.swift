@@ -17,18 +17,6 @@ struct ConnectionView: View {
                     LabeledContent("电脑实际收音", value: assistant.connection.desktopAudioEvidence)
                     LabeledContent("已识别音频", value: "\(Int(assistant.connection.recognitionSeconds)) 秒")
                 }
-                Section {
-                    Button("检查网络入口") { Task { await assistant.checkConnection() } }
-                        .buttonStyle(.borderless)
-                    Text("入口可达只证明 TCP 可达。会议管家、媒体连接和实际收音分别依据各自证据。")
-                        .font(.footnote).foregroundStyle(.secondary)
-                    Button("恢复本会议") { assistant.accept(.recover) }
-                        .buttonStyle(.borderless)
-                        .disabled(assistant.meeting.isPaused || assistant.meeting.actionPending || !assistant.meeting.projection.canReconnect(
-                            wantsToContinue: assistant.meeting.wantsCapture,
-                            recording: assistant.meeting.isRecording,
-                            networkOK: assistant.connection.network == .connected))
-                }
             }
             .font(.body)
         }

@@ -8,23 +8,17 @@ struct MeetingView: View {
     var body: some View {
         NavigationStack {
             VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Button(assistant.input.displayName) { assistant.page = .input }
-                        .font(.subheadline)
-                    Spacer()
-                    Label(model.captureStatusText, systemImage: "waveform").font(.subheadline)
-                }
                 if !model.transcriptGapText.isEmpty {
                     Text(model.transcriptGapText).font(.caption).foregroundStyle(.orange)
                 }
                 TranscriptView(partials: model.partials, lines: model.lines,
-                               localIdentity: model.identity, isRecording: model.isRecording) { width in
-                    summaryPanel(width: width)
+                               localIdentity: model.identity, isRecording: model.isRecording) { _ in
+                    summaryPanel
                 }
             }
             .padding(.horizontal)
             .navigationBarTitleDisplayMode(.inline)
-            .safeAreaInset(edge: .bottom, spacing: 0) {
+            .safeAreaInset(edge: .top, spacing: 0) {
                 HStack(spacing: 8) {
                     Button(captureButtonTitle) { assistant.accept(captureButtonAction) }
                         .buttonStyle(WorkspaceActionButtonStyle())
@@ -33,11 +27,37 @@ struct MeetingView: View {
                         .buttonStyle(WorkspaceActionButtonStyle(tint: .red))
                         .disabled(assistant.meeting.terminating ||
                                   (!model.isRecording && model.intent != .wanted && !assistant.meeting.presentation.terminateAction.enabled))
+                    Menu {
+                        Button { model.setSumMode("auto") } label: {
+                            Label("自动", systemImage: model.sumMode == "auto" ? "checkmark.circle.fill" : "circle")
+                        }
+                        Button { model.setSumMode("manual") } label: {
+                            Label("手动", systemImage: model.sumMode == "manual" ? "checkmark.circle.fill" : "circle")
+                        }
+                    } label: { Text("会中提要").lineLimit(1).minimumScaleFactor(0.75) }
+                    .buttonStyle(WorkspaceActionButtonStyle())
+                    .accessibilityValue(model.sumMode == "auto" ? "自动" : "手动")
                     NavigationLink("会后材料") {
                         reportContent.navigationTitle("会后材料").navigationBarTitleDisplayMode(.inline)
                     }
                     .buttonStyle(WorkspaceActionButtonStyle())
-                }.padding().frame(maxWidth: .infinity).background(.bar)
+                }
+                .lineLimit(1).minimumScaleFactor(0.75)
+                .padding(.horizontal).padding(.vertical, 8)
+                .frame(maxWidth: .infinity).background(.bar)
+            }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                HStack(spacing: 6) {
+                    Button(assistant.input.displayName) { assistant.page = .input }
+                    Text("·").foregroundStyle(.secondary)
+                    Text(model.captureStatusText)
+                    Text("·").foregroundStyle(.secondary)
+                    Text(model.sumState).foregroundStyle(sumStateColor)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .font(.caption).lineLimit(1).minimumScaleFactor(0.8)
+                .padding(.horizontal).padding(.vertical, 8)
+                .frame(maxWidth: .infinity).background(.bar)
             }
             .confirmationDialog("结束本次会议并保存已有录音？", isPresented: $confirmStop,
                                 titleVisibility: .visible) {
@@ -79,25 +99,8 @@ struct MeetingView: View {
             }
         }
     }
-    private func summaryPanel(width: CGFloat) -> some View {
-        let gap: CGFloat = 6
-        let btnW = max(52, (width - gap * 4) / 5)     // 与第一排同算法:5 等分
-        return VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: gap) {
-                modeButton("自动", on: model.sumMode == "auto", width: btnW) { model.setSumMode("auto") }
-                modeButton("手动", on: model.sumMode == "manual", width: btnW) { model.setSumMode("manual") }
-                HStack(spacing: 4) {
-                    // 用户口径 2026-10-19:去掉「状态」两个字 —— 这行本身就只讲提要状态,标签无意义。
-                    Text(model.sumState)
-                        .font(.system(size: 10))
-                        .foregroundStyle(sumStateColor)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)   // 显式左对齐:整行不被居中,也不会被挤出边界
-
+    private var summaryPanel: some View {
+        VStack(alignment: .leading, spacing: 4) {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 6) {
@@ -122,21 +125,6 @@ struct MeetingView: View {
                 }
             }
         }
-    }
-
-    /// 档位按钮:纯文字单行、**矮块**(用户 2026-10-16 要求:高度压到第一排按钮的 50~60%,
-    /// 与第一排按钮**同高**),块高 24、圆角 6;宽度仍与第一排同算法(5 等分)。
-    private func modeButton(_ title: String, on: Bool, width: CGFloat,
-                            action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(title)
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(on ? .white : .primary)
-                .frame(width: width, height: 24)
-                .background(RoundedRectangle(cornerRadius: 6)
-                    .fill(on ? Color.blue : Color.secondary.opacity(0.25)))
-        }
-        .buttonStyle(.plain)
     }
 
     /// 状态行配色:灰 = 等(周期未到/内容不足)、橙 = 机器忙或转写质量不足、蓝 = 正在生成。
