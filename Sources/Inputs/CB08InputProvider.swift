@@ -157,6 +157,7 @@ import LiveKit
             do {
                 let output = try result.get()
                 try self.publisher.submitPCM(output.pcm)
+                RuntimeActivity.add(.pcmSamples, output.metrics.decodedSamples)
                 self.lastPCMAt = Date()
                 self.decodedFrames += output.metrics.frameCount
                 self.expectedSamples += output.metrics.frameCount * CB08OpusFraming.samplesPerFrame

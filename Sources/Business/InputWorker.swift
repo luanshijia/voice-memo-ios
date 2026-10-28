@@ -7,10 +7,10 @@ import LiveKit
 @MainActor final class InputWorker: ObservableObject {
     @Published private(set) var binding = InputBinding.phone
     @Published private(set) var isCapturing = false
-    @Published private(set) var micModeText = "读取中"
-    @Published private(set) var permissionStatus = Status<LinkDesired, CapObserved, CapReason>(
+    private(set) var micModeText = "读取中"
+    private(set) var permissionStatus = Status<LinkDesired, CapObserved, CapReason>(
         desired: .wanted, observed: .unknownState)
-    @Published private(set) var modeStatus = Status<LinkDesired, MicModeObserved, CapReason>(
+    private(set) var modeStatus = Status<LinkDesired, MicModeObserved, CapReason>(
         desired: .wanted, observed: .unknownState)
     let device: CB08SDKBridge
     let external: CB08InputProvider
@@ -44,7 +44,7 @@ import LiveKit
         return .submitted
     }
     func adopt(_ value: InputBinding) {
-        binding = value
+        if binding != value { binding = value }
         if value.kind == .external { device.activate() }
     }
     func bind(_ room: Room) {
@@ -83,6 +83,14 @@ import LiveKit
     }
 
     func refreshMicMode(generation: Int) {
+        let previousPermission = permissionStatus
+        let previousMode = modeStatus
+        let previousText = micModeText
+        defer {
+            if previousPermission.observed != permissionStatus.observed || previousPermission.reason?.code != permissionStatus.reason?.code ||
+               previousPermission.generation != permissionStatus.generation || previousMode.observed != modeStatus.observed ||
+               previousMode.generation != modeStatus.generation || previousText != micModeText { objectWillChange.send() }
+        }
         let allowed = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
         permissionStatus = Status(desired: .wanted, observed: allowed ? .yes : .no,
                                   reason: allowed ? nil : .permissionDenied,

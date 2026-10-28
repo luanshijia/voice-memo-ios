@@ -146,20 +146,12 @@ enum MeetingClient {
     static var defaultDeviceID: String { infoValue("VMDefaultDevice", fallback: "iphone") }
     static var defaultUserID: String { infoValue("VMDefaultUser", fallback: "owner") }
 
-    static func sharedDefaults() -> UserDefaults? {
-        for group in appGroupCandidates where
-            FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: group) != nil {
-            if let defaults = UserDefaults(suiteName: group) { return defaults }
-        }
-        return nil
-    }
-
+    static func sharedDefaults() -> UserDefaults? { ControlStorageLocations.legacy().defaults.first }
+    static func refreshControlStorage() { ControlStorageLocations.refresh() }
     private static func pendingStore() throws -> PendingRequestStore {
-        let oldRoots = appGroupCandidates.compactMap({
-            FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: $0)
-        }).map { $0.appendingPathComponent("pending-control", isDirectory: true) }
+        let legacy = ControlStorageLocations.legacy()
         return PendingRequestStore(root: try AppStorage.pendingRequestDirectory(),
-                                   legacy: sharedDefaults(), legacyRoots: oldRoots)
+                                   legacy: legacy.defaults.first, legacyRoots: legacy.roots)
     }
 
     private static func validatedResponse(_ data: Data, kind: String) throws -> [String: Any] {
@@ -215,6 +207,7 @@ enum MeetingClient {
         request.httpBody = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
         request.timeoutInterval = 8
         request.cachePolicy = .reloadIgnoringLocalCacheData
+        RuntimeActivity.add(.controlHTTP)
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse else {
             throw failure(3, "会议总管没有响应")
@@ -278,6 +271,7 @@ enum MeetingClient {
             "generation": generation, "observed": observed
         ])
         request.timeoutInterval = 8
+        RuntimeActivity.add(.controlHTTP)
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
             throw failure(14, "电脑端未确认采集状态")
@@ -314,6 +308,7 @@ enum MeetingClient {
         request.setValue(try credential(), forHTTPHeaderField: "X-VM-Device-Token")
         request.timeoutInterval = 8
         request.cachePolicy = .reloadIgnoringLocalCacheData
+        RuntimeActivity.add(.controlHTTP)
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
             throw failure(9, "电脑端会议查询失败")
@@ -348,6 +343,7 @@ enum MeetingClient {
         request.setValue(try credential(), forHTTPHeaderField: "X-VM-Device-Token")
         request.timeoutInterval = 8
         request.cachePolicy = .reloadIgnoringLocalCacheData
+        RuntimeActivity.add(.controlHTTP)
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
             throw failure(12, "电脑端补取失败")
@@ -383,6 +379,7 @@ enum MeetingClient {
         var request = URLRequest(url: endpoint)
         request.setValue(try credential(), forHTTPHeaderField: "X-VM-Device-Token")
         request.timeoutInterval = 15
+        RuntimeActivity.add(.controlHTTP)
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
             throw failure(11, "报告尚未生成或回包无效")
@@ -420,6 +417,7 @@ enum MeetingClient {
             "device_id": deviceID, "sha256": sha256
         ])
         request.timeoutInterval = 8
+        RuntimeActivity.add(.controlHTTP)
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
             throw failure(12, "电脑端未确认报告送达")
@@ -459,6 +457,7 @@ enum MeetingClient {
             if let generation { payload["generation"] = generation }
             request.httpBody = try JSONSerialization.data(withJSONObject: payload)
             request.timeoutInterval = 8
+            RuntimeActivity.add(.controlHTTP)
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
                 throw failure(8, "电脑端未确认会议停止")
@@ -630,7 +629,7 @@ struct CaptureView: Codable, Equatable {
         case createdAt = "created_at", identity, media
     }
 }
-struct CaptureAudioReceipt: Decodable {
+struct CaptureAudioReceipt: Decodable, Equatable {
     let meetingID: String
     let segmentID: String
     let generation: Int
@@ -703,6 +702,7 @@ extension MeetingClient {
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue(try credential(), forHTTPHeaderField: "X-VM-Device-Token")
         req.timeoutInterval = 8; req.cachePolicy = .reloadIgnoringLocalCacheData
+        RuntimeActivity.add(.controlHTTP)
         let (data, response) = try await URLSession.shared.data(for: req)
         guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
             let code = controlErrorCode(from: data) ?? "control_v2_unavailable"

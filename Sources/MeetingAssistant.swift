@@ -15,7 +15,9 @@ import Foundation
         let meeting = MeetingWorker(settings: settings, input: input, transport: connection)
         model = SessionModel(meeting: meeting)
         assistant = MeetingAssistant(meeting: meeting)
-        subscription = assistant.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+        subscription = assistant.objectWillChange.sink { [weak self] _ in
+            RuntimeActivity.add(.uiNotice); self?.objectWillChange.send()
+        }
     }
 }
 
@@ -34,6 +36,17 @@ import Foundation
     private var localControlExecutions = 0
     private var desktopReconciliationRunning = false
     private var usageSample = RuntimeUsageSample()
+    private var runtimeForeground = true
+    var runtimeContext: String {
+        "\(runtimeForeground ? "前台" : "后台") \(input.isCapturing ? "采集中" : "空闲") \(input.displayName) SDK=\(input.device.isSDKInitialized) BLE=\(input.device.connected) 媒体=\(connection.media)"
+    }
+    func setRuntimeForeground(_ foreground: Bool) {
+        runtimeForeground = foreground
+        observeRuntimePhase()
+    }
+    func observeRuntimePhase() {
+        if let sample = usageSample.report(context: runtimeContext, foreground: runtimeForeground) { meeting.note(sample) }
+    }
     private var observationTask: Task<Void, Never>?
     private var pendingPublishing: CaptureView?
     private var unsavedHalt: (action: String, config: LiveKitConfig, view: CaptureView?)?
@@ -169,7 +182,8 @@ import Foundation
     }
     func stopDesktopObservation() { observationTask?.cancel() }
     private func observeDesktopOnce() async {
-        if let sample = usageSample.report(capturing: input.isCapturing) { meeting.note(sample) }
+        observeRuntimePhase()
+        settings.refreshPendingControls()
         try? await MeetingClient.flushPendingBroadcastStop()
         guard !Task.isCancelled else { return }
         try? await MeetingClient.flushPendingMicStop()
@@ -214,6 +228,7 @@ import Foundation
         guard pollGeneration == connection.generation else { return }
         meeting.reconcilePendingAction(connection.hasPendingCapture)
         meeting.receivePendingReports(state.pendingReports, config: pollConfig)
+        settings.refreshPendingControls()
     }
 
     @discardableResult func startCapture() -> CaptureActionResult {

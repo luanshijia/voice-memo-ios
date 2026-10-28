@@ -6,7 +6,8 @@ import Network
 /// TCP 建立成功表示这条链路可达，不单独证明 LiveKit 房间或媒体流已连接。
 enum NetProbe {
     static func check(host: String, port: UInt16, timeout: TimeInterval = 3) async -> Bool {
-        await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
+        RuntimeActivity.add(.tcpProbe)
+        return await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
             guard let nwPort = NWEndpoint.Port(rawValue: port) else {
                 cont.resume(returning: false)
                 return

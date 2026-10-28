@@ -7,12 +7,17 @@ import Foundation
     private let defaults: UserDefaults
     var lockedByMeeting: () -> Bool = { false }
     private let checksPendingRequests: Bool
+    private let pendingRequests: () -> Bool
+    @Published private var pendingControl = false
 
-    init(defaults: UserDefaults = .standard, checksPendingRequests: Bool = true) {
+    init(defaults: UserDefaults = .standard, checksPendingRequests: Bool = true,
+         pendingRequests: (() -> Bool)? = nil) {
         self.defaults = defaults
         self.checksPendingRequests = checksPendingRequests
+        self.pendingRequests = pendingRequests ?? { AppStorage.hasPendingControl() || MeetingClient.hasPendingCapture() }
         config = LiveKitConfig.load(defaults: defaults)
         config.save(defaults: defaults)
+        refreshPendingControls()
     }
 
     var credential: String { defaults.string(forKey: "vm.deviceToken") ?? "" }
@@ -21,10 +26,16 @@ import Foundation
                        revision: defaults.integer(forKey: "vm.configRevision"),
                        hasCredential: !credential.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
     }
-    var isLocked: Bool { lockedByMeeting() || (checksPendingRequests && (AppStorage.hasPendingControl() || MeetingClient.hasPendingCapture())) }
+    func refreshPendingControls() {
+        guard checksPendingRequests else { return }
+        let pending = pendingRequests()
+        if pending != pendingControl { pendingControl = pending }
+    }
+    var isLocked: Bool { lockedByMeeting() || pendingControl }
     var lockReason: String? { isLocked ? "当前会议或待确认动作仍绑定这份配置，请先完成对账。" : nil }
 
     @discardableResult func update(_ field: ConfigurationField, value: String) -> Bool {
+        refreshPendingControls()
         guard !isLocked else { return false }
         objectWillChange.send()
         switch field {
@@ -37,6 +48,7 @@ import Foundation
         return true
     }
     func reset() {
+        refreshPendingControls()
         guard !isLocked else { return }
         config = LiveKitConfig(url: LiveKitConfig.defaultURL, device: LiveKitConfig.defaultDevice,
                                userID: MeetingClient.defaultUserID)

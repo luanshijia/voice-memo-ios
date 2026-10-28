@@ -29,7 +29,7 @@ import LiveKit
     @Published private(set) var connecting: Task<Void, Never>?
     @Published private(set) var pendingDisconnect: Task<Void, Never>?
     @Published private(set) var endReason: LinkReason?
-    @Published private(set) var probe = Status<LinkDesired, LinkObserved, LinkReason>(
+    private(set) var probe = Status<LinkDesired, LinkObserved, LinkReason>(
         desired: .wanted, observed: .notStarted)
     private let settings: SettingsWorker
     private let probeHost: (String, UInt16) async -> Bool
@@ -149,13 +149,25 @@ import LiveKit
     var media: LinkObserved { status(desired: .wanted).observed }
     var controlIsFresh: Bool { controlObservation().isFresh() }
     var recognitionSeconds: Double { recognitionProgress() }
-    @Published private var receipt: CaptureAudioReceipt?
-    @Published private var receiptCheckedAt: Date?
+    private var receipt: CaptureAudioReceipt?
+    private var receiptCheckedAt: Date?
+    private var probeExpiry: Task<Void, Never>?
+    private var receiptExpiry: Task<Void, Never>?
+    deinit { probeExpiry?.cancel(); receiptExpiry?.cancel() }
     var currentCapture: () -> CaptureView? = { nil }
     func updateAudioReceipt(_ state: CaptureDeviceView) {
-        guard let view = state.meeting, let evidence = state.audioReceipt,
-              evidence.matches(view) else { receipt = nil; receiptCheckedAt = nil; return }
-        receipt = evidence; receiptCheckedAt = Date()
+        let evidence = state.meeting.flatMap { view in state.audioReceipt.flatMap { $0.matches(view) ? $0 : nil } }
+        let wasStale = receiptCheckedAt.map { Date().timeIntervalSince($0) > 15 } ?? false
+        if receipt != evidence || wasStale { objectWillChange.send() }
+        receipt = evidence
+        receiptCheckedAt = evidence == nil ? nil : Date()
+        receiptExpiry?.cancel()
+        if evidence != nil {
+            receiptExpiry = Task { [weak self] in
+                do { try await Task.sleep(for: .seconds(15)) } catch { return }
+                self?.objectWillChange.send()
+            }
+        }
     }
     var desktopAudioEvidence: String {
         guard let view = currentCapture(), let receipt, receipt.matches(view), let receiptCheckedAt else {
@@ -188,7 +200,16 @@ import LiveKit
         if let hp = NetProbe.hostPort(from: config.url) { ok = await probeHost(hp.host, hp.port) }
         else { ok = false }
         guard revision == settings.snapshot.revision, requestGeneration == generation else { return }
-        probe = Status(desired: .wanted, observed: ok ? .connected : .disconnected,
-                       reason: ok ? nil : .probeTimeout, lastSeen: Date(), generation: generation)
+        let next = Status<LinkDesired, LinkObserved, LinkReason>(desired: .wanted,
+            observed: ok ? .connected : .disconnected, reason: ok ? nil : .probeTimeout,
+            lastSeen: Date(), generation: generation)
+        if probe.observed != next.observed || probe.reason?.code != next.reason?.code ||
+           probe.generation != next.generation || network == .unknown { objectWillChange.send() }
+        probe = next
+        probeExpiry?.cancel()
+        probeExpiry = Task { [weak self] in
+            do { try await Task.sleep(for: .seconds(StatusBoard.probeStaleAfter)) } catch { return }
+            self?.objectWillChange.send()
+        }
     }
 }

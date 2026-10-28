@@ -44,7 +44,8 @@ final class MeetingWorker: ObservableObject {
     // ---- 状态面板(规范见 notes/规范-状态显示.md;站 1 = App Group / 链路探测 / LiveKit)----
     /// 电脑端总管状态的本机镜像(管家助手)。底栏的会议状态、连接状态与「主动终止」
     /// 的可用性都读它;没查到时保持上一次的值,断网不会把会议从屏幕上抹掉。
-    @Published private(set) var meetingContext = MeetingContext.empty
+    private(set) var meetingContext = MeetingContext.empty
+    private var contextExpiry: Task<Void, Never>?
     /// Meeting-owned metrics; device and transport facts are composed from their owners on read.
     @Published private var meetingFacts = StatusBoard()
     var board: StatusBoard {
@@ -259,24 +260,38 @@ final class MeetingWorker: ObservableObject {
                 (current.stateRevision == view.stateRevision && (current.observationRevision ?? 0) > (view.observationRevision ?? 0))) { return }
             if current.meetingID != view.meetingID && current.createdAt > view.createdAt { return }
         }
-        capture = view
-        sessionID = view.meetingID
-        meetingContext = MeetingContext(capture: view, pendingReports: pendingReports,
-                                        observedAt: confirmed ? Date() : .distantPast)
+        if capture != view { capture = view }
+        if sessionID != view.meetingID { sessionID = view.meetingID }
+        let freshContext = MeetingContext(capture: view, pendingReports: pendingReports,
+                                         observedAt: confirmed ? Date() : .distantPast)
+        if !meetingContext.hasSameProjection(as: freshContext) || meetingContext.isFresh() != freshContext.isFresh() {
+            objectWillChange.send()
+        }
+        meetingContext = freshContext
+        contextExpiry?.cancel()
+        if confirmed {
+            contextExpiry = Task { [weak self] in
+                do { try await Task.sleep(for: .seconds(MeetingContext.staleAfter)) } catch { return }
+                self?.objectWillChange.send()
+            }
+        }
         onCaptureProjection?(view, confirmed)
         let desired = localCaptureDesired ?? view.desiredState
-        intent = desired == "ended" ? .notWanted : .wanted
-        if desired != "active" { isRecording = false }
+        let nextIntent: LinkDesired = desired == "ended" ? .notWanted : .wanted
+        if intent != nextIntent { intent = nextIntent }
+        if desired != "active", isRecording { isRecording = false }
     }
 
+    deinit { contextExpiry?.cancel() }
+
     func setCaptureAction(desired: String) { localCaptureDesired = desired; actionPending = true }
-    func setActionPending(_ pending: Bool) { actionPending = pending }
+    func setActionPending(_ pending: Bool) { if actionPending != pending { actionPending = pending } }
     func reconcilePendingAction(_ pending: Bool) {
-        actionPending = pending
-        if !pending { localCaptureDesired = nil }
+        setActionPending(pending)
+        if !pending { clearConfirmedCaptureIntent() }
     }
-    func clearConfirmedCaptureIntent() { localCaptureDesired = nil }
-    func setTerminating(_ value: Bool) { terminating = value }
+    func clearConfirmedCaptureIntent() { if localCaptureDesired != nil { localCaptureDesired = nil } }
+    func setTerminating(_ value: Bool) { if terminating != value { terminating = value } }
     func captureHalted(pausing: Bool) {
         completedCaptureSeconds = recordedSeconds
         stopTimer()

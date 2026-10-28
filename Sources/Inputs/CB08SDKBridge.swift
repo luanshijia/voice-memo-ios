@@ -385,6 +385,7 @@ extension CB08SDKBridge: WindBleDelegate {
         Task { @MainActor [weak self] in self?.receiveEvent(data) }
     }
     nonisolated func deviceRecord(_ recordData: Data) {
+        RuntimeActivity.add(.sdkPacket)
         guard let epoch = budget.reserve() else { return }
         let packet = Data(recordData)
         Task { @MainActor [weak self] in

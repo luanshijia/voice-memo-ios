@@ -5,20 +5,13 @@ enum AppStorage {
     private static let legacySettingKeys = ["lk.url", "lk.device", "lk.user", "vm.deviceToken"]
 
     static func pendingRequestDirectory() throws -> URL {
-        let support = try FileManager.default.url(for: .applicationSupportDirectory,
-                                                   in: .userDomainMask,
-                                                   appropriateFor: nil, create: true)
-        return support.appendingPathComponent("VoiceMemo", isDirectory: true)
-            .appendingPathComponent("pending-control", isDirectory: true)
+        try ControlStorageLocations.directory()
     }
 
     /// Copy legacy App Group settings to the app-private store before SessionModel loads.
     /// The copy is durable before old values are removed, so an interrupted migration retries safely.
     static func migrateLegacySettings() {
-        let sources = MeetingClient.appGroupCandidates.compactMap { group in
-            FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: group)
-                .flatMap { _ in UserDefaults(suiteName: group) }
-        }
+        let sources = ControlStorageLocations.legacy().defaults
         migrateLegacySettings(from: sources, into: .standard)
     }
 
@@ -47,15 +40,10 @@ enum AppStorage {
         if let root = try? pendingRequestDirectory(), keys.contains(where: {
             FileManager.default.fileExists(atPath: root.appendingPathComponent($0 + ".json").path)
         }) { return true }
-        if let legacy = MeetingClient.sharedDefaults(), keys.contains(where: { legacy.data(forKey: $0) != nil }) {
-            return true
-        }
-        for group in MeetingClient.appGroupCandidates {
-            guard let root = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: group) else { continue }
-            let directory = root.appendingPathComponent("pending-control")
-            if keys.contains(where: {
-                FileManager.default.fileExists(atPath: directory.appendingPathComponent($0 + ".json").path)
-            }) { return true }
+        let locations = ControlStorageLocations.legacy()
+        if locations.defaults.contains(where: { defaults in keys.contains { defaults.data(forKey: $0) != nil } }) { return true }
+        for directory in locations.roots {
+            if keys.contains(where: { FileManager.default.fileExists(atPath: directory.appendingPathComponent($0 + ".json").path) }) { return true }
         }
         return false
     }

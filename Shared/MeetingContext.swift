@@ -73,6 +73,13 @@ struct MeetingContext: Equatable {
                   lastSeen: observedAt, pendingReports: pendingReports, revision: capture.stateRevision)
     }
 
+    func hasSameProjection(as other: MeetingContext) -> Bool {
+        meetingID == other.meetingID && meeting == other.meeting && mic == other.mic &&
+        micGeneration == other.micGeneration && systemAudio == other.systemAudio &&
+        systemAudioGeneration == other.systemAudioGeneration && recoveryDeadline == other.recoveryDeadline &&
+        pendingReports == other.pendingReports && revision == other.revision
+    }
+
     // MARK: - 底栏要显示的两个词
 
     /// 这份投影还新不新。不动它就会把断网前的「已激活」一直挂在底栏上。

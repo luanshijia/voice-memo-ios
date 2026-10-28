@@ -29,13 +29,18 @@ struct ContentView: View {
             }
         }
         .task {
+            assistant.setRuntimeForeground(scenePhase == .active)
             assistant.startDesktopObservation()
             await model.refreshForegroundStateLoop()
         }
         .onDisappear { assistant.stopDesktopObservation() }
+        .onChange(of: assistant.runtimeContext) { _, _ in assistant.observeRuntimePhase() }
         .onChange(of: scenePhase) { _, phase in
+            assistant.setRuntimeForeground(phase == .active)
             assistant.input.device.appState(foreground: phase == .active)
             guard phase == .active else { return }
+            MeetingClient.refreshControlStorage()
+            assistant.settings.refreshPendingControls()
             Task {
                 await model.refreshNet()
                 await model.catchUpNow()
