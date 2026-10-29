@@ -5,11 +5,6 @@ struct ConnectionView: View {
     var body: some View {
         NavigationStack {
             List {
-                Section("服务器") {
-                    LabeledContent("状态", value: assistant.connection.serverPhase.rawValue)
-                    Text(assistant.connection.serverDetail).font(.footnote).foregroundStyle(.secondary)
-                    Button("重新检测") { Task { await assistant.checkConnection() } }
-                }
                 Section {
                     LabeledContent("当前输入", value: assistant.input.displayName)
                     if assistant.input.binding.kind == .external {
