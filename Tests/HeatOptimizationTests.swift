@@ -102,6 +102,33 @@ import XCTest
         XCTAssertFalse(assistant.usesIdlePolling)
     }
 
+    func testSchedulerSleepsWhileIdleAndKeepsActiveDeadlinesInBackground() {
+        let f = BusinessFixture(); defer { f.cleanUp() }
+        XCTAssertEqual(f.meeting.foregroundObservationInterval, 30)
+        XCTAssertEqual(f.assistant.desktopObservationInterval, 15)
+        f.assistant.setRuntimeForeground(false)
+        XCTAssertNil(f.assistant.desktopObservationInterval)
+        f.meeting.setActionPending(true)
+        XCTAssertEqual(f.assistant.desktopObservationInterval, 5)
+        XCTAssertEqual(f.meeting.foregroundObservationInterval, 3)
+        f.meeting.setActionPending(false)
+        XCTAssertNil(f.assistant.desktopObservationInterval)
+        f.assistant.setRuntimeForeground(true)
+        XCTAssertEqual(f.assistant.desktopObservationInterval, 15)
+    }
+
+    func testBackgroundDisplayStopsPublishingAndForegroundClockCatchesUp() async throws {
+        let f = BusinessFixture()
+        defer { f.meeting.captureHalted(pausing: false); f.cleanUp() }
+        f.meeting.startTimer()
+        f.assistant.setRuntimeForeground(false)
+        let seconds = f.meeting.recordedSeconds
+        try await Task.sleep(for: .milliseconds(1100))
+        XCTAssertEqual(f.meeting.recordedSeconds, seconds)
+        f.assistant.setRuntimeForeground(true)
+        XCTAssertGreaterThanOrEqual(f.meeting.recordedSeconds, 1)
+    }
+
 }
 
 final class TranscriptRowsTests: XCTestCase {

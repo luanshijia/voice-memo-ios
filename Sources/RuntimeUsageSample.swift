@@ -29,8 +29,8 @@ struct RuntimeUsageSample {
     }
     mutating func report(context: String, foreground: Bool) -> String? {
         let now = clock(), current = cpuTime()
-        // The five-second observer missed two rounds: discard rather than label a suspension as low CPU.
-        if self.context != context || !foreground || now - lastObservation > 15 {
+        // Allow the 15-second idle observer some jitter; discard longer gaps/suspension.
+        if self.context != context || !foreground || now - lastObservation > 20 {
             reset(context: context, now: now, cpu: current)
             return nil
         }

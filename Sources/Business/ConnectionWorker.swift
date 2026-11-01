@@ -210,37 +210,42 @@ import LiveKit
     var controlIsFresh: Bool { controlObservation().isFresh() }
     var recognitionSeconds: Double { recognitionProgress() }
     private var receipt: CaptureAudioReceipt?
-    private var receiptCheckedAt: Date?
+    private var receiptFreshness = AudioReceiptFreshness()
     private var probeExpiry: Task<Void, Never>?
     private var receiptExpiry: Task<Void, Never>?
     deinit { probeExpiry?.cancel(); receiptExpiry?.cancel(); serverExpiry?.cancel(); serverCheckTask?.cancel() }
     var hasFreshAudioReceipt: Bool {
-        guard let view = currentCapture(), let receipt, receipt.matches(view), let receiptCheckedAt else { return false }
-        return Date().timeIntervalSince(receiptCheckedAt) <= 15
+        guard let view = currentCapture(), let receipt, receipt.matches(view) else { return false }
+        return receiptFreshness.isFresh(now: ProcessInfo.processInfo.systemUptime)
     }
     var currentCapture: () -> CaptureView? = { nil }
     func updateAudioReceipt(_ state: CaptureDeviceView) {
         let evidence = state.meeting.flatMap { view in state.audioReceipt.flatMap { $0.matches(view) ? $0 : nil } }
-        let wasStale = receiptCheckedAt.map { Date().timeIntervalSince($0) > 15 } ?? false
-        if receipt != evidence || wasStale { objectWillChange.send() }
+        let now = ProcessInfo.processInfo.systemUptime
+        let wasFresh = receiptFreshness.isFresh(now: now)
+        receiptFreshness.update(evidence, now: now)
+        var oldMeasurement = receipt, newMeasurement = evidence
+        oldMeasurement?.lastReceivedAgeSeconds = nil
+        newMeasurement?.lastReceivedAgeSeconds = nil
+        if oldMeasurement != newMeasurement || wasFresh != receiptFreshness.isFresh(now: now) { objectWillChange.send() }
         receipt = evidence
-        receiptCheckedAt = evidence == nil ? nil : Date()
         receiptExpiry?.cancel()
-        if evidence != nil {
+        let remaining = receiptFreshness.remaining(now: now)
+        if remaining > 0 {
             receiptExpiry = Task { [weak self] in
-                do { try await Task.sleep(for: .seconds(15)) } catch { return }
+                do { try await Task.sleep(for: .seconds(remaining)) } catch { return }
                 self?.objectWillChange.send()
             }
         }
     }
     var desktopAudioEvidence: String {
-        guard let view = currentCapture(), let receipt, receipt.matches(view), let receiptCheckedAt else {
+        guard let view = currentCapture(), let receipt, receipt.matches(view) else {
             return "尚无当前分段的实收证据"
         }
         let seconds = Double(receipt.receivedSamples) / Double(receipt.sampleRate)
-        let stale = Date().timeIntervalSince(receiptCheckedAt) > 15
+        let stale = !hasFreshAudioReceipt
         return String(format: "%.2f 秒 · %ld 样本%@", seconds, receipt.receivedSamples,
-                      stale ? "（上次查询，已过期）" : "（电脑实收）")
+                      stale ? "（尚未确认持续实收或已过期）" : "（电脑实收）")
     }
     func status(desired: LinkDesired) -> Status<LinkDesired, LinkObserved, LinkReason> {
         let observed: LinkObserved

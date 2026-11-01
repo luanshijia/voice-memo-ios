@@ -45,10 +45,12 @@ import Foundation
         "\(runtimeForeground ? "前台" : "后台") \(input.isCapturing ? "采集中" : "空闲") \(input.displayName) SDK=\(input.device.isSDKInitialized) BLE=\(input.device.connected) 媒体=\(connection.media)"
     }
     func setRuntimeForeground(_ foreground: Bool) {
+        let changed = runtimeForeground != foreground
         runtimeForeground = foreground
         meeting.runtimeForeground = foreground
         if foreground { nextDesktopPoll = .distantPast }
         observeRuntimePhase()
+        if changed { restartDesktopObservation() }
     }
     func observeRuntimePhase() {
         if let sample = usageSample.report(context: runtimeContext, foreground: runtimeForeground) { meeting.note(sample) }
@@ -62,6 +64,11 @@ import Foundation
         !meeting.meetingContext.hasOpenMeeting && input.cleanupProblem == nil
     }
     private var observationTask: Task<Void, Never>?
+    private var observationID: UUID?
+    var desktopObservationInterval: TimeInterval? {
+        if !runtimeForeground && usesIdlePolling { return nil }
+        return usesIdlePolling ? 15 : 5
+    }
     private var pendingPublishing: CaptureView?
     private var unsavedHalt: (action: String, config: LiveKitConfig, view: CaptureView?)?
 
@@ -127,6 +134,7 @@ import Foundation
     var canStartCapture: Bool { connection.serverReady && serverCleanupTask == nil }
 
     @discardableResult func accept(_ action: CaptureAction) -> CaptureActionResult {
+        defer { restartDesktopObservation() }
         if input.deviceManagement.busy || showingDeviceStop {
             message = "请先完成设备动作确认"
             return .rejected("请先完成设备动作确认")
@@ -343,20 +351,31 @@ import Foundation
         guard meeting.observesDesktop else { return }
         if let observationTask, !observationTask.isCancelled { return }
         let previous = observationTask
+        let id = UUID()
+        observationID = id
         observationTask = Task { [weak self] in
+            defer {
+                if self?.observationID == id { self?.observationTask = nil; self?.observationID = nil }
+            }
             await previous?.value
             while !Task.isCancelled {
+                guard self?.desktopObservationInterval != nil else { return }
                 await self?.observeDesktopOnce()
-                do { try await Task.sleep(for: .seconds(5)) } catch { return }
+                guard let interval = self?.desktopObservationInterval else { return }
+                do { try await Task.sleep(for: .seconds(interval)) } catch { return }
             }
         }
     }
     func stopDesktopObservation() { observationTask?.cancel() }
+    func restartDesktopObservation() {
+        stopDesktopObservation()
+        startDesktopObservation()
+    }
     private func observeDesktopOnce() async {
-        observeRuntimePhase()
-        settings.refreshPendingControls()
         let idle = usesIdlePolling
         if !runtimeForeground && idle { return }
+        observeRuntimePhase()
+        settings.refreshPendingControls()
         if Date() < nextDesktopPoll { return }
         defer {
             let ordinary = Date().addingTimeInterval(idle ? 15 : 5)

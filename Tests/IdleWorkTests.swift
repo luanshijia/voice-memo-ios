@@ -119,6 +119,14 @@ import XCTest
 }
 
 final class RuntimeUsageSampleTests: XCTestCase {
+    func testFifteenSecondIdleCadenceProducesCompleteCPUWindow() {
+        var time = 0.0
+        var sample = RuntimeUsageSample(clock: { time }, cpuTime: { 0 })
+        XCTAssertNil(sample.report(context: "idle", foreground: true))
+        for _ in 0..<3 { time += 15.1; XCTAssertNil(sample.report(context: "idle", foreground: true)) }
+        time += 15.1
+        XCTAssertTrue(sample.report(context: "idle", foreground: true)?.contains("CPU 0.0%") == true)
+    }
     func testPhaseTransitionDiscardsMixedCPUWindow() {
         var time = 0.0, cpu = 0.0
         var sample = RuntimeUsageSample(clock: { time }, cpuTime: { cpu })

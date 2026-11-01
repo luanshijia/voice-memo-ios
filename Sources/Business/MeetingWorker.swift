@@ -139,6 +139,7 @@ final class MeetingWorker: ObservableObject {
     var notesText: String { notes.joined(separator: "\n") }
 
     private var timer: Timer?
+    private var catchUpTask: Task<Void, Never>?
     private var timerStartedAt: Date?
     let observesDesktop: Bool
     var onCaptureProjection: ((CaptureView, Bool) -> Void)?
@@ -253,11 +254,14 @@ final class MeetingWorker: ObservableObject {
     }
 
     /// Foreground probes follow the root view's SwiftUI task lifetime.
-    var runtimeForeground = true
+    var runtimeForeground = true {
+        didSet { if runtimeForeground != oldValue { refreshDisplayTimer() } }
+    }
     private var nextMicRefresh = Date.distantPast
     private var needsLiveObservation: Bool { isRecording || wantsCapture || actionPending || terminating }
+    var foregroundObservationInterval: TimeInterval { needsLiveObservation ? 3 : 30 }
     func refreshForegroundStateLoop() async {
-        while !Task.isCancelled {
+        while !Task.isCancelled && runtimeForeground {
             if runtimeForeground {
                 let now = Date()
                 if input.serverAvailable(), now >= nextMicRefresh {
@@ -265,7 +269,7 @@ final class MeetingWorker: ObservableObject {
                     nextMicRefresh = now.addingTimeInterval(needsLiveObservation ? 3 : 30)
                 }
             }
-            do { try await Task.sleep(for: .seconds(3)) } catch { return }
+            do { try await Task.sleep(for: .seconds(foregroundObservationInterval)) } catch { return }
         }
     }
     func refreshForegroundObservations() {
@@ -304,7 +308,7 @@ final class MeetingWorker: ObservableObject {
         if desired != "active", isRecording { isRecording = false }
     }
 
-    deinit { contextExpiry?.cancel() }
+    deinit { contextExpiry?.cancel(); catchUpTask?.cancel() }
 
     func setCaptureAction(desired: String) { localCaptureDesired = desired; actionPending = true }
     func setActionPending(_ pending: Bool) { if actionPending != pending { actionPending = pending } }
@@ -539,27 +543,42 @@ final class MeetingWorker: ObservableObject {
         recordedSeconds = completedCaptureSeconds
         timerStartedAt = Date()
         recordedAt = Date()
+        refreshDisplayTimer()
+        // Transcript recovery remains independent of foreground display updates.
+        catchUpTask = Task { [weak self] in
+            while !Task.isCancelled {
+                if let last = self?.lastCatchUpAt, Date().timeIntervalSince(last) >= 10 {
+                    await self?.catchUpNow()
+                }
+                do { try await Task.sleep(for: .seconds(10)) } catch { return }
+            }
+        }
+    }
+
+    private func refreshDisplayTimer() {
+        timer?.invalidate(); timer = nil
+        guard runtimeForeground, let start = timerStartedAt else { return }
+        recordedAt = Date()
+        recordedSeconds = completedCaptureSeconds + Date().timeIntervalSince(start)
         // .common 模式:滚动字幕时定时器不停;publish 的秒数按真实时间差算,漏掉的 tick 自动补回来
         let t = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
             Task { @MainActor in
-                guard let self, let start = self.timerStartedAt else { return }
+                guard let self, self.runtimeForeground, let start = self.timerStartedAt else { return }
                 self.recordedAt = Date()
                 self.recordedSeconds = self.completedCaptureSeconds + Date().timeIntervalSince(start)
                 self.conditionNote("Metric.Recorded", .ok, detail: "录=\(Int(self.recordedSeconds))秒(墙钟)")
                 self.conditionNote("Metric.Progress",
                                    self.board.receivedCondition(currentGeneration: self.transport.generation),
                                    detail: "收=\(Int(self.serverSeconds))秒")
-                // 每 10 秒补一次:实时消息漏掉的那些(断线、切后台、家里推送失败)在这里补齐。
-                if Date().timeIntervalSince(self.lastCatchUpAt) >= 10 {
-                    Task { await self.catchUpNow() }
-                }
             }
         }
+        t.tolerance = 0.2
         RunLoop.main.add(t, forMode: .common)
         timer = t
     }
 
     private func stopTimer() {
+        catchUpTask?.cancel(); catchUpTask = nil
         if let start = timerStartedAt {
             recordedAt = Date()
             recordedSeconds = completedCaptureSeconds + Date().timeIntervalSince(start)

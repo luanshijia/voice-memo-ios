@@ -35,13 +35,14 @@ struct ContentView: View {
         } message: {
             Text(assistant.deviceStopMessage)
         }
-        .task {
+        .task(id: scenePhase == .active ? assistant.meeting.foregroundObservationInterval : nil) {
             assistant.setRuntimeForeground(scenePhase == .active)
             assistant.startDesktopObservation()
-            await model.refreshForegroundStateLoop()
+            if scenePhase == .active { await model.refreshForegroundStateLoop() }
         }
         .onDisappear { assistant.stopDesktopObservation() }
         .onChange(of: assistant.runtimeContext) { _, _ in assistant.observeRuntimePhase() }
+        .onChange(of: assistant.usesIdlePolling) { _, _ in assistant.restartDesktopObservation() }
         .onChange(of: scenePhase) { _, phase in
             assistant.setRuntimeForeground(phase == .active)
             assistant.input.device.appState(foreground: phase == .active)

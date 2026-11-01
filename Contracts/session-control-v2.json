@@ -349,6 +349,12 @@
           "name": "last_received_at",
           "kind": "number",
           "minimum": 0
+        },
+        {
+          "name": "last_received_age_seconds",
+          "kind": "number",
+          "minimum": 0,
+          "optional": true
         }
       ]
     }
@@ -379,6 +385,6 @@
     "field": "audio_receipt",
     "optional": true,
     "nullable": true,
-    "description": "Runtime PCM samples for the exact meeting, segment, generation and channel in device_view.meeting. Null/missing means no measured receipt evidence. Counters are independent of recognized speech; historical totals are not substituted."
+    "description": "Runtime PCM samples for the exact meeting, segment, generation and channel in device_view.meeting. Null/missing means no measured receipt evidence. Counters are independent of recognized speech; historical totals are not substituted. Optional last_received_age_seconds measures elapsed server monotonic time since positive PCM arrival, rather than HTTP query time; omitted for zero samples."
   }
 }

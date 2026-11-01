@@ -637,15 +637,18 @@ struct CaptureAudioReceipt: Decodable, Equatable {
     let sampleRate: Int
     let receivedSamples: Int
     let lastReceivedAt: Double
+    var lastReceivedAgeSeconds: Double? = nil
     enum CodingKeys: String, CodingKey {
         case meetingID = "meeting_id", segmentID = "segment_id", generation, channel
         case sampleRate = "sample_rate", receivedSamples = "received_samples"
         case lastReceivedAt = "last_received_at"
+        case lastReceivedAgeSeconds = "last_received_age_seconds"
     }
     func matches(_ view: CaptureView) -> Bool {
         meetingID == view.meetingID && segmentID == view.segmentID && generation == view.generation &&
         channel == view.channel && sampleRate == 16_000 && receivedSamples >= 0 &&
-        lastReceivedAt.isFinite && lastReceivedAt >= 0
+        lastReceivedAt.isFinite && lastReceivedAt >= 0 &&
+        (lastReceivedAgeSeconds.map { $0.isFinite && $0 >= 0 } ?? true)
     }
 }
 struct CaptureDeviceView: Decodable {
