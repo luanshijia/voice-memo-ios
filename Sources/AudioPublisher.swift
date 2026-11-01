@@ -1,6 +1,10 @@
 import AVFoundation
 import LiveKit
 
+protocol PCMSubmitting: AnyObject, Sendable {
+    func submit(_ data: Data) throws
+}
+
 @MainActor protocol AudioPublishing: AnyObject {
     var cleanupProblem: String? { get }
     func setNativeMicrophone(_ enabled: Bool, in room: Room) async throws
@@ -12,6 +16,7 @@ import LiveKit
     func submitPCM(_ data: Data) throws
     func stopPCM(in room: Room) async
     func closePCMGate()
+    func backgroundPCMSubmitter() -> (any PCMSubmitting)?
 }
 
 extension AudioPublishing { var cleanupProblem: String? { nil } }
@@ -20,6 +25,7 @@ extension PCMAudioPublishing {
     var cleanupProblem: String? { nil }
     func retryCleanup() async {}
     func closePCMGate() {}
+    func backgroundPCMSubmitter() -> (any PCMSubmitting)? { nil }
 }
 
 @MainActor struct AudioEngineControl {
@@ -34,15 +40,26 @@ extension PCMAudioPublishing {
 }
 
 /// LiveKit converts and schedules on one queue. Cancellation excludes an in-flight capture call.
-private final class PCMFeed: @unchecked Sendable {
+private final class PCMFeed: PCMSubmitting, @unchecked Sendable {
     private let queue = DispatchQueue(label: "VoiceMemo.CB08.publish", qos: .userInitiated)
     private let lock = NSLock()
     private var active = true
     private var pending = 0
+    private let format = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 16_000,
+                                      channels: 1, interleaved: true)
     func cancel() { lock.lock(); active = false; lock.unlock() }
-    func submit(_ buffer: AVAudioPCMBuffer) throws {
+    func submit(_ data: Data) throws {
         lock.lock()
         guard active, pending < 8 else { lock.unlock(); throw AudioPublishError.queueFull }
+        guard !data.isEmpty, data.count % 2 == 0, let format,
+              let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(data.count / 2)),
+              let samples = buffer.int16ChannelData?.pointee else {
+            lock.unlock(); throw AudioPublishError.invalidPCM
+        }
+        buffer.frameLength = buffer.frameCapacity
+        data.withUnsafeBytes { bytes in
+            if let base = bytes.baseAddress { UnsafeMutableRawPointer(samples).copyMemory(from: base, byteCount: data.count) }
+        }
         pending += 1; lock.unlock()
         queue.async { [self] in
             lock.lock()
@@ -65,8 +82,6 @@ private final class PCMFeed: @unchecked Sendable {
     private let usesLiveEngine: Bool
     private let engine: AudioEngineControl
     private var recoveryRoom: Room?
-    private let format = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 16_000,
-                                      channels: 1, interleaved: true)
     var onFailure: ((String) -> Void)?
     init(engine: AudioEngineControl? = nil) { self.engine = engine ?? .live; usesLiveEngine = engine == nil }
     private func recover() async throws {
@@ -110,17 +125,10 @@ private final class PCMFeed: @unchecked Sendable {
         }
     }
     func submitPCM(_ data: Data) throws {
-        guard state == .external, !data.isEmpty, data.count % 2 == 0, let format,
-              let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(data.count / 2)),
-              let samples = buffer.int16ChannelData?.pointee else { throw AudioPublishError.invalidPCM }
-        buffer.frameLength = buffer.frameCapacity
-        data.withUnsafeBytes { bytes in
-            if let base = bytes.baseAddress { UnsafeMutableRawPointer(samples).copyMemory(from: base, byteCount: data.count) }
-        }
-        // LiveKit schedules this buffer asynchronously: do not reuse its backing memory.
-        guard let feed else { throw AudioPublishError.invalidPCM }
-        try feed.submit(buffer)
+        guard state == .external, let feed else { throw AudioPublishError.invalidPCM }
+        try feed.submit(data)
     }
+    func backgroundPCMSubmitter() -> (any PCMSubmitting)? { state == .external ? feed : nil }
     private func cleanup(_ room: Room) async {
         feed?.cancel(); feed = nil
         var errors: [String] = []

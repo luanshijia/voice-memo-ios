@@ -35,6 +35,13 @@ enum CB08ConnectionPhase: String {
     func command(_ action: CB08RecordAction)
     func waitForRecordAction(timeout: Duration) async -> Bool
     func discardQueuedPackets()
+    func installAudioSession(_ session: CB08AudioSession?) -> Bool
+    func observeAudioPackets(count: Int, bytes: Int, sizes: [Int: Int])
+}
+
+extension CB08DeviceControlling {
+    func installAudioSession(_ session: CB08AudioSession?) -> Bool { false }
+    func observeAudioPackets(count: Int, bytes: Int, sizes: [Int: Int]) {}
 }
 
 /// Bound delegate-to-main handoff; no unbounded backlog of PCM work.
@@ -139,6 +146,16 @@ final class CB08EventFilter: @unchecked Sendable {
     private var scanTimeout: Task<Void, Never>?
     private var lastDiagnostic: String?
     private let budget = CB08PacketBudget()
+    private let audioRoute = CB08AudioRoute()
+    func installAudioSession(_ session: CB08AudioSession?) -> Bool {
+        audioRoute.install(session); return true
+    }
+    func observeAudioPackets(count: Int, bytes: Int, sizes: [Int: Int]) {
+        if packetCount == 0 && count > 0 { noteDevice("首个实时Opus回调已解码提交") }
+        packetCount += count; packetBytes += bytes
+        for (size, count) in sizes { packetSizes[size, default: 0] += count }
+        telemetry.changed()
+    }
     private let eventFilter = CB08EventFilter()
 #if !targetEnvironment(simulator)
     private var node: PNode?
@@ -460,8 +477,9 @@ extension CB08SDKBridge: WindBleDelegate {
     }
     nonisolated func deviceRecord(_ recordData: Data) {
         RuntimeActivity.add(.sdkPacket)
-        guard let epoch = budget.reserve() else { return }
         let packet = Data(recordData)
+        if audioRoute.receive(packet) { return }
+        guard let epoch = budget.reserve() else { return }
         Task { @MainActor [weak self] in
             guard let self else { return }
             let lost = self.budget.release()

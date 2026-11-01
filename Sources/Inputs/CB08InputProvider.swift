@@ -18,6 +18,8 @@ import LiveKit
     private let publisher: PCMAudioPublishing
     private let makeDecoder: () throws -> OpusDecoding
     private var pipeline: CB08DecodePipeline?
+    private var audioSession: CB08AudioSession?
+    private var audioStatistics = CB08AudioStatistics()
     private var pendingDecodes = 0
     private var nextStatisticsUpdate = Date.distantPast
     private var room: Room?
@@ -91,6 +93,23 @@ import LiveKit
         decodedPackets = 0; decodeFailures = 0; submittedSamples = 0
         device.discardQueuedPackets()
         failure = nil; flowing = false; accepting = true; lastPCMAt = nil
+        audioStatistics = CB08AudioStatistics()
+        if let submitter = publisher.backgroundPCMSubmitter() {
+            let session = CB08AudioSession(decoder: decoder, publisher: submitter) { [weak self] result in
+                guard let self, self.accepting, self.epoch == attempt else { return }
+                switch result {
+                case .failure(let error):
+                    self.decodeFailures += 1
+                    self.fault("音频处理失败，已请求暂停：\(error.localizedDescription)")
+                case .success(let stats):
+                    self.applyAudioStatistics(stats)
+                    if !self.flowing { self.flowing = true; self.stage = "正在接收实时音频"; self.onFlow?() }
+                    self.telemetry.changed()
+                }
+            }
+            if device.installAudioSession(session) { audioSession = session; pipeline = nil }
+            else { session.cancel() }
+        }
         // An inactive query permits a NEW recording, never resumption of an unowned file.
         let resume = (recordState == .paused || recordState == .inactive) && canResume
         paused = false
@@ -117,7 +136,21 @@ import LiveKit
         }
     }
     /// Close the gate synchronously, before any asynchronous track disconnect.
+    private func applyAudioStatistics(_ stats: CB08AudioStatistics) {
+        device.observeAudioPackets(count: stats.packets - audioStatistics.packets,
+            bytes: stats.bytes - audioStatistics.bytes,
+            sizes: stats.sizes.reduce(into: [Int: Int]()) { result, item in
+                result[item.key] = item.value - audioStatistics.sizes[item.key, default: 0]
+            })
+        audioStatistics = stats
+        decodedPackets = stats.packets; decodedFrames = stats.frames
+        expectedSamples = stats.frames * CB08OpusFraming.samplesPerFrame
+        submittedSamples = stats.samples; lastPCMAt = stats.lastPCMAt
+    }
     func closeGate() {
+        if let audioSession { applyAudioStatistics(audioSession.cancel()) }
+        audioSession = nil
+        _ = device.installAudioSession(nil)
         accepting = false; flowing = false; epoch += 1
         pipeline?.cancel(); publisher.closePCMGate(); pendingDecodes = 0
         device.discardQueuedPackets(); objectWillChange.send()
