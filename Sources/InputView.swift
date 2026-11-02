@@ -3,20 +3,19 @@ import AVFoundation
 
 struct InputView: View {
     @ObservedObject var assistant: MeetingAssistant
+    @Environment(\.scenePhase) private var scenePhase
     var body: some View {
         NavigationStack {
             List {
                 Section {
                     LabeledContent("服务器", value: assistant.connection.serverPhase.rawValue)
-                    if !assistant.canStartCapture {
-                        Text("服务器未就绪，输入暂不可用").font(.footnote).foregroundStyle(.secondary)
-                    }
                 }
                 Section("手机") {
                     inputButton("iPhone 麦克风", icon: "iphone", kind: .phone) {
                         assistant.selectInput(.phone)
                     }
                     LabeledContent("麦克风权限", value: microphonePermission)
+                    LabeledContent("麦克风模式", value: assistant.input.micModeText)
                 }
                 Section("外置设备") {
                     inputButton("CB08", icon: "waveform", kind: .external) {
@@ -38,6 +37,13 @@ struct InputView: View {
                 }
             }.font(.body)
         }
+        .onAppear { refreshMicrophoneMode() }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { refreshMicrophoneMode() }
+        }
+    }
+    private func refreshMicrophoneMode() {
+        assistant.input.refreshMicMode(generation: assistant.connection.generation)
     }
 
     private func inputButton(_ title: String, icon: String, kind: InputKind,

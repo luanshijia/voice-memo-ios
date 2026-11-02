@@ -13,29 +13,43 @@ struct MeetingView: View {
                     Text(model.transcriptGapText).font(.caption).foregroundStyle(.orange)
                 }
                 TranscriptView(partials: model.partials, lines: model.lines,
-                               localIdentity: model.identity, isRecording: model.isRecording, revision: model.transcriptRevision) { _ in
+                               isRecording: model.isRecording, revision: model.transcriptRevision) { _ in
                     summaryPanel
                 }
             }
             .padding(.horizontal)
             .navigationBarTitleDisplayMode(.inline)
             .safeAreaInset(edge: .top, spacing: 0) {
-                HStack(spacing: 8) {
+                HStack(spacing: 4) {
                     Button("代办") { if assistant.memoButtonEnabled { assistant.toggleMemo() } }
-                        .buttonStyle(MeetingActionButtonStyle(tint: assistant.memoActive ? .red : (assistant.memoButtonEnabled ? .blue : .secondary),
+                        .buttonStyle(MeetingActionButtonStyle(tint: assistant.memoActive ? .red : (assistant.memoButtonEnabled ? .primary : .secondary),
                             filled: assistant.memoActive))
                         .contextMenu { Button("查看代办") { showMemos = true } }
                         .accessibilityValue(assistant.memoActive ? "录音中，点击结束" : "点击开始个人备忘")
                     Button(captureButtonTitle) { assistant.accept(captureButtonAction) }
-                        .buttonStyle(MeetingActionButtonStyle())
+                        .buttonStyle(MeetingActionButtonStyle(tint: model.intent == .wanted ? .blue : .primary,
+                            selected: model.intent == .wanted))
                         .disabled(captureButtonDisabled)
                     Button("结束", role: .destructive) { confirmStop = true }
-                        .buttonStyle(MeetingActionButtonStyle())
+                        .buttonStyle(MeetingActionButtonStyle(tint: confirmStop ? .blue : .primary, selected: confirmStop))
                         .disabled(assistant.memoActive || assistant.meeting.terminating ||
                                   (!model.isRecording && model.intent != .wanted && !assistant.meeting.presentation.terminateAction.enabled))
+                        .popover(isPresented: $confirmStop, attachmentAnchor: .rect(.bounds), arrowEdge: .top) {
+                            VStack(spacing: 16) {
+                                Text("结束本次会议并保存已有录音？")
+                                    .font(.body).fixedSize(horizontal: false, vertical: true)
+                                Button("结束会议", role: .destructive) {
+                                    confirmStop = false
+                                    assistant.accept(.end)
+                                }
+                                .buttonStyle(.borderedProminent).tint(.red)
+                                Button("取消", role: .cancel) { confirmStop = false }
+                            }
+                            .padding(20).frame(width: 260)
+                            .presentationCompactAdaptation(.popover)
+                        }
                     Button("提要") { assistant.meeting.requestSummary() }
-                        .buttonStyle(MeetingActionButtonStyle(tint: .blue, filled: model.sumMode == "manual",
-                            pale: model.sumMode == "auto"))
+                        .buttonStyle(MeetingActionButtonStyle(tint: model.sumMode == "manual" ? .blue : .primary, filled: model.sumMode == "manual"))
                         .contextMenu {
                             Button { model.setSumMode("auto") } label: {
                                 Label("自动", systemImage: model.sumMode == "auto" ? "checkmark" : "")
@@ -54,6 +68,9 @@ struct MeetingView: View {
                     .buttonStyle(MeetingActionButtonStyle())
                 }
                 .lineLimit(1).minimumScaleFactor(0.75)
+                .padding(6)
+                .background(Color(uiColor: .systemGray6), in: Capsule())
+                .overlay(Capsule().strokeBorder(.white.opacity(0.8), lineWidth: 1))
                 .padding(.horizontal).padding(.vertical, 8)
                 .frame(maxWidth: .infinity).background(.bar)
             }
@@ -90,11 +107,7 @@ struct MeetingView: View {
                     .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { showMemos = false } } }
                 }
             }
-            .confirmationDialog("结束本次会议并保存已有录音？", isPresented: $confirmStop,
-                                titleVisibility: .visible) {
-                Button("结束会议", role: .destructive) { assistant.accept(.end) }
-                Button("取消", role: .cancel) {}
-            }
+
         }
     }
     private var captureButtonTitle: String {

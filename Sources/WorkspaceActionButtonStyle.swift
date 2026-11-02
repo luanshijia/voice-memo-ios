@@ -20,9 +20,9 @@ struct WorkspaceActionButtonStyle: ButtonStyle {
 
 /// Meeting toolbar only; other page geometry and styles remain unchanged.
 struct MeetingActionButtonStyle: ButtonStyle {
-    var tint: Color = .blue
+    var tint: Color = .primary
     var filled = false
-    var pale = false
+    var selected = false
     @Environment(\.isEnabled) private var isEnabled
 
     func makeBody(configuration: Configuration) -> some View {
@@ -31,7 +31,7 @@ struct MeetingActionButtonStyle: ButtonStyle {
             .frame(maxWidth: .infinity, minHeight: 44)
             .foregroundStyle(isEnabled ? (filled ? Color.white : tint) : Color.secondary)
             .background(isEnabled && filled ? tint :
-                (pale ? Color.blue.opacity(0.12) : Color(uiColor: .tertiarySystemFill)), in: Capsule())
+                (selected || (configuration.isPressed && isEnabled) ? Color(uiColor: .systemGray5) : Color.clear), in: Capsule())
             .contentShape(Capsule())
             .opacity(configuration.isPressed && isEnabled ? 0.75 : 1)
     }

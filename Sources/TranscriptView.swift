@@ -5,7 +5,6 @@ import SwiftUI
 struct TranscriptView<Summary: View>: View {
     let partials: [TranscriptPartial]
     let lines: [TranscriptLine]
-    let localIdentity: String
     let isRecording: Bool
     let revision: Int
     private let summary: (CGFloat) -> Summary
@@ -15,11 +14,10 @@ struct TranscriptView<Summary: View>: View {
     private var rows: [TranscriptRows.Row] { rowBuilder.rows }
 
     init(partials: [TranscriptPartial], lines: [TranscriptLine],
-         localIdentity: String, isRecording: Bool, revision: Int,
+         isRecording: Bool, revision: Int,
          @ViewBuilder summary: @escaping (CGFloat) -> Summary) {
         self.partials = partials
         self.lines = lines
-        self.localIdentity = localIdentity
         self.isRecording = isRecording
         self.revision = revision
         self.summary = summary
@@ -27,13 +25,14 @@ struct TranscriptView<Summary: View>: View {
 
     var body: some View {
         GeometryReader { geo in
-            let usable = max(geo.size.height - 6, 0)
+            let partialHeight = min(PartialTranscriptTail.panelHeight, geo.size.height)
+            let remaining = max(geo.size.height - partialHeight - 14, 0)
             VStack(spacing: 3) {
-                partialPanel.frame(height: usable * 0.1)
+                partialPanel(width: geo.size.width).frame(height: partialHeight)
                 Divider().opacity(0.25)
-                finalPanel.frame(height: usable * 0.5)
+                finalPanel.frame(height: remaining * 5 / 9)
                 Divider().opacity(0.25)
-                summary(geo.size.width).frame(height: usable * 0.4)
+                summary(geo.size.width).frame(height: remaining * 4 / 9)
             }
         }
         .onChange(of: isRecording) { _, active in
@@ -41,23 +40,15 @@ struct TranscriptView<Summary: View>: View {
         }
     }
 
-    private var partialPanel: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 4) {
-                    ForEach(partials) { item in
-                        paragraph(who: displayWho(item.who, source: item.source),
-                                  text: item.text, color: .blue)
-                            .id(item.id)
-                    }
-                }
-                .padding(.vertical, 4)
-            }
-            .onChange(of: partials.map(\.text)) { _, _ in
-                guard let last = partials.last else { return }
-                proxy.scrollTo(last.id, anchor: .bottom)
-            }
-        }
+    private func partialPanel(width: CGFloat) -> some View {
+        Text(PartialTranscriptTail.latest(partials.map(\.text).joined(separator: "\n"), width: width))
+            .font(.system(size: 15))
+            .lineSpacing(PartialTranscriptTail.lineSpacing)
+            .foregroundStyle(.blue)
+            .lineLimit(2).truncationMode(.head)
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+            .clipped()
     }
 
     private var finalPanel: some View {
@@ -100,13 +91,6 @@ struct TranscriptView<Summary: View>: View {
                 }
             }
         }
-    }
-
-    private func displayWho(_ who: String, source: String) -> String {
-        if source == localIdentity { return "本地1" }
-        if source.hasSuffix("-livekit") { return "现场·\(who)" }
-        if source.hasSuffix("-replaykit") { return "在线1" }
-        return source.isEmpty ? who : "\(source)·\(who)"
     }
 
     private func paragraph(who: String, text: String, color: Color) -> some View {

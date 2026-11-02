@@ -128,14 +128,22 @@ import LiveKit
                                 reason: nil, lastSeen: Date(), generation: generation)
             return
         }
-        let mode = AVCaptureDevice.preferredMicrophoneMode
-        switch mode {
-        case .standard: micModeText = "标准"
-        case .voiceIsolation: micModeText = "语音突显"
-        case .wideSpectrum: micModeText = "宽谱"
-        default: micModeText = "自动"
-        }
-        modeStatus = Status(desired: .wanted, observed: mode == .wideSpectrum ? .wide : .other,
+        // The active mode may differ from the Control Center preference.
+        let mode = binding.kind == .phone && isCapturing ?
+            AVCaptureDevice.activeMicrophoneMode : AVCaptureDevice.preferredMicrophoneMode
+        micModeText = Self.microphoneModeText(rawValue: mode.rawValue)
+        modeStatus = Status(desired: .wanted,
+                            observed: micModeText == "未知" ? .unknownState : mode == .wideSpectrum ? .wide : .other,
                             reason: nil, lastSeen: Date(), generation: generation)
+    }
+
+    /// Do not invent "自动" for a value the public API cannot identify.
+    static func microphoneModeText(rawValue: Int) -> String {
+        switch rawValue {
+        case AVCaptureDevice.MicrophoneMode.standard.rawValue: return "标准"
+        case AVCaptureDevice.MicrophoneMode.voiceIsolation.rawValue: return "语音突显"
+        case AVCaptureDevice.MicrophoneMode.wideSpectrum.rawValue: return "宽谱"
+        default: return "未知"
+        }
     }
 }
