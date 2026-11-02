@@ -14,7 +14,7 @@ struct MemoReportEditor: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             TextEditor(text: $draft)
-                .accessibilityLabel("代办内容，可修改")
+                .accessibilityLabel("待办内容，可修改")
                 .onChange(of: draft) { _, _ in saved = false }
             DisclosureGroup("原始结果与转写") {
                 ScrollView { Text(report.text).textSelection(.enabled)
@@ -24,7 +24,6 @@ struct MemoReportEditor: View {
             if saved { Text("修改已保存在手机").font(.caption).foregroundStyle(.secondary) }
         }
         .padding()
-        .navigationTitle("代办结果")
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
                 Button("保存修改") {

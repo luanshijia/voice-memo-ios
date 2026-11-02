@@ -112,6 +112,27 @@ final class MeetingWorker: ObservableObject {
         let text: String
     }
     @Published private(set) var summaries: [SummaryItem] = []
+    @Published private(set) var latestResultOperation: ResultOperation?
+    @Published private var resultTexts: [String: String] = [:]
+    private static let resultOperationKey = "vm.latestResultOperation"
+    var latestResultText: String? {
+        guard let operation = latestResultOperation else { return nil }
+        return resultTexts[operation.id]
+    }
+    var latestMemoReport: MemoReport? {
+        guard let operation = latestResultOperation, operation.purpose == "memo" else { return nil }
+        return memoReports.first { $0.id == operation.id }
+    }
+    var latestResultStatus: String {
+        guard let operation = latestResultOperation else { return "暂无结果" }
+        let name = operation.purpose == "memo" ? "待办" : "会议"
+        if capture?.meetingID == operation.id {
+            if terminating { return name + "正在结束" }
+            if isPaused { return name + "已暂停" }
+            if isRecording || wantsCapture { return name + "录音中" }
+        }
+        return operation.purpose == "memo" ? "待办生成中" : "会议总结生成中"
+    }
     @Published private(set) var finalReportText = ""
     @Published private(set) var finalReportMeetingID = ""
     @Published private(set) var sumMode = "auto"                // auto=每5分钟尝试 / manual=点击尝试
@@ -269,7 +290,12 @@ final class MeetingWorker: ObservableObject {
         note("App 启动,v\(ver)(build \(build), LiveKit)")
         syncConfigStatus()
         syncProtocolStatus()
-        if startObserving { loadSavedReport() }
+        if startObserving {
+            if let data = UserDefaults.standard.data(forKey: Self.resultOperationKey) {
+                latestResultOperation = try? JSONDecoder().decode(ResultOperation.self, from: data)
+            }
+            loadSavedReport()
+        }
     }
 
     /// Foreground probes follow the root view's SwiftUI task lifetime.
@@ -301,6 +327,13 @@ final class MeetingWorker: ObservableObject {
             if current.meetingID == view.meetingID && (current.stateRevision > view.stateRevision ||
                 (current.stateRevision == view.stateRevision && (current.observationRevision ?? 0) > (view.observationRevision ?? 0))) { return }
             if current.meetingID != view.meetingID && current.createdAt > view.createdAt { return }
+        }
+        let operation = ResultOperation(id: view.meetingID, purpose: view.purpose ?? "meeting", createdAt: view.createdAt)
+        if operation.isNewer(than: latestResultOperation) {
+            latestResultOperation = operation
+            if observesDesktop, let data = try? JSONEncoder().encode(operation) {
+                UserDefaults.standard.set(data, forKey: Self.resultOperationKey)
+            }
         }
         if capture != view { capture = view }
         if sessionID != view.meetingID { sessionID = view.meetingID }
@@ -407,7 +440,7 @@ final class MeetingWorker: ObservableObject {
         }
     }
 
-    private func storeReport(_ data: Data, meetingID: String, persist: Bool = true) throws {
+    func storeReport(_ data: Data, meetingID: String, persist: Bool = true) throws {
         guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               object["meeting_id"] as? String == meetingID,
               let report = object["report"] as? [String: Any],
@@ -421,7 +454,7 @@ final class MeetingWorker: ObservableObject {
         if persist { try data.write(to: target, options: .atomic) }
         var lines: [String] = [summary["title"] as? String ?? "会后纪要"]
         if meta["summary_status"] as? String == "failed" {
-            lines += [meta["purpose"] as? String == "memo" ? "代办生成待补；以下原文已保存。" : "纪要生成待补；以下逐字稿已保存。"]
+            lines += [meta["purpose"] as? String == "memo" ? "待办生成待补；以下原文已保存。" : "纪要生成待补；以下逐字稿已保存。"]
         }
         for (heading, key) in [("已定事项", "decisions"), ("待沟通", "open_questions"),
                                ("其它", "notes"), ("待核实", "unverified")] {
@@ -445,12 +478,18 @@ final class MeetingWorker: ObservableObject {
             guard let text = item["text"] as? String else { return nil }
             return "\(item["clock"] as? String ?? "") \(item["speaker"] as? String ?? "")  \(text)"
         }
+        let text = lines.joined(separator: "\n")
+        resultTexts[meetingID] = text
+        // Legacy reports have no operation timestamp. A confirmed capture supersedes this fallback.
+        if latestResultOperation == nil || latestResultOperation?.createdAt == "" {
+            latestResultOperation = ResultOperation(id: meetingID,
+                purpose: meta["purpose"] as? String ?? "meeting", createdAt: "")
+        }
         if meta["purpose"] as? String == "memo" {
-            let text = lines.joined(separator: "\n")
             memoReports.removeAll { $0.id == meetingID }
             memoReports.insert(MemoReport(id: meetingID, text: text), at: 0)
             if !isRecording && !wantsCapture {
-                sumState = meta["summary_status"] as? String == "failed" ? "代办生成待补，长按代办查看" : "代办已保存，长按代办查看"
+                sumState = meta["summary_status"] as? String == "failed" ? "待办生成待补，点击总结查看" : "待办已保存，点击总结查看"
             }
             return
         }
@@ -513,7 +552,7 @@ final class MeetingWorker: ObservableObject {
         transcriptRevision += 1
         lines = []; partials = []; summaries = []; transcriptGapText = ""
         summaryControlTimeout?.cancel(); summaryRequestTimeout?.cancel(); pendingSumMode = nil; summaryRequestPending = false
-        sumState = capture?.purpose == "memo" ? "代办本地已停止，等待电脑处理" : "等待提要"; sumCode = "wait_period"
+        sumState = capture?.purpose == "memo" ? "待办本地已停止，等待电脑处理" : "等待提要"; sumCode = "wait_period"
     }
     func resetCurrentMeetingData() {
         summaryControlTimeout?.cancel(); summaryRequestTimeout?.cancel(); pendingSumMode = nil; summaryRequestPending = false; summaryRequestID = nil

@@ -4,7 +4,6 @@ struct MeetingView: View {
     @ObservedObject var model: SessionModel
     @ObservedObject var assistant: MeetingAssistant
     @State private var confirmStop = false
-    @State private var showMemos = false
 
     var body: some View {
         NavigationStack {
@@ -21,14 +20,13 @@ struct MeetingView: View {
             .navigationBarTitleDisplayMode(.inline)
             .safeAreaInset(edge: .top, spacing: 0) {
                 HStack(spacing: 4) {
-                    Button("代办") { if assistant.memoButtonEnabled { assistant.toggleMemo() } }
+                    Button("待办") { if assistant.memoButtonEnabled { assistant.toggleMemo() } }
                         .buttonStyle(MeetingActionButtonStyle(tint: assistant.memoActive ? .red : (assistant.memoButtonEnabled ? .primary : .secondary),
                             filled: assistant.memoActive))
-                        .contextMenu { Button("查看代办") { showMemos = true } }
                         .accessibilityValue(assistant.memoActive ? "录音中，点击结束" : "点击开始个人备忘")
                     Button(captureButtonTitle) { assistant.accept(captureButtonAction) }
-                        .buttonStyle(MeetingActionButtonStyle(tint: model.intent == .wanted ? .blue : .primary,
-                            selected: model.intent == .wanted))
+                        .buttonStyle(MeetingActionButtonStyle(tint: !assistant.memoActive && model.intent == .wanted ? .blue : .primary,
+                            selected: !assistant.memoActive && model.intent == .wanted))
                         .disabled(captureButtonDisabled)
                     Button("结束", role: .destructive) { confirmStop = true }
                         .buttonStyle(MeetingActionButtonStyle(tint: confirmStop ? .blue : .primary, selected: confirmStop))
@@ -36,14 +34,13 @@ struct MeetingView: View {
                                   (!model.isRecording && model.intent != .wanted && !assistant.meeting.presentation.terminateAction.enabled))
                         .popover(isPresented: $confirmStop, attachmentAnchor: .rect(.bounds), arrowEdge: .top) {
                             VStack(spacing: 16) {
-                                Text("结束本次会议并保存已有录音？")
-                                    .font(.body).fixedSize(horizontal: false, vertical: true)
                                 Button("结束会议", role: .destructive) {
                                     confirmStop = false
                                     assistant.accept(.end)
                                 }
-                                .buttonStyle(.borderedProminent).tint(.red)
+                                .buttonStyle(MeetingActionButtonStyle(tint: .red, selected: true))
                                 Button("取消", role: .cancel) { confirmStop = false }
+                                    .buttonStyle(MeetingActionButtonStyle(selected: true))
                             }
                             .padding(20).frame(width: 260)
                             .presentationCompactAdaptation(.popover)
@@ -63,7 +60,7 @@ struct MeetingView: View {
                         .accessibilityValue(model.sumMode == "auto" ? "自动，短按无动作" : "手动，点击生成提要")
                         .accessibilityHint("长按选择自动或手动")
                     NavigationLink("总结") {
-                        reportContent.navigationTitle("会后材料").navigationBarTitleDisplayMode(.inline)
+                        reportContent.navigationTitle("总结").navigationBarTitleDisplayMode(.inline)
                     }
                     .buttonStyle(MeetingActionButtonStyle())
                 }
@@ -87,30 +84,12 @@ struct MeetingView: View {
                 .padding(.horizontal).padding(.vertical, 8)
                 .frame(maxWidth: .infinity).background(.bar)
             }
-            .sheet(isPresented: $showMemos) {
-                NavigationStack {
-                    Group {
-                        if assistant.meeting.memoReports.isEmpty {
-                            ContentUnavailableView("暂无代办", systemImage: "checklist",
-                                description: Text("点击代办录音，再次点击结束；生成结果后长按代办查看。"))
-                        } else {
-                            List(assistant.meeting.memoReports) { report in
-                                NavigationLink {
-                                    MemoReportEditor(report: report)
-                                } label: {
-                                    Text(report.text).lineLimit(3)
-                                }
-                            }
-                        }
-                    }
-                    .navigationTitle("代办")
-                    .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { showMemos = false } } }
-                }
-            }
+
 
         }
     }
     private var captureButtonTitle: String {
+        if assistant.memoActive { return "开始" }
         if model.isPaused { return "继续" }
         if model.isRecording { return "暂停" }
         return model.intent == .wanted ? "恢复" : "开始"
@@ -131,17 +110,24 @@ struct MeetingView: View {
         return !model.isRecording && assistant.meeting.actionPending
     }
     @ViewBuilder private var reportContent: some View {
-        if model.finalReportText.isEmpty {
-            ContentUnavailableView("暂无会后材料", systemImage: "doc.text",
-                description: Text("收到并保存的会后报告会显示在这里。"))
-        } else {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    Text(model.finalReportText).font(.body)
+        if let operation = assistant.meeting.latestResultOperation {
+            VStack(alignment: .leading, spacing: 12) {
+                Text(operation.label).font(.subheadline).foregroundStyle(.secondary)
+                    .padding(.horizontal)
+                if let memo = assistant.meeting.latestMemoReport {
+                    MemoReportEditor(report: memo).id(memo.id)
+                } else if let text = assistant.meeting.latestResultText {
+                    ScrollView {
+                        Text(text).font(.body).textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading).padding()
+                    }
+                } else {
+                    ContentUnavailableView(assistant.meeting.latestResultStatus, systemImage: "doc.text")
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading).padding()
             }
+        } else {
+            ContentUnavailableView("暂无结果", systemImage: "doc.text")
         }
     }
     private var summaryPanel: some View {
