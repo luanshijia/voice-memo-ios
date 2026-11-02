@@ -443,6 +443,28 @@ import Foundation
         settings.refreshPendingControls()
     }
 
+    @Published private(set) var startingMemo = false
+    var memoActive: Bool {
+        startingMemo || (meeting.capture?.purpose == "memo" &&
+            (meeting.isRecording || meeting.wantsCapture || meeting.actionPending || meeting.terminating))
+    }
+    var memoButtonEnabled: Bool {
+        guard !meeting.actionPending, !meeting.terminating, connection.pendingDisconnect == nil,
+              !input.deviceManagement.busy, !showingDeviceStop else { return false }
+        if memoActive { return true }
+        return !meeting.isRecording && !meeting.wantsCapture && canStartCapture && readiness.problems.isEmpty &&
+            !meeting.presentation.terminateAction.enabled
+    }
+    @discardableResult func toggleMemo() -> CaptureActionResult {
+        guard memoButtonEnabled else { return .rejected("请先完成当前采集或会控动作") }
+        if memoActive { return accept(.end) }
+        startingMemo = true
+        let result = beginCapture(resuming: false, purpose: "memo")
+        if result != .submitted { startingMemo = false }
+        if case .rejected(let reason) = result { message = reason }
+        return result
+    }
+
     @discardableResult func startCapture() -> CaptureActionResult {
         guard !meeting.isRecording, !meeting.terminating else { return .rejected("采集已经开始或正在结束") }
         return beginCapture(resuming: false)
@@ -550,7 +572,7 @@ import Foundation
         return result
     }
 
-    private func beginCapture(resuming: Bool) -> CaptureActionResult {
+    private func beginCapture(resuming: Bool, purpose: String? = nil) -> CaptureActionResult {
         guard connection.serverReady, serverCleanupTask == nil else { return .rejected("服务器未就绪，采集暂不可用") }
         guard !meeting.actionPending, connection.connecting == nil else { return .rejected("请等待当前动作确认") }
         guard !meeting.terminating else { return .rejected("会议正在结束") }
@@ -561,6 +583,7 @@ import Foundation
         let config = settings.config
         let previousID = meeting.capture?.meetingID
         let previouslyWanted = meeting.wantsCapture
+        let capturePurpose = purpose ?? (meeting.capture?.canRecover == true ? meeting.capture?.purpose : nil) ?? "meeting"
         let binding = input.binding
         let deviceConnection = input.device.connectionID
         let revision = settings.snapshot.revision
@@ -570,7 +593,7 @@ import Foundation
         localControlExecutions += 1
         meeting.capturePreparing()
         connection.beginConnection { [self] in
-            defer { localControlExecutions -= 1 }
+            defer { localControlExecutions -= 1; startingMemo = false }
             var queued = false
             do {
                 _ = try await connection.captureView(config: config)
@@ -585,7 +608,7 @@ import Foundation
                     try connection.queueCaptureAction(config: config, view: view, action: "resume")
                 } else {
                     let recoveryID = meeting.capture.flatMap { $0.canRecover ? $0.meetingID : nil }
-                    try connection.queueCaptureStart(config: config, input: binding, meetingID: recoveryID)
+                    try connection.queueCaptureStart(config: config, input: binding, meetingID: recoveryID, purpose: capturePurpose)
                 }
                 queued = true
                 meeting.setCaptureAction(desired: "active")

@@ -5,13 +5,13 @@
     "Contracts/control-v2-response-fixtures.json": "6a4dce2b409ef5ce9c9969a3017e875ef81806f70ba346cbd4b82939470246eb",
     "Contracts/input-manifest-v1.json": "407faad663ac1a2f21951247398f2983a5281f34c516385aa25c30d6e543af7c",
     "Contracts/session-control-v1.json": "320065c6851268f507020cd2cda37e097293ae7c15005027258f127121208265",
-    "Contracts/session-control-v2.json": "05a08fb9470b6dabacf225afdd49bcfcdd1e6b2b1bae9b5749dda67c01a73bfe",
-    "Contracts/wire-v2.json": "f332a3d64aca2fea25fc63373267ce6e02adc101da91b95939fc7a4174bab009",
+    "Contracts/session-control-v2.json": "3161e1fc86cda598c517080ab595e8716d03e7b13a657cc264d113d2c6d3c438",
+    "Contracts/wire-v2.json": "9b8893134f4278ec3bd67ed544782bbc5db3e9e460f5687ff708b3df6884f816",
     "Contracts/workflow-v1.json": "40165471b33dc528793ebcd52cf7e5dc2df43480d7d8bb0ac8ce1b9d16966371",
     "Shared/AppShared.generated.swift": "c1fb88cc75467f928f6a02577522a2f23674b2acf559ddc636512c5ef7b99013",
     "Shared/SessionControl.generated.swift": "066f5f11b2c95a3e7e8e4e9069f1d7503b1c0be872018d97329502ef69910cda",
-    "Shared/SessionControlV2.generated.swift": "8b1efdafd4e27a4b6b0ebf510df9c98f496b68dff4c711eac096c03e5dea4a38",
-    "Sources/WireContract.generated.swift": "9cae10829a0b99f300ef3a6367b8aac8b12678b2372a29e9921628cf22bc66dc",
+    "Shared/SessionControlV2.generated.swift": "e65d949d72c86ac32223623adb4526251efa272c5601c542a8ed6b4224590ec6",
+    "Sources/WireContract.generated.swift": "d08987abc4def4ed142baa75bea0a27bc38e52f9edd41764d2c66614bd146e85",
     "Tests/ControlResponseFixtures.json": "a7bfce8f20443bcfa87f5a4ac55cfc7aa6446db6d3dbb5f07d7ceeccbc146bda"
   },
   "version": 1

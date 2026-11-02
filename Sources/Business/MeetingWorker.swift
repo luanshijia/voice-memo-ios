@@ -114,7 +114,17 @@ final class MeetingWorker: ObservableObject {
     @Published private(set) var summaries: [SummaryItem] = []
     @Published private(set) var finalReportText = ""
     @Published private(set) var finalReportMeetingID = ""
-    @Published private(set) var sumMode = "auto"                // auto=自动 5 分钟 / manual=手动 10 分钟
+    @Published private(set) var sumMode = "auto"                // auto=每5分钟尝试 / manual=点击尝试
+    @Published private(set) var pendingSumMode: String?
+    @Published private(set) var summaryRequestPending = false
+    private var summaryRequestTimeout: Task<Void, Never>?
+    private var summaryRequestID: String?
+    private var summaryControlTimeout: Task<Void, Never>?
+    struct MemoReport: Identifiable {
+        let id: String
+        let text: String
+    }
+    @Published private(set) var memoReports: [MemoReport] = []
     @Published private(set) var sumState = "等待提要"           // 状态区文案:由家里推来的 sumstatus 驱动
     @Published private(set) var sumCode = "wait_period"         // 家里给的判定码:no_session/short/quality/busy_*/go
     let settings: SettingsWorker
@@ -197,8 +207,17 @@ final class MeetingWorker: ObservableObject {
                 guard !self.displayIsCleared else { return }
                 // 状态区:家里每 60 秒推一次(哪怕这轮不出提要)—— 显示的是"为什么没出"
                 self.sumState = text
-                if let m = raw["mode"] as? String, !m.isEmpty { self.sumMode = m }
+                if let m = raw["mode"] as? String, !m.isEmpty {
+                    if self.pendingSumMode == nil || self.pendingSumMode == m {
+                        self.sumMode = m
+                        if self.pendingSumMode == m { self.pendingSumMode = nil; self.summaryControlTimeout?.cancel() }
+                    }
+                }
                 if let c = raw["code"] as? String, !c.isEmpty { self.sumCode = c }
+                if self.summaryRequestPending, raw["request_id"] as? String == self.summaryRequestID {
+                    self.summaryRequestPending = self.sumCode == "go"
+                    self.summaryRequestTimeout?.cancel()
+                }
                 self.meetingFacts.summary = Status(desired: LinkDesired.wanted,
                                             observed: MetricValue(value: Double(self.summaries.count), unit: "轮"),
                                             reason: Self.summaryReason(code: self.sumCode),
@@ -308,7 +327,7 @@ final class MeetingWorker: ObservableObject {
         if desired != "active", isRecording { isRecording = false }
     }
 
-    deinit { contextExpiry?.cancel(); catchUpTask?.cancel() }
+    deinit { contextExpiry?.cancel(); catchUpTask?.cancel(); summaryControlTimeout?.cancel(); summaryRequestTimeout?.cancel() }
 
     func setCaptureAction(desired: String) { localCaptureDesired = desired; actionPending = true }
     func setActionPending(_ pending: Bool) { if actionPending != pending { actionPending = pending } }
@@ -374,19 +393,18 @@ final class MeetingWorker: ObservableObject {
         let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         guard let files = try? FileManager.default.contentsOfDirectory(
             at: documents, includingPropertiesForKeys: [.contentModificationDateKey]) else { return }
-        let latest = files.filter { $0.lastPathComponent.hasPrefix("meeting-") &&
-            $0.lastPathComponent.hasSuffix("-report.json") }.max { first, second in
-            let a = (try? first.resourceValues(forKeys: [.contentModificationDateKey]))?
-                .contentModificationDate ?? .distantPast
-            let b = (try? second.resourceValues(forKeys: [.contentModificationDateKey]))?
-                .contentModificationDate ?? .distantPast
+        let saved = files.filter { $0.lastPathComponent.hasPrefix("meeting-") &&
+            $0.lastPathComponent.hasSuffix("-report.json") }.sorted { first, second in
+            let a = (try? first.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+            let b = (try? second.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
             return a < b
         }
-        guard let latest, let data = try? Data(contentsOf: latest) else { return }
-        let name = latest.lastPathComponent
-        let meetingID = String(name.dropFirst("meeting-".count).dropLast("-report.json".count))
-        guard UUID(uuidString: meetingID) != nil else { return }
-        try? storeReport(data, meetingID: meetingID, persist: false)
+        for file in saved {
+            let name = file.lastPathComponent
+            let meetingID = String(name.dropFirst("meeting-".count).dropLast("-report.json".count))
+            guard UUID(uuidString: meetingID) != nil, let data = try? Data(contentsOf: file) else { continue }
+            try? storeReport(data, meetingID: meetingID, persist: false)
+        }
     }
 
     private func storeReport(_ data: Data, meetingID: String, persist: Bool = true) throws {
@@ -403,7 +421,7 @@ final class MeetingWorker: ObservableObject {
         if persist { try data.write(to: target, options: .atomic) }
         var lines: [String] = [summary["title"] as? String ?? "会后纪要"]
         if meta["summary_status"] as? String == "failed" {
-            lines += ["纪要生成待补；以下逐字稿已保存。"]
+            lines += [meta["purpose"] as? String == "memo" ? "代办生成待补；以下原文已保存。" : "纪要生成待补；以下逐字稿已保存。"]
         }
         for (heading, key) in [("已定事项", "decisions"), ("待沟通", "open_questions"),
                                ("其它", "notes"), ("待核实", "unverified")] {
@@ -415,13 +433,26 @@ final class MeetingWorker: ObservableObject {
         if let todos = summary["todos"] as? [[String: Any]], !todos.isEmpty {
             lines += ["", "待办"]
             lines += todos.map { item in
-                "• \(item["task"] as? String ?? "")  负责人：\(item["owner"] as? String ?? "—")"
+                let base = "• \(item["task"] as? String ?? "")  负责人：\(item["owner"] as? String ?? "—")"
+                if meta["purpose"] as? String == "memo" {
+                    return base + "  时间：\(item["due"] as? String ?? "")\n原文：\(item["evidence"] as? String ?? "")"
+                }
+                return base
             }
         }
         lines += [""]
         lines += segments.compactMap { item in
             guard let text = item["text"] as? String else { return nil }
             return "\(item["clock"] as? String ?? "") \(item["speaker"] as? String ?? "")  \(text)"
+        }
+        if meta["purpose"] as? String == "memo" {
+            let text = lines.joined(separator: "\n")
+            memoReports.removeAll { $0.id == meetingID }
+            memoReports.insert(MemoReport(id: meetingID, text: text), at: 0)
+            if !isRecording && !wantsCapture {
+                sumState = meta["summary_status"] as? String == "failed" ? "代办生成待补，长按代办查看" : "代办已保存，长按代办查看"
+            }
+            return
         }
         finalReportText = lines.joined(separator: "\n")
         finalReportMeetingID = meetingID
@@ -437,16 +468,39 @@ final class MeetingWorker: ObservableObject {
     }
     func captureStopped() { isRecording = false; intent = .notWanted }
 
-    /// 会中提要档位:自动 5 分钟 / 手动 10 分钟(手动更长 —— 在外面要等久一点才抓得到要点)。
-    /// 切档 ≠ 立刻出一段:只是把下一次检查的周期换掉。
-    /// 状态行不在这里写"已切到…":按钮的选中色已经表达了档位(用户 2026-10-16 指出重复),
-    /// 真正的状态由家里每 60 秒推来的 sumstatus 决定。
+    /// Mode changes do not generate summaries. Preserve the confirmed mode until acknowledged.
     func setSumMode(_ m: String) {
-        guard m != sumMode else { return }
-        sumMode = m
-        note("会中提要档位 → \(m == "auto" ? "自动" : "手动")")
-        guard !sessionID.isEmpty else { return }   // 未在录音:只在本机切档,不发(契约要求 v2 带场次号)
+        guard ["auto", "manual"].contains(m), pendingSumMode == nil, m != sumMode else { return }
+        guard !sessionID.isEmpty, !displayIsCleared else { sumMode = m; return }
+        pendingSumMode = m
         Task { await transport.send(summodePayload(m)) }
+        summaryControlTimeout?.cancel()
+        summaryControlTimeout = Task { [weak self] in
+            do { try await Task.sleep(for: .seconds(15)) } catch { return }
+            guard let self, self.pendingSumMode == m else { return }
+            self.pendingSumMode = nil
+            self.sumState = "提要模式切换未确认，请重试"
+        }
+    }
+    func requestSummary() {
+        guard sumMode == "manual", pendingSumMode == nil, !summaryRequestPending,
+              sumCode != "go", isRecording, !sessionID.isEmpty, !displayIsCleared,
+              capture?.purpose != "memo" else { return }
+        summaryRequestPending = true
+        sumState = "正在检查提要条件…"
+        let session = sessionID
+        let requestID = UUID().uuidString.lowercased()
+        summaryRequestID = requestID
+        let payload: [String: Any] = ["type": "sumrequest", "schema_version": WireContract.currentSchemaVersion,
+            "session_id": session, "request_id": requestID]
+        Task { await transport.send(payload) }
+        summaryRequestTimeout?.cancel()
+        summaryRequestTimeout = Task { [weak self] in
+            do { try await Task.sleep(for: .seconds(15)) } catch { return }
+            guard let self, self.sessionID == session, self.summaryRequestPending, self.summaryRequestID == requestID else { return }
+            self.summaryRequestPending = false
+            self.sumState = "提要请求未确认，请检查连接后重试"
+        }
     }
 
     func sendSummaryMode() async { await transport.send(summodePayload(sumMode)) }
@@ -458,9 +512,11 @@ final class MeetingWorker: ObservableObject {
         clearedDisplaySessionID = sessionID
         transcriptRevision += 1
         lines = []; partials = []; summaries = []; transcriptGapText = ""
-        sumState = "等待提要"; sumCode = "wait_period"
+        summaryControlTimeout?.cancel(); summaryRequestTimeout?.cancel(); pendingSumMode = nil; summaryRequestPending = false
+        sumState = capture?.purpose == "memo" ? "代办本地已停止，等待电脑处理" : "等待提要"; sumCode = "wait_period"
     }
     func resetCurrentMeetingData() {
+        summaryControlTimeout?.cancel(); summaryRequestTimeout?.cancel(); pendingSumMode = nil; summaryRequestPending = false; summaryRequestID = nil
         clearedDisplaySessionID = nil
         lines = []
         partials = []

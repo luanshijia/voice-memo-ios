@@ -34,7 +34,7 @@ final class ServerAvailabilityTests: XCTestCase {
 
 @MainActor final class ServerGateTests: XCTestCase {
     private func operations(view: @escaping @MainActor (LiveKitConfig) async throws -> CaptureDeviceView) -> CaptureControlOperations {
-        CaptureControlOperations(queueStart: { _, _, _, _ in }, queueAction: { _, _, _, _ in },
+        CaptureControlOperations(queueStart: { _, _, _, _, _ in }, queueAction: { _, _, _, _ in },
             flush: { nil }, view: view, observe: { _, _, _ in }, hasPending: { false })
     }
     func testTCPReachabilityAloneDoesNotOpenGate() async {

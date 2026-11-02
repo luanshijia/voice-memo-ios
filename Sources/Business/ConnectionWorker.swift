@@ -4,7 +4,7 @@ import LiveKit
 
 /// Injectable control IO; MeetingAssistant owns the cross-worker execution order.
 @MainActor struct CaptureControlOperations {
-    var queueStart: @MainActor (LiveKitConfig, Int, InputBinding, String?) throws -> Void
+    var queueStart: @MainActor (LiveKitConfig, Int, InputBinding, String?, String) throws -> Void
     var queueAction: @MainActor (LiveKitConfig, CaptureView?, String, InputBinding?) throws -> Void
     var flush: @MainActor () async throws -> CaptureView?
     var view: @MainActor (LiveKitConfig) async throws -> CaptureDeviceView
@@ -12,7 +12,7 @@ import LiveKit
     var hasPending: @MainActor () -> Bool
 
     static var live: Self {
-        Self(queueStart: { try MeetingClient.queueCaptureStart(config: $0, revision: $1, input: $2, meetingID: $3) },
+        Self(queueStart: { try MeetingClient.queueCaptureStart(config: $0, revision: $1, input: $2, meetingID: $3, purpose: $4) },
              queueAction: { try MeetingClient.queueCaptureAction(config: $0, view: $1, action: $2, input: $3) },
              flush: { try await MeetingClient.flushPendingCapture() },
              view: { try await MeetingClient.captureDeviceView(config: $0) },
@@ -116,8 +116,8 @@ import LiveKit
             self?.onTranscript?(type, who, seconds, text, gap, ts, raw)
         }
     }
-    func queueCaptureStart(config: LiveKitConfig, input: InputBinding, meetingID: String?) throws {
-        try captureControl.queueStart(config, settings.snapshot.revision, input, meetingID)
+    func queueCaptureStart(config: LiveKitConfig, input: InputBinding, meetingID: String?, purpose: String = "meeting") throws {
+        try captureControl.queueStart(config, settings.snapshot.revision, input, meetingID, purpose)
     }
     func queueCaptureAction(config: LiveKitConfig, view: CaptureView?, action: String,
                             input: InputBinding? = nil) throws {

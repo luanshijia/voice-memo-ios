@@ -22,15 +22,16 @@ enum WireContract {
     static let supportedSchemaVersions: Set<Int> = [ 1, 2 ]
     static let maxSafeInteger: Int64 = 9007199254740991
     static let inboundTypes: Set<String> = [ "partial", "final", "summary", "sumstatus" ]
-    static let outboundTypes: Set<String> = [ "summode" ]
+    static let outboundTypes: Set<String> = [ "sumrequest", "summode" ]
     static let knownFields: [String: Set<String>] = [
         "partial": Set<String>(["type", "schema_version", "session_id", "who", "source", "text", "audio_s", "ts"]),
         "final": Set<String>(["type", "schema_version", "session_id", "who", "source", "text", "audio_s", "gap_s", "seq", "transcript_epoch", "ts"]),
         "summary": Set<String>(["type", "schema_version", "session_id", "text", "clock", "ts", "unsupported"]),
-        "sumstatus": Set<String>(["type", "schema_version", "session_id", "mode", "code", "text", "chars", "next_in", "ts"]),
+        "sumstatus": Set<String>(["type", "schema_version", "session_id", "request_id", "mode", "code", "text", "chars", "next_in", "ts"]),
+        "sumrequest": Set<String>(["type", "schema_version", "session_id", "request_id"]),
         "summode": Set<String>(["type", "schema_version", "session_id", "mode"]),
     ]
-    static let sumstatusCodes: Set<String> = [ "no_session", "wait_period", "short", "quality", "busy_prev", "busy_refine", "busy_vram", "busy_cpu", "go" ]
+    static let sumstatusCodes: Set<String> = [ "no_session", "wait_period", "short", "quality", "busy_prev", "busy_refine", "busy_vram", "busy_cpu", "go", "wait_manual", "busy_gpu", "failed", "done" ]
     static let fields: [String: [WireFieldRule]] = [
         "partial": [WireFieldRule(name: "who", kind: .string, nullable: false, optional: false, minimum: nil, exclusiveMinimum: nil, allowed: nil),
             WireFieldRule(name: "source", kind: .string, nullable: false, optional: false, minimum: nil, exclusiveMinimum: nil, allowed: nil),
@@ -49,12 +50,14 @@ enum WireContract {
             WireFieldRule(name: "clock", kind: .clock_hm, nullable: false, optional: false, minimum: nil, exclusiveMinimum: nil, allowed: nil),
             WireFieldRule(name: "ts", kind: .number, nullable: false, optional: false, minimum: nil, exclusiveMinimum: 0.0, allowed: nil),
             WireFieldRule(name: "unsupported", kind: .integer, nullable: false, optional: false, minimum: 0.0, exclusiveMinimum: nil, allowed: nil)],
-        "sumstatus": [WireFieldRule(name: "mode", kind: .string, nullable: false, optional: false, minimum: nil, exclusiveMinimum: nil, allowed: ["auto", "manual"]),
+        "sumstatus": [WireFieldRule(name: "request_id", kind: .string, nullable: false, optional: true, minimum: nil, exclusiveMinimum: nil, allowed: nil),
+            WireFieldRule(name: "mode", kind: .string, nullable: false, optional: false, minimum: nil, exclusiveMinimum: nil, allowed: ["auto", "manual"]),
             WireFieldRule(name: "code", kind: .string, nullable: false, optional: false, minimum: nil, exclusiveMinimum: nil, allowed: nil),
             WireFieldRule(name: "text", kind: .string, nullable: false, optional: false, minimum: nil, exclusiveMinimum: nil, allowed: nil),
             WireFieldRule(name: "chars", kind: .integer, nullable: false, optional: false, minimum: 0.0, exclusiveMinimum: nil, allowed: nil),
             WireFieldRule(name: "next_in", kind: .number, nullable: true, optional: false, minimum: 0.0, exclusiveMinimum: nil, allowed: nil),
             WireFieldRule(name: "ts", kind: .number, nullable: false, optional: false, minimum: nil, exclusiveMinimum: 0.0, allowed: nil)],
+        "sumrequest": [WireFieldRule(name: "request_id", kind: .string, nullable: false, optional: false, minimum: nil, exclusiveMinimum: nil, allowed: nil)],
         "summode": [WireFieldRule(name: "mode", kind: .string, nullable: false, optional: false, minimum: nil, exclusiveMinimum: nil, allowed: ["auto", "manual"])],
     ]
 

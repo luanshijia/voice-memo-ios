@@ -60,7 +60,7 @@ import XCTest
         input = InputWorker(provider: PhoneInputProvider(publisher: publisher))
         view = try Self.projection()
         let control = CaptureControlOperations(
-            queueStart: { [weak self] _, _, _, _ in self?.pending = true },
+            queueStart: { [weak self] _, _, _, _, _ in self?.pending = true },
             queueAction: { [weak self] _, _, action, _ in
                 guard let self else { return }
                 try actionSaveHandler?()

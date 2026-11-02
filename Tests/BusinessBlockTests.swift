@@ -28,7 +28,7 @@ import XCTest
         settings = SettingsWorker(defaults: defaults, checksPendingRequests: false)
         input = InputWorker()
         var probeCalls: (() -> Void)?
-        let control = CaptureControlOperations(queueStart: { _, _, _, _ in }, queueAction: { _, _, _, _ in },
+        let control = CaptureControlOperations(queueStart: { _, _, _, _, _ in }, queueAction: { _, _, _, _ in },
             flush: { nil }, view: { _ in CaptureDeviceView(meeting: nil, pendingReports: []) },
             observe: { _, _, _ in }, hasPending: { false })
         connection = ConnectionWorker(settings: settings, captureControl: control, probeHost: { _, _ in probeCalls?(); return true })

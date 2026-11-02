@@ -4,6 +4,7 @@ struct MeetingView: View {
     @ObservedObject var model: SessionModel
     @ObservedObject var assistant: MeetingAssistant
     @State private var confirmStop = false
+    @State private var showMemos = false
 
     var body: some View {
         NavigationStack {
@@ -20,27 +21,37 @@ struct MeetingView: View {
             .navigationBarTitleDisplayMode(.inline)
             .safeAreaInset(edge: .top, spacing: 0) {
                 HStack(spacing: 8) {
+                    Button("代办") { if assistant.memoButtonEnabled { assistant.toggleMemo() } }
+                        .buttonStyle(MeetingActionButtonStyle(tint: assistant.memoActive ? .red : (assistant.memoButtonEnabled ? .blue : .secondary),
+                            filled: assistant.memoActive))
+                        .contextMenu { Button("查看代办") { showMemos = true } }
+                        .accessibilityValue(assistant.memoActive ? "录音中，点击结束" : "点击开始个人备忘")
                     Button(captureButtonTitle) { assistant.accept(captureButtonAction) }
-                        .buttonStyle(WorkspaceActionButtonStyle(filled: false))
+                        .buttonStyle(MeetingActionButtonStyle())
                         .disabled(captureButtonDisabled)
-                    Button("结束会议", role: .destructive) { confirmStop = true }
-                        .buttonStyle(WorkspaceActionButtonStyle(tint: .red, filled: false))
-                        .disabled(assistant.meeting.terminating ||
+                    Button("结束", role: .destructive) { confirmStop = true }
+                        .buttonStyle(MeetingActionButtonStyle())
+                        .disabled(assistant.memoActive || assistant.meeting.terminating ||
                                   (!model.isRecording && model.intent != .wanted && !assistant.meeting.presentation.terminateAction.enabled))
-                    Menu {
-                        Button { model.setSumMode("auto") } label: {
-                            Label("自动", systemImage: model.sumMode == "auto" ? "checkmark.circle.fill" : "circle")
+                    Button("提要") { assistant.meeting.requestSummary() }
+                        .buttonStyle(MeetingActionButtonStyle(tint: .blue, filled: model.sumMode == "manual",
+                            pale: model.sumMode == "auto"))
+                        .contextMenu {
+                            Button { model.setSumMode("auto") } label: {
+                                Label("自动", systemImage: model.sumMode == "auto" ? "checkmark" : "")
+                            }
+                            .disabled(assistant.meeting.pendingSumMode != nil)
+                            Button { model.setSumMode("manual") } label: {
+                                Label("手动", systemImage: model.sumMode == "manual" ? "checkmark" : "")
+                            }
+                            .disabled(assistant.meeting.pendingSumMode != nil)
                         }
-                        Button { model.setSumMode("manual") } label: {
-                            Label("手动", systemImage: model.sumMode == "manual" ? "checkmark.circle.fill" : "circle")
-                        }
-                    } label: { Text("会中提要").lineLimit(1).minimumScaleFactor(0.75) }
-                    .buttonStyle(WorkspaceActionButtonStyle(filled: false))
-                    .accessibilityValue(model.sumMode == "auto" ? "自动" : "手动")
-                    NavigationLink("会后材料") {
+                        .accessibilityValue(model.sumMode == "auto" ? "自动，短按无动作" : "手动，点击生成提要")
+                        .accessibilityHint("长按选择自动或手动")
+                    NavigationLink("总结") {
                         reportContent.navigationTitle("会后材料").navigationBarTitleDisplayMode(.inline)
                     }
-                    .buttonStyle(WorkspaceActionButtonStyle(filled: false))
+                    .buttonStyle(MeetingActionButtonStyle())
                 }
                 .lineLimit(1).minimumScaleFactor(0.75)
                 .padding(.horizontal).padding(.vertical, 8)
@@ -59,6 +70,26 @@ struct MeetingView: View {
                 .padding(.horizontal).padding(.vertical, 8)
                 .frame(maxWidth: .infinity).background(.bar)
             }
+            .sheet(isPresented: $showMemos) {
+                NavigationStack {
+                    Group {
+                        if assistant.meeting.memoReports.isEmpty {
+                            ContentUnavailableView("暂无代办", systemImage: "checklist",
+                                description: Text("点击代办录音，再次点击结束；生成结果后长按代办查看。"))
+                        } else {
+                            List(assistant.meeting.memoReports) { report in
+                                NavigationLink {
+                                    MemoReportEditor(report: report)
+                                } label: {
+                                    Text(report.text).lineLimit(3)
+                                }
+                            }
+                        }
+                    }
+                    .navigationTitle("代办")
+                    .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { showMemos = false } } }
+                }
+            }
             .confirmationDialog("结束本次会议并保存已有录音？", isPresented: $confirmStop,
                                 titleVisibility: .visible) {
                 Button("结束会议", role: .destructive) { assistant.accept(.end) }
@@ -67,9 +98,9 @@ struct MeetingView: View {
         }
     }
     private var captureButtonTitle: String {
-        if model.isPaused { return "继续采集" }
-        if model.isRecording { return "暂停采集" }
-        return model.intent == .wanted ? "恢复采集" : "开始采集"
+        if model.isPaused { return "继续" }
+        if model.isRecording { return "暂停" }
+        return model.intent == .wanted ? "恢复" : "开始"
     }
     private var captureButtonAction: CaptureAction {
         if model.isPaused { return .resume }
@@ -77,6 +108,7 @@ struct MeetingView: View {
         return model.intent == .wanted ? .recover : .start
     }
     private var captureButtonDisabled: Bool {
+        if assistant.memoActive { return true }
         if !model.isRecording && !assistant.canStartCapture { return true }
         if assistant.meeting.terminating { return true }
         if model.isPaused {
@@ -131,7 +163,7 @@ struct MeetingView: View {
     private var sumStateColor: Color {
         switch model.sumCode {
         case "go": return .blue
-        case "quality", "busy_prev", "busy_refine", "busy_vram", "busy_cpu": return .orange
+        case "quality", "busy_prev", "busy_refine", "busy_vram", "busy_cpu", "busy_gpu", "failed": return .orange
         default: return .secondary
         }
     }

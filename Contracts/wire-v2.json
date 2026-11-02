@@ -8,7 +8,8 @@
   "max_safe_integer": 9007199254740991,
   "sumstatus_codes": [
     "no_session", "wait_period", "short", "quality", "busy_prev",
-    "busy_refine", "busy_vram", "busy_cpu", "go"
+    "busy_refine", "busy_vram", "busy_cpu", "go",
+    "wait_manual", "busy_gpu", "failed", "done"
   ],
   "messages": {
     "partial": {
@@ -46,12 +47,19 @@
     "sumstatus": {
       "direction": "down",
       "fields": [
+        {"name":"request_id","kind":"string","optional":true},
         {"name":"mode","kind":"string","enum":["auto","manual"]},
         {"name":"code","kind":"string"},
         {"name":"text","kind":"string"},
         {"name":"chars","kind":"integer","minimum":0},
         {"name":"next_in","kind":"number","nullable":true,"minimum":0},
         {"name":"ts","kind":"number","exclusive_minimum":0}
+      ]
+    },
+    "sumrequest": {
+      "direction": "up",
+      "fields": [
+        {"name":"request_id","kind":"string"}
       ]
     },
     "summode": {

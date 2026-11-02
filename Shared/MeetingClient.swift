@@ -615,6 +615,7 @@ struct CaptureView: Codable, Equatable {
     let generation: Int
     let segmentID: String
     let sourceTag: String
+    var purpose: String? = nil
     let input: Binding
     let room: String
     let createdAt: String
@@ -626,7 +627,7 @@ struct CaptureView: Codable, Equatable {
         case observationRevision = "observation_revision"
         case stateRevision = "state_revision", desiredState = "desired_state", observedState = "observed_state"
         case channel, generation, segmentID = "segment_id", sourceTag = "source_tag", input, room
-        case createdAt = "created_at", identity, media
+        case createdAt = "created_at", identity, media, purpose
     }
 }
 struct CaptureAudioReceipt: Decodable, Equatable {
@@ -733,19 +734,24 @@ extension MeetingClient {
         return view
     }
     static func queueCaptureStart(config: LiveKitConfig, revision: Int, input: InputBinding,
-                                  meetingID: String?, store suppliedStore: PendingRequestStore? = nil) throws {
+                                  meetingID: String?, purpose: String = "meeting", store suppliedStore: PendingRequestStore? = nil) throws {
         let store = try suppliedStore ?? pendingStore()
         try store.transaction(capturePendingKey) { current in
             if let current {
                 let pending = try JSONDecoder().decode(PendingCapture.self, from: current)
                 guard pending.serverURL == config.url, pending.deviceID == config.device,
                       pending.action == "start" else { throw failure(63, "请先确认上一项会控动作") }
+                let saved = try JSONSerialization.jsonObject(with: pending.body) as? [String: Any]
+                guard (saved?["purpose"] as? String ?? "meeting") == purpose else {
+                    throw failure(63, "上一项采集用途不同，请先完成会控对账")
+                }
                 return (current, ())
             }
             let id = UUID().uuidString.lowercased()
             var object: [String: Any] = ["request_id": id, "device_id": config.device, "user_id": config.userID,
                 "config_revision": revision, "input": ["channel": input.channel, "input_ref": input.inputRef],
                 "source_tag": input.sourceTag.rawValue]
+            if purpose != "meeting" { object["purpose"] = purpose }
             if let meetingID { object["resume_meeting_id"] = meetingID }
             let pending = PendingCapture(serverURL: config.url, deviceID: config.device,
                 path: SessionControlV2Contract.startPath, body: try JSONSerialization.data(withJSONObject: object),
