@@ -19,15 +19,6 @@ struct ContentView: View {
             SettingsView(model: model, worker: assistant.settings)
                 .tabItem { Label("设置", systemImage: "gearshape") }.tag(WorkspacePage.settings)
         }
-        .safeAreaInset(edge: .top, spacing: 0) {
-            if let message = assistant.message {
-                Text(message).font(.callout).frame(maxWidth: .infinity)
-                    .padding(8).background(.thinMaterial)
-            } else if assistant.page != .meeting && (model.isRecording || model.intent == .wanted) {
-                Button("采集进行中 · 返回会议") { assistant.page = .meeting }
-                    .frame(maxWidth: .infinity, minHeight: 44).background(.thinMaterial)
-            }
-        }
         .alert("停止并保存", isPresented: Binding(get: { assistant.showingDeviceStop },
                                               set: { assistant.showingDeviceStop = $0 })) {
             Button("停止并保存", role: .destructive) { assistant.confirmDeviceStop() }
