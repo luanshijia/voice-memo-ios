@@ -11,19 +11,29 @@ struct InputView: View {
             List {
                 Section {
                     HStack {
-                        Button("xEdge") { openXEdge() }
-                            .buttonStyle(MeetingActionButtonStyle())
-                            .frame(width: 88)
-                            .background(Color(uiColor: .systemGray6), in: Capsule())
-                            .accessibilityLabel("打开 xEdge")
+                        Button { openXEdge() } label: {
+                            Text("xEdge")
+                                .font(.body.weight(.medium))
+                                .frame(width: 88)
+                                .frame(minHeight: 52)
+                                .foregroundStyle(.primary)
+                                .background(Color(uiColor: .tertiarySystemFill),
+                                            in: RoundedRectangle(cornerRadius: 12))
+                                .contentShape(RoundedRectangle(cornerRadius: 12))
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("打开 xEdge")
                         Spacer()
                         HStack(spacing: 20) {
                             Text("tailscale网络")
                             Image(systemName: assistant.connection.serverReady ? "checkmark" : "xmark")
                         }
                         .font(.body.weight(.medium))
-                        .foregroundStyle(.secondary)
-                        .padding(.trailing, 16)
+                        .padding(.horizontal, 16)
+                        .frame(minHeight: 52)
+                        .foregroundStyle(assistant.connection.serverReady ? Color.white : Color.secondary)
+                        .background(assistant.connection.serverReady ? Color.blue : Color(uiColor: .tertiarySystemFill),
+                                    in: RoundedRectangle(cornerRadius: 12))
                         .accessibilityElement(children: .ignore)
                         .accessibilityLabel(assistant.connection.serverReady ? "tailscale网络已就绪" : "tailscale网络未就绪")
                     }

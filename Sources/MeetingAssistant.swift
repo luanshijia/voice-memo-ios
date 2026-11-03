@@ -333,9 +333,9 @@ import Foundation
             guard !self.connection.serverReady, self.input.device.connectionID == oldConnection else { return }
             self.input.device.stopScan()
             if self.input.device.connected { self.input.device.disconnect() }
-            let text = self.input.cleanupProblem ?? (hadCapture
+            guard let text = self.input.cleanupProblem ?? (hadCapture
                 ? "服务器不可用，采集已暂停，蓝牙已关闭；恢复连接后请手动继续"
-                : "服务器不可用，蓝牙和采集启动已停用")
+                : nil) else { return }
             self.serverMessage = text
             if self.message != text { self.message = text }
         }
