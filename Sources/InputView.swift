@@ -4,11 +4,23 @@ import AVFoundation
 struct InputView: View {
     @ObservedObject var assistant: MeetingAssistant
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.openURL) private var openURL
+    @State private var shortcutOpenFailed = false
     var body: some View {
         NavigationStack {
             List {
                 Section {
-                    LabeledContent("服务器", value: assistant.connection.serverPhase.rawValue)
+                    HStack {
+                        Button("xEdge") { openXEdge() }
+                            .buttonStyle(MeetingActionButtonStyle())
+                            .frame(width: 88)
+                            .background(Color(uiColor: .systemGray6), in: Capsule())
+                            .accessibilityLabel("打开 xEdge")
+                        Spacer()
+                        Text(assistant.connection.serverReady ? "服务器√" : "服务器×")
+                            .foregroundStyle(.secondary)
+                            .accessibilityLabel(assistant.connection.serverReady ? "服务器已就绪" : "服务器未就绪")
+                    }
                 }
                 Section("手机") {
                     inputButton("iPhone 麦克风", icon: "iphone", kind: .phone) {
@@ -41,7 +53,23 @@ struct InputView: View {
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { refreshMicrophoneMode() }
         }
+        .alert("无法打开快捷指令", isPresented: $shortcutOpenFailed) {
+            Button("知道了", role: .cancel) { }
+        } message: {
+            Text("请确认手机已安装“快捷指令”，并保留名称为“打开XEdge”的快捷指令。")
+        }
     }
+    private func openXEdge() {
+        var components = URLComponents()
+        components.scheme = "shortcuts"
+        components.host = "run-shortcut"
+        components.queryItems = [URLQueryItem(name: "name", value: "打开XEdge")]
+        guard let url = components.url else { return }
+        openURL(url) { accepted in
+            shortcutOpenFailed = !accepted
+        }
+    }
+
     private func refreshMicrophoneMode() {
         assistant.input.refreshMicMode(generation: assistant.connection.generation)
     }
