@@ -17,9 +17,15 @@ struct InputView: View {
                             .background(Color(uiColor: .systemGray6), in: Capsule())
                             .accessibilityLabel("打开 xEdge")
                         Spacer()
-                        Text(assistant.connection.serverReady ? "服务器√" : "服务器×")
-                            .foregroundStyle(.secondary)
-                            .accessibilityLabel(assistant.connection.serverReady ? "服务器已就绪" : "服务器未就绪")
+                        HStack(spacing: 20) {
+                            Text("tailscale网络")
+                            Image(systemName: assistant.connection.serverReady ? "checkmark" : "xmark")
+                        }
+                        .font(.body.weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .padding(.trailing, 16)
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel(assistant.connection.serverReady ? "tailscale网络已就绪" : "tailscale网络未就绪")
                     }
                 }
                 Section("手机") {
