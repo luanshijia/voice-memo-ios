@@ -191,7 +191,9 @@ import LiveKit
         let cleanup = Task {
             defer { if inputCleanupID == cleanupID { pendingInputCleanup = nil; inputCleanupID = nil } }
             await priorInputCleanup?.value
+            CrashLog.step("[采集清理] 开始清理输入资源")
             await beforeDisconnect()
+            CrashLog.step("[采集清理] 输入资源清理返回")
         }
         pendingInputCleanup = cleanup
         pendingDisconnect = Task {
@@ -199,7 +201,11 @@ import LiveKit
             await previous?.value
             await cleanup.value
             await inflight?.value
-            if let target { await self.disconnect(target) }
+            if let target {
+                CrashLog.step("[采集清理] 开始断开LiveKit连接")
+                await self.disconnect(target)
+                CrashLog.step("[采集清理] LiveKit连接断开返回")
+            }
             await completion()
         }
     }

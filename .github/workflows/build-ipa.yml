@@ -47,16 +47,27 @@ jobs:
           PY
           ls -la
 
+      - name: 固定依赖并关闭 SPED 握手加速（结束崩溃对照）
+        run: |
+          set -euo pipefail
+          xcodebuild -resolvePackageDependencies -project VoiceMemo.xcodeproj -scheme VoiceMemo \
+            -clonedSourcePackagesDirPath "$RUNNER_TEMP/VoiceMemo-packages"
+          python3 tools/patch_livekit.py "$RUNNER_TEMP/VoiceMemo-packages/checkouts/client-sdk-swift"
+
       - name: Swift 行为回归
         run: |
           set -euo pipefail
           DEVICE_ID="$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.name | startswith("iPhone"))][0].udid // empty')"
           test -n "$DEVICE_ID"
+          python3 tools/patch_livekit.py "$RUNNER_TEMP/VoiceMemo-packages/checkouts/client-sdk-swift" --check
           xcodebuild -project VoiceMemo.xcodeproj -scheme VoiceMemo \
+            -clonedSourcePackagesDirPath "$RUNNER_TEMP/VoiceMemo-packages" \
+            -disableAutomaticPackageResolution \
             -destination "platform=iOS Simulator,id=$DEVICE_ID" \
             -derivedDataPath "$RUNNER_TEMP/VoiceMemo-tests" \
             -resultBundlePath "$RUNNER_TEMP/VoiceMemo-tests.xcresult" \
             CODE_SIGNING_ALLOWED=NO test
+          python3 tools/patch_livekit.py "$RUNNER_TEMP/VoiceMemo-packages/checkouts/client-sdk-swift" --check
 
       - name: 模拟器启动并截取主界面(仅手动运行)
         if: github.event_name == 'workflow_dispatch'
@@ -80,12 +91,15 @@ jobs:
 
       - name: 编译(不签名)
         run: |
-          set -o pipefail
+          set -euo pipefail
           # 设备名与使用者的真值只在这里出现:值来自仓库 Secrets(日志里被遮蔽),
           # 由 build setting 注入 Info.plist。代码与 project.yml 里只有中性占位。
+          python3 tools/patch_livekit.py "$RUNNER_TEMP/VoiceMemo-packages/checkouts/client-sdk-swift" --check
           xcodebuild \
             -project VoiceMemo.xcodeproj \
             -scheme VoiceMemo \
+            -clonedSourcePackagesDirPath "$RUNNER_TEMP/VoiceMemo-packages" \
+            -disableAutomaticPackageResolution \
             -configuration Release \
             -sdk iphoneos \
             -destination 'generic/platform=iOS' \
@@ -96,6 +110,7 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             archive
+          python3 tools/patch_livekit.py "$RUNNER_TEMP/VoiceMemo-packages/checkouts/client-sdk-swift" --check
         env:
           VM_DEFAULT_DEVICE: ${{ secrets.VM_DEFAULT_DEVICE }}
           VM_DEFAULT_USER: ${{ secrets.VM_DEFAULT_USER }}

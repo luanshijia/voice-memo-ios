@@ -506,12 +506,14 @@ import Foundation
     /// Close the audio gate immediately; disconnect only after any in-flight
     /// start has returned. Both local commands and desktop observations use it.
     @discardableResult private func haltLocalCapture(pausing: Bool) -> Int {
+        meeting.note("[采集清理] 开始：\(pausing ? "暂停" : "结束")，输入=\(input.displayName)")
         pendingPublishing = nil
         let generation = connection.invalidate()
         meeting.captureHalted(pausing: pausing)
         if !pausing { meeting.clearMeetingDisplay() }
         input.device.cancelHardwareIntent(unless: pausing ? .pause : .stop)
         input.requestHalt(pausing: pausing)
+        meeting.note("[采集清理] 音频入口已关闭，设备动作已请求")
         connection.enqueueDisconnect(beforeDisconnect: { [input] in
             if pausing { await input.pause() } else { await input.finish() }
         }) {}

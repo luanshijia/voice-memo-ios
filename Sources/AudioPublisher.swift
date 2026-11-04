@@ -132,10 +132,13 @@ private final class PCMFeed: PCMSubmitting, @unchecked Sendable {
     private func cleanup(_ room: Room) async {
         feed?.cancel(); feed = nil
         var errors: [String] = []
+        CrashLog.step("[采集清理] 开始关闭外设音轨")
         do { try await engine.microphone(room, false) }
         catch { errors.append("关闭音轨：\(error.localizedDescription)") }
+        CrashLog.step("[采集清理] 关闭外设音轨返回，开始退出手动音频模式")
         do { if engine.isManual() { try engine.manualMode(false) } }
         catch { errors.append("退出手动模式：\(error.localizedDescription)") }
+        CrashLog.step("[采集清理] 退出手动音频模式返回，错误数=\(errors.count)")
         if errors.isEmpty && !engine.isManual() { state = .idle; recoveryRoom = nil }
         else {
             state = .cleanupFailed; recoveryRoom = room

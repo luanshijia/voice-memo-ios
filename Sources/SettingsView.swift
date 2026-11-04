@@ -69,6 +69,11 @@ struct SettingsView: View {
     }
 
     @ViewBuilder private var crashSection: some View {
+        if let steps = CrashLog.previousSteps, !steps.isEmpty {
+            Section("上次保留的运行步骤") {
+                Text(steps).font(.footnote.monospaced()).textSelection(.enabled)
+            }
+        }
         if let crash = CrashLog.previousCrashFile {
             Section("上次异常(黑匣子文件)") {
                 Text(crash).font(.footnote.monospaced()).textSelection(.enabled)

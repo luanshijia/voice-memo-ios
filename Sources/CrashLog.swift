@@ -11,6 +11,7 @@ enum CrashLog {
     private static let stepsKey = "mv.steps"
     private static let runKey = "mv.runStartedAt"
     private static let countersKey = "mv.counters"
+    private static let previousKey = "mv.previousRunEvidence"
     private static let maxSteps = 30
 
     private(set) static var previousRunStartedAt: String?
@@ -24,7 +25,7 @@ enum CrashLog {
     private static var steps: [String] = []
 
     static func clear() {
-        [failureKey, stepsKey, runKey, countersKey].forEach { UserDefaults.standard.removeObject(forKey: $0) }
+        [failureKey, stepsKey, runKey, countersKey, previousKey].forEach { UserDefaults.standard.removeObject(forKey: $0) }
         steps.removeAll()
         previousCrashFile = nil
         previousFailure = nil
@@ -71,6 +72,26 @@ enum CrashLog {
            !s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             previousCrashFile = s
         }
+        // Keep the crash and its matching steps through subsequent launches.
+        let defaults = UserDefaults.standard
+        let saved = defaults.dictionary(forKey: previousKey) as? [String: String]
+        if let evidence = retainedEvidence(crash: previousCrashFile, steps: previousSteps,
+                                           failure: previousFailure, saved: saved) {
+            defaults.set(evidence, forKey: previousKey)
+            previousCrashFile = evidence["crash"]
+            previousSteps = evidence["steps"]
+            previousFailure = evidence["failure"]
+        }
+    }
+
+    static func retainedEvidence(crash: String?, steps: String?, failure: String?,
+                                 saved: [String: String]?) -> [String: String]? {
+        guard crash != nil || (failure != nil && failure != saved?["failure"]) else { return saved }
+        var evidence: [String: String] = [:]
+        evidence["crash"] = crash
+        evidence["steps"] = steps
+        evidence["failure"] = failure
+        return evidence
     }
 
     static func install() {

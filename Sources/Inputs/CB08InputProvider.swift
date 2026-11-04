@@ -176,8 +176,10 @@ import LiveKit
             return
         }
         let confirmed: Bool
+        CrashLog.step("[采集清理] 等待CB08\(action.title)回执")
         if action == .pause && device.recordState == .paused && pendingHalt == nil { confirmed = true }
         else { confirmed = await device.waitForRecordAction(timeout: startupTimeout) }
+        CrashLog.step("[采集清理] CB08\(action.title)回执等待返回，确认=\(confirmed)")
         guard epoch == haltEpoch else { return }
         guard recordingOwner?.connectionID == owner.connectionID,
               device.connectionID == owner.connectionID else {
