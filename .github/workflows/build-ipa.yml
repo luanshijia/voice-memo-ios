@@ -14,8 +14,8 @@ jobs:
   build:
     # 使用 macOS 26 Intel runner，避开 ARM64 hosted runner 容量不足的队列。
     runs-on: macos-26-intel
-    # Intel cold builds need time for simulator tests and the separate device archive.
-    timeout-minutes: 60
+    # Intel cold builds can exceed an hour across simulator tests and the device archive.
+    timeout-minutes: 90
 
     steps:
       - name: Checkout
