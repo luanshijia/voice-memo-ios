@@ -2,6 +2,7 @@
 import argparse
 import hashlib
 from pathlib import Path
+import stat
 import subprocess
 
 REVISION = "93a7251057bdb6a80a7b1f6d11464d578ebdc09b"
@@ -38,7 +39,13 @@ def main():
         if source != expected:
             raise ValueError("SPED must be disabled before building VoiceMemo")
     elif source != expected:
-        path.write_bytes(expected)
+        # SwiftPM marks dependency sources read-only. Only this reviewed file is writable briefly.
+        mode = path.stat().st_mode
+        path.chmod(mode | stat.S_IWUSR)
+        try:
+            path.write_bytes(expected)
+        finally:
+            path.chmod(mode)
     print("LiveKit 2.18.0 verified: WebRTC-IceHandshakeDtls/Disabled/; sha256="
           + hashlib.sha256(expected).hexdigest())
 
