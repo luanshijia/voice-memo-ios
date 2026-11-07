@@ -139,8 +139,8 @@ import XCTest
         await publisher.stopPCM(in: room)
         XCTAssertEqual(starts, 2); XCTAssertEqual(publisher.state, .idle)
     }
-    func testSDKManualModeWithoutMicPermissionRequiresRecordingStopBeforeExit() throws {
-        guard AVAudioApplication.shared.recordPermission != .granted else {
+    func testSDKExternalCleanupWithoutMicPermissionStopsEngineAndCanRestart() async throws {
+        guard AVCaptureDevice.authorizationStatus(for: .audio) != .authorized else {
             throw XCTSkip("Requires a simulator without phone microphone permission")
         }
         let audio = AudioManager.shared
@@ -149,16 +149,28 @@ import XCTest
             try? audio.stopLocalRecording()
             try? audio.setManualRenderingMode(false)
         }
-        try audio.setManualRenderingMode(true)
-        try audio.startLocalRecording()
-        // This is the old cleanup path: still-recording input tries to use a device mic.
-        XCTAssertThrowsError(try audio.setManualRenderingMode(false)) { error in
-            XCTAssertEqual((error as? LiveKitError)?.type, .deviceAccessDenied)
+        let live = AudioEngineControl.live
+        let publisher = AudioPublisher(engine: AudioEngineControl(microphone: { _, enabled in
+            // No server/peer connection: exercise the real recording engine directly.
+            if enabled {
+                NSLog("[SDK cleanup test] start recording")
+                try audio.startLocalRecording()
+            }
+        }, stopRecording: {
+            NSLog("[SDK cleanup test] stop recording")
+            try live.stopRecording()
+        }, manualMode: { enabled in
+            NSLog("[SDK cleanup test] manual mode = %@", String(enabled))
+            try live.manualMode(enabled)
+        }, isManual: live.isManual))
+        let room = Room()
+        for _ in 0..<2 {
+            try await publisher.startPCM(in: room)
+            await publisher.stopPCM(in: room)
+            XCTAssertNil(publisher.cleanupProblem)
+            XCTAssertEqual(publisher.state, .idle)
+            XCTAssertFalse(audio.isManualRenderingMode)
+            XCTAssertFalse(audio.isEngineRunning)
         }
-        XCTAssertTrue(audio.isManualRenderingMode)
-        try AudioEngineControl.live.stopRecording()
-        try audio.setManualRenderingMode(false)
-        XCTAssertFalse(audio.isManualRenderingMode)
-        XCTAssertFalse(audio.isEngineRunning)
     }
 }
