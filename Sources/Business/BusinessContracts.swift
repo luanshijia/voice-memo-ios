@@ -1,6 +1,6 @@
 import Foundation
 
-enum WorkspacePage: String, CaseIterable { case settings, input, connection, meeting }
+enum WorkspacePage: String, CaseIterable { case settings, input, connection, meeting, externalDevice }
 enum InputKind: String { case phone, external }
 enum SourceTag: String { case face2face, call }
 

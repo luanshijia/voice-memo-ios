@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Four pages share one root model and one dispatcher. Tab changes do no IO.
+/// Five pages share one root model and one dispatcher.
 @MainActor
 struct ContentView: View {
     @StateObject private var workspace = MeetingWorkspace()
@@ -12,6 +12,10 @@ struct ContentView: View {
         TabView(selection: Binding(get: { assistant.page }, set: { assistant.page = $0 })) {
             MeetingView(model: model, assistant: assistant)
                 .tabItem { Label("会议", systemImage: "text.bubble") }.tag(WorkspacePage.meeting)
+            NavigationStack {
+                ExternalDeviceView(assistant: assistant)
+            }
+            .tabItem { Label("外设", systemImage: "waveform") }.tag(WorkspacePage.externalDevice)
             ConnectionView(assistant: assistant)
                 .tabItem { Label("连接", systemImage: "network") }.tag(WorkspacePage.connection)
             InputView(assistant: assistant)

@@ -50,9 +50,6 @@ struct InputView: View {
                         let tag = assistant.input.binding.kind == .external ? assistant.input.binding.sourceTag : .face2face
                         assistant.selectInput(.external, tag: tag)
                     }
-                    NavigationLink("外设控制台") {
-                        ExternalDeviceView(assistant: assistant)
-                    }
                     LabeledContent("蓝牙连接", value: assistant.input.device.connectionPhase.rawValue)
                     LabeledContent("卡片录音", value: cardRecordState)
                     if assistant.input.external.flowing {
