@@ -159,6 +159,59 @@ import XCTest
         let file = try CB08CardFile(["name": "custom.opus", "size": "unknown"])
         XCTAssertNil(file.recordedAt); XCTAssertNil(file.bytes); XCTAssertNil(file.seconds)
         XCTAssertFalse(CB08CardFile.supportsDeletion("../wrong.opus"))
-        XCTAssertFalse(CB08CardFile.supportsDeletion(String(repeating: "x", count: 25)))
+        XCTAssertFalse(CB08CardFile.supportsDeletion("wrong\n.opus"))
+        XCTAssertFalse(CB08CardFile.supportsDeletion("folder\\wrong.opus"))
+    }
+    func testSDKFormattedLongNameIsPassedUnchangedToDelete() async throws {
+        let d = Device()
+        let name = "note 2026-11-07_12-00-00.opus"
+        d.list = [["name": name, "size": "200", "time": "10"]]
+        let m = manager(d)
+        await m.refresh()?.value
+        let file = try XCTUnwrap(m.files.first)
+        XCTAssertGreaterThan(name.utf8.count, 24)
+        XCTAssertTrue(CB08CardFile.supportsDeletion(name))
+        XCTAssertNotNil(file.recordedAt)
+        await m.delete(file)?.value
+        XCTAssertEqual(d.deletions, [name])
+        XCTAssertTrue(m.visibleFiles.isEmpty)
+        XCTAssertTrue(m.status.contains("删除已确认"))
+    }
+    func testBothSDKDateFormatsSortByActualDateAndRejectInvalidDates() throws {
+        let old = try CB08CardFile(["name": "note20261107-120000.opus"])
+        let spaced = try CB08CardFile(["name": "note 2026-11-07_12-00-00.opus"])
+        let call = try CB08CardFile(["name": "call 2026-11-07_13-00-00.opus"])
+        XCTAssertEqual(try XCTUnwrap(old.recordedAt), try XCTUnwrap(spaced.recordedAt))
+        XCTAssertGreaterThan(try XCTUnwrap(call.recordedAt), try XCTUnwrap(spaced.recordedAt))
+        XCTAssertNil(try CB08CardFile(["name": "note 2026-02-30_12-00-00.opus"]).recordedAt)
+        XCTAssertNil(try CB08CardFile(["name": "note 2026-11-07_25-00-00.opus"]).recordedAt)
+    }
+    func testUnconfirmedStopExplainsDisabledDeleteAndNeverSendsCommand() async throws {
+        let d = Device(); let m = manager(d)
+        await m.refresh()?.value
+        let file = try XCTUnwrap(m.files.first)
+        d.recordState = .inactive
+        XCTAssertFalse(m.canDelete)
+        XCTAssertEqual(m.deleteBlockedReason, "停止尚未确认，请先停止并保存")
+        XCTAssertNil(m.delete(file)); XCTAssertTrue(d.deletions.isEmpty)
+        d.recordState = .stopped
+        XCTAssertTrue(m.canDelete); XCTAssertNil(m.deleteBlockedReason)
+        m.operationAllowed = { false }
+        m.operationBlockReason = { "会议尚未结束，暂不可删除" }
+        XCTAssertFalse(m.canDelete)
+        XCTAssertEqual(m.deleteBlockedReason, "会议尚未结束，暂不可删除")
+    }
+    func testMixedFilenameFormatsSortChronologically() async throws {
+        let d = Device()
+        d.list = [
+            ["name": "note20261106-120000.opus"],
+            ["name": "call 2026-11-08_12-00-00.opus"],
+            ["name": "note 2026-11-07_12-00-00.opus"]
+        ]
+        let m = manager(d)
+        await m.refresh()?.value
+        XCTAssertEqual(m.sortedFiles(newestFirst: true).map(\.name), [
+            "call 2026-11-08_12-00-00.opus", "note 2026-11-07_12-00-00.opus", "note20261106-120000.opus"
+        ])
     }
 }

@@ -88,6 +88,7 @@ import Foundation
         }
         input.serverAvailable = { [weak self] in self?.canStartCapture ?? false }
         input.files.operationAllowed = { [weak self] in self?.fileOperationsAllowed ?? false }
+        input.files.operationBlockReason = { [weak self] in self?.fileOperationBlockReason ?? "请先完成当前会议或设备动作" }
         connection.onServerUnavailable = { [weak self] in self?.enforceServerUnavailable() }
         connection.onServerAvailable = { [weak self] in self?.clearRecoveredServerMessage() }
         meeting.onCaptureProjection = { [weak self] view, confirmed in
@@ -216,10 +217,16 @@ import Foundation
     }
     var deviceConnectionLocked: Bool { !connection.serverReady || serverCleanupTask != nil || deviceControlsBusy || meeting.isRecording || meeting.wantsCapture }
     private var fileOperationsAllowed: Bool {
-        connection.serverReady && serverCleanupTask == nil && !showingDeviceStop &&
-        !meeting.actionPending && !meeting.terminating && !meeting.isRecording && !meeting.wantsCapture &&
-        !meeting.meetingContext.hasOpenMeeting && localControlExecutions == 0 &&
-        connection.pendingDisconnect == nil && input.cleanupProblem == nil
+        fileOperationBlockReason == nil
+    }
+    private var fileOperationBlockReason: String? {
+        if !connection.serverReady { return "服务器未就绪，文件操作暂不可用" }
+        if serverCleanupTask != nil || input.cleanupProblem != nil { return "音频清理待确认，暂不可删除" }
+        if showingDeviceStop || meeting.actionPending || meeting.terminating || localControlExecutions > 0 || connection.pendingDisconnect != nil {
+            return "会议或设备动作待确认，请稍候"
+        }
+        if meeting.isRecording || meeting.wantsCapture || meeting.meetingContext.hasOpenMeeting { return "会议尚未结束，暂不可删除" }
+        return nil
     }
     var deviceStartTitle: String { meeting.isPaused ? "继续" : meeting.wantsCapture ? "恢复" : "开始" }
     var deviceCanStart: Bool {
@@ -248,14 +255,31 @@ import Foundation
     }
     var deviceControlStatus: String {
         guard input.device.connected else { return "CB08未连接" }
-        if input.deviceManagement.busy { return "设备准备中 · 等待确认" }
-        if let problem = input.deviceManagement.problem ?? input.cleanupProblem { return problem }
-        if deviceIndependentWarning { return "CB08：\(input.device.recordState!.rawValue) · App未采集此录音" }
-        if hasExternalMeeting { return "CB08：\(input.device.recordState?.rawValue ?? "未知") · \(meeting.captureStatusText)" }
-        if let state = input.device.recordState {
-            return state == .stopped || state == .inactive ? "CB08：\(state.rawValue) · 可开始新采集" : "CB08：\(state.rawValue)"
+        if input.deviceManagement.busy { return "设备处理中 · 请稍候" }
+        if let problem = input.deviceManagement.problem {
+            switch problem {
+            case "App音频资源清理未完成，请重试": return "音频清理未完成，请重试"
+            case "连接已变化，未确认原设备停止": return "连接已变化，停止待确认"
+            case "停止未确认，请检查卡端状态并重试": return "停止待确认，请检查后重试"
+            case "停止回执与状态查询尚未对齐，请刷新后重试": return "停止状态不一致，请刷新"
+            default: return "设备操作异常，请查看诊断"
+            }
         }
-        return "CB08状态未确认 · 请刷新"
+        if input.cleanupProblem != nil { return "音频清理未完成，请查看诊断" }
+        let stateText: String
+        switch input.device.recordState {
+        case .stopped: stateText = "已停止"
+        case .recording: stateText = "录音中"
+        case .paused: stateText = "已暂停"
+        case .inactive: stateText = "停止或暂停待确认"
+        case nil: stateText = "状态待确认"
+        }
+        if deviceIndependentWarning { return "\(stateText) · App未采集" }
+        if hasExternalMeeting { return "\(stateText) · \(meeting.captureStatusText)" }
+        if let state = input.device.recordState {
+            return state == .stopped || state == .inactive ? "\(stateText) · 可开始" : stateText
+        }
+        return "状态待确认 · 请刷新"
     }
     func startFromDeviceConsole() {
         guard deviceCanStart else { return }

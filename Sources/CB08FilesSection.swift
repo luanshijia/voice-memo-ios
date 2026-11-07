@@ -37,8 +37,12 @@ import SwiftUI
                         } else { Text("录音时间未知").font(.caption).foregroundStyle(.secondary) }
                     }.padding(.vertical, 4)
                 }
-                if !manager.busy && assistant.input.device.recordState != .stopped {
-                    Text("删除前请先停止并保存录音，等待卡片确认停止。")
+                if let reason = manager.deleteBlockedReason {
+                    Text(reason)
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+                if manager.visibleFiles.contains(where: { !CB08CardFile.supportsDeletion($0.name) }) {
+                    Text("含路径或控制字符的文件名不支持删除。")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }

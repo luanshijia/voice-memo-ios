@@ -27,17 +27,24 @@ struct CB08CardFile: Identifiable, Equatable {
         recordedAt = Self.date(from: name)
     }
     static func supportsDeletion(_ name: String) -> Bool {
-        !name.isEmpty && name.utf8.count <= 24 && !name.contains("\0") &&
+        !name.isEmpty && !name.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) &&
         !name.contains("/") && !name.contains("\\") && name != "." && name != ".."
     }
     private static func date(from name: String) -> Date? {
-        guard let range = name.range(of: #"^(?:note|call)[0-9]{8}-[0-9]{6}"#, options: .regularExpression) else { return nil }
-        let stamp = String(name[range].suffix(15))
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyyMMdd-HHmmss"; formatter.isLenient = false
-        guard let date = formatter.date(from: stamp), formatter.string(from: date) == stamp else { return nil }
-        return date
+        formatter.isLenient = false
+        let formats = [
+            (#"^(?:note|call)[0-9]{8}-[0-9]{6}(?=\.)"#, "yyyyMMdd-HHmmss", 15),
+            (#"^(?:note|call) [0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9]{2}-[0-9]{2}-[0-9]{2}(?=\.)"#, "yyyy-MM-dd_HH-mm-ss", 19)
+        ]
+        for (pattern, format, length) in formats {
+            guard let range = name.range(of: pattern, options: .regularExpression) else { continue }
+            let stamp = String(name[range].suffix(length))
+            formatter.dateFormat = format
+            if let date = formatter.date(from: stamp), formatter.string(from: date) == stamp { return date }
+        }
+        return nil
     }
 }
 
@@ -72,6 +79,7 @@ enum CB08FileError: LocalizedError {
     private var entries: [String: CB08CardFile] = [:]
     private var response: Result<Void, Error>?
     var operationAllowed: () -> Bool = { false }
+    var operationBlockReason: () -> String = { "请先完成当前会议或设备动作" }
 
     init(device: CB08FileDevice, operations: CB08DeviceManager, timeout: Duration = .seconds(20)) {
         self.device = device; self.operations = operations; self.timeout = timeout
@@ -86,6 +94,20 @@ enum CB08FileError: LocalizedError {
         device.connected && !operations.busy && operationAllowed() && !requiresReconnect
     }
     var canDelete: Bool { canRefresh && hasCurrentList && device.recordState == .stopped }
+    var deleteBlockedReason: String? {
+        guard device.connected else { return "连接CB08后可删除文件" }
+        if requiresReconnect { return "文件操作未确认，请断开重连" }
+        if operations.busy { return "设备处理中，请稍候" }
+        if !operationAllowed() { return operationBlockReason() }
+        guard hasCurrentList else { return "请先刷新文件列表" }
+        switch device.recordState {
+        case .stopped: return nil
+        case .recording: return "正在录音，请先停止并保存"
+        case .paused: return "录音已暂停，请先停止并保存"
+        case .inactive: return "停止尚未确认，请先停止并保存"
+        case nil: return "卡片状态未知，请刷新设备状态"
+        }
+    }
     var displayStatus: String {
         guard device.connected else { return "连接CB08后刷新文件列表" }
         if uncertainConnection == device.connectionID { return CB08FileError.timeout.localizedDescription }

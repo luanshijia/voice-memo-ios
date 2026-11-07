@@ -33,7 +33,8 @@ struct ExternalDeviceView: View {
                     .disabled(controlsLocked || device.connectionPhase == .connecting || device.connectionPhase == .disconnecting ||
                               (device.connectionPhase == .disconnected && device.selectedDevice == nil))
                 }
-                LabeledContent(device.selectedDevice?.name ?? "", value: device.connectionPhase.rawValue)
+                LabeledContent(device.selectedDevice?.name ?? (device.connected ? "CB08" : device.isScanning ? "正在查找CB08" : "尚未发现CB08"),
+                               value: device.connectionPhase.rawValue)
                 if device.devices.count > 1 {
                     Picker("选择设备", selection: $device.selectedDeviceID) {
                         ForEach(Array(device.devices.enumerated()), id: \.element.id) { index, item in
@@ -41,9 +42,6 @@ struct ExternalDeviceView: View {
                         }
                     }
                     .disabled(device.connected || controlsLocked || device.connectionPhase == .connecting)
-                }
-                if device.devices.isEmpty && !device.connected {
-                    Text(device.isScanning ? "正在查找CB08" : "尚未发现CB08").foregroundStyle(.secondary)
                 }
                 if controlsLocked { Text("会议或设备动作进行中，连接操作已锁定").font(.footnote).foregroundStyle(.secondary) }
             }
@@ -70,13 +68,6 @@ struct ExternalDeviceView: View {
             }
             Section {
                 LabeledContent("卡片录音状态", value: device.connected ? recordWord : "未知")
-                if provider.flowing {
-                    TimelineView(.periodic(from: .now, by: 1)) { timeline in
-                        LabeledContent("音频接收", value: provider.audioStatus(at: timeline.date))
-                    }
-                } else {
-                    LabeledContent("音频接收", value: provider.stage)
-                }
                 LabeledContent("电量", value: device.battery.map { $0 == 110 ? "充电中" : "\($0)%" } ?? "未知")
                 LabeledContent("剩余/总容量", value: device.capacity)
                 LabeledContent("卡片返回录音时长", value: device.deviceRecordingSeconds.map { "\($0)秒" } ?? "未知")
@@ -108,6 +99,12 @@ struct ExternalDeviceView: View {
                 if let failure = provider.failure { Text(failure).foregroundStyle(.orange) }
                 DisclosureGroup("诊断详情") {
                     Text(device.status)
+                    if let problem = assistant.input.deviceManagement.problem {
+                        LabeledContent("设备操作", value: problem)
+                    }
+                    if let problem = assistant.input.cleanupProblem {
+                        LabeledContent("音频清理", value: problem)
+                    }
                     LabeledContent("连接回调", value: device.connectionSummary)
                     LabeledContent("录音状态查询", value: device.querySummary)
                     LabeledContent("录音动作回执", value: device.actionSummary)
