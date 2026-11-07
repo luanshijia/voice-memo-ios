@@ -15,6 +15,15 @@ import Foundation
     var problem: String? {
         failureConnection == device.connectionID ? failure : nil
     }
+    /// Share the existing device-operation lock with card file management.
+    func performFileOperation(_ operation: @escaping @MainActor () async -> Void) -> Task<Void, Never>? {
+        guard !busy else { return nil }
+        busy = true
+        return Task {
+            defer { busy = false }
+            await operation()
+        }
+    }
     private func fail(_ message: String, connection: UUID?) {
         failureConnection = connection; failure = message
     }

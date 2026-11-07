@@ -87,6 +87,7 @@ import Foundation
             self?.captureInterrupted()
         }
         input.serverAvailable = { [weak self] in self?.canStartCapture ?? false }
+        input.files.operationAllowed = { [weak self] in self?.fileOperationsAllowed ?? false }
         connection.onServerUnavailable = { [weak self] in self?.enforceServerUnavailable() }
         connection.onServerAvailable = { [weak self] in self?.clearRecoveredServerMessage() }
         meeting.onCaptureProjection = { [weak self] view, confirmed in
@@ -214,6 +215,12 @@ import Foundation
         localControlExecutions > 0 || desktopReconciliationRunning || connection.pendingDisconnect != nil || input.cleanupProblem != nil
     }
     var deviceConnectionLocked: Bool { !connection.serverReady || serverCleanupTask != nil || deviceControlsBusy || meeting.isRecording || meeting.wantsCapture }
+    private var fileOperationsAllowed: Bool {
+        connection.serverReady && serverCleanupTask == nil && !showingDeviceStop &&
+        !meeting.actionPending && !meeting.terminating && !meeting.isRecording && !meeting.wantsCapture &&
+        !meeting.meetingContext.hasOpenMeeting && localControlExecutions == 0 &&
+        connection.pendingDisconnect == nil && input.cleanupProblem == nil
+    }
     var deviceStartTitle: String { meeting.isPaused ? "继续" : meeting.wantsCapture ? "恢复" : "开始" }
     var deviceCanStart: Bool {
         guard input.device.connected, input.binding.kind == .external, !deviceControlsBusy,

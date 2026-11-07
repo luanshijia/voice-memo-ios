@@ -51,6 +51,7 @@ private final class CB08PacketBudget: @unchecked Sendable {
     private var lost = 0
     private var epoch = 0
     func invalidate() { lock.lock(); epoch += 1; lock.unlock() }
+    func snapshot() -> Int { lock.lock(); defer { lock.unlock() }; return epoch }
     func current(_ value: Int) -> Bool { lock.lock(); defer { lock.unlock() }; return value == epoch }
     func reserve() -> Int? {
         lock.lock(); defer { lock.unlock() }
@@ -67,6 +68,8 @@ struct CB08SDKEvent: @unchecked Sendable {
     let command: Int
     let state: Int?
     let data: [String: Any]
+    let fileEntries: [[String: Any]]?
+    let finish: Int?
     static func parse(_ text: String) -> Self? {
         RuntimeActivity.add(.sdkEvent)
         guard let bytes = text.data(using: .utf8),
@@ -76,14 +79,15 @@ struct CB08SDKEvent: @unchecked Sendable {
             return (value as? String).flatMap(Int.init)
         }
         guard let command = integer(object["cmd"]),
-              [1, 2, 3, 6, 8, 9, 10, 11, 13, 15, 17, 22].contains(command) else { return nil }
+              [1, 2, 3, 4, 6, 8, 9, 10, 11, 13, 14, 15, 17, 22].contains(command) else { return nil }
         RuntimeActivity.recordSDKCommand(command)
         let data = object["data"] as? [String: Any] ?? [:]
         if command == 1 {
             guard let name = data["name"] as? String,
                   name.trimmingCharacters(in: .whitespacesAndNewlines).uppercased().hasPrefix("CB08") else { return nil }
         }
-        return Self(command: command, state: integer(object["state"]), data: data)
+        return Self(command: command, state: integer(object["state"]), data: data,
+                    fileEntries: object["data"] as? [[String: Any]], finish: integer(object["finish"]))
     }
 }
 
@@ -101,7 +105,7 @@ final class CB08EventFilter: @unchecked Sendable {
     }
 }
 
-@MainActor final class CB08SDKBridge: NSObject, ObservableObject, CB08DeviceControlling {
+@MainActor final class CB08SDKBridge: NSObject, ObservableObject, CB08DeviceControlling, CB08FileDevice {
     let objectWillChange = ObservableObjectPublisher()
     let telemetry = DeviceTelemetry()
     private(set) var devices: [CB08Device] = [] { willSet { if devices != newValue { objectWillChange.send() } } }
@@ -135,6 +139,7 @@ final class CB08EventFilter: @unchecked Sendable {
     var onHardware: ((CB08RecordAction) -> Bool)?
     var onRecordingObservation: ((CB08RecordingState) -> Void)?
     var onDiagnostic: ((String) -> Void)?
+    var onFileEvent: ((CB08SDKEvent) -> Void)?
     private var hardwareIntent: CB08RecordAction?
     private var foreground = true
     private var queryRevision = 0
@@ -245,6 +250,18 @@ final class CB08EventFilter: @unchecked Sendable {
         requestRecordQuery()
         status = "已请求设备状态"
     }
+    func requestFiles() {
+        guard connected else { return }
+#if !targetEnvironment(simulator)
+        node?.getRecordFileList()
+#endif
+    }
+    func deleteFile(named name: String) {
+        guard connected, recordState == .stopped, CB08CardFile.supportsDeletion(name) else { return }
+#if !targetEnvironment(simulator)
+        node?.delFileData(name)
+#endif
+    }
     func refreshRecordState(timeout: Duration) async -> CB08RecordingState? {
         guard connected else { return nil }
         let revision = queryRevision
@@ -320,6 +337,7 @@ final class CB08EventFilter: @unchecked Sendable {
         onDiagnostic?(message)
     }
     private func resetDeviceFacts() {
+        budget.invalidate()
         eventFilter.reset(); lastDiagnostic = nil
         recordState = nil; battery = nil; firmware = "未知"; capacity = "未知（SDK原始单位）"
         currentFile = "未知"; gain = nil; lowPowerRecording = nil; deviceRecordingSeconds = nil
@@ -358,6 +376,7 @@ final class CB08EventFilter: @unchecked Sendable {
         let cmd = event.command, state = event.state, data = event.data
         guard cmd == 1 || cmd == 2 || connected else { return }
         if cmd == 1 && !isScanning { return }
+        if cmd == 4 || cmd == 14 { onFileEvent?(event); return }
         eventSummary = "cmd=\(String(cmd)), state=\(state.map(String.init) ?? "?")"
         guard state == 0 else {
             status = "设备返回异常状态"
@@ -473,7 +492,12 @@ final class CB08EventFilter: @unchecked Sendable {
 extension CB08SDKBridge: WindBleDelegate {
     nonisolated func deviceDataEvent(_ data: String) {
         guard let event = CB08SDKEvent.parse(data), eventFilter.accept(event, raw: data) else { return }
-        Task { @MainActor [weak self] in self?.receiveEvent(event) }
+        let epoch = budget.snapshot()
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            if (event.command == 4 || event.command == 14) && !self.budget.current(epoch) { return }
+            self.receiveEvent(event)
+        }
     }
     nonisolated func deviceRecord(_ recordData: Data) {
         RuntimeActivity.add(.sdkPacket)

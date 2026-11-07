@@ -87,6 +87,7 @@ struct ExternalDeviceView: View {
                     Button("刷新") { device.refreshStatus() }.disabled(!device.connected || assistant.deviceConnectionLocked)
                 }
             }
+            CB08FilesSection(assistant: assistant, manager: assistant.input.files)
             Section("设备参数") {
                 LabeledContent("增益", value: gainWord)
                 LabeledContent("低功耗录音", value: device.lowPowerRecording.map { $0 ? "开启" : "关闭" } ?? "未知")

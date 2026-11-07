@@ -17,6 +17,7 @@ import LiveKit
     let device: CB08SDKBridge
     let external: CB08InputProvider
     let deviceManagement: CB08DeviceManager
+    let files: CB08FileManager
     private var subscriptions = Set<AnyCancellable>()
     private let provider: PhoneInputProvider
     var configurationLocked: () -> Bool = { false }
@@ -28,6 +29,7 @@ import LiveKit
         let device = CB08SDKBridge()
         self.device = device
         deviceManagement = CB08DeviceManager(device: device)
+        files = CB08FileManager(device: device, operations: deviceManagement)
         publisher.onFailure = { [weak device] message in device?.noteDevice(message) }
         external = CB08InputProvider(device: device, publisher: publisher)
         device.connectionAllowed = { [weak self] in self?.serverAvailable() ?? false }
@@ -38,6 +40,7 @@ import LiveKit
         external.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }.store(in: &subscriptions)
         device.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }.store(in: &subscriptions)
         deviceManagement.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }.store(in: &subscriptions)
+        files.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }.store(in: &subscriptions)
     }
     var isAvailable: Bool { binding.kind == .phone || external.isAvailable }
     var permission: CapObserved { permissionStatus.observed }
