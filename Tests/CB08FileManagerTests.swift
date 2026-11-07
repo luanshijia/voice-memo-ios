@@ -138,6 +138,13 @@ import XCTest
         await m.refresh()?.value
         XCTAssertEqual(m.files.count, 1); XCTAssertFalse(m.canRefresh)
     }
+    func testMissingStatusCannotBeRetriedAsAnExplicitDeviceFailure() async {
+        let d = Device(); let m = manager(d)
+        d.onList = { d.event(["cmd": 4, "finish": 1, "data": d.list]) }
+        await m.refresh()?.value
+        XCTAssertTrue(m.requiresReconnect); XCTAssertFalse(m.hasCurrentList)
+        XCTAssertNil(m.refresh())
+    }
     func testFileOperationsHoldExistingDeviceLockAndRejectOverlap() async {
         let d = Device(); let operations = CB08DeviceManager(device: d)
         let m = CB08FileManager(device: d, operations: operations)

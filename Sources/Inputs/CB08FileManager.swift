@@ -181,6 +181,9 @@ enum CB08FileError: LocalizedError {
     private func receive(_ event: CB08SDKEvent) {
         guard device.connected, activeConnection == device.connectionID, response == nil else { return }
         guard (pending == .list && event.command == 4) || (pending == .deletion && event.command == 14) else { return }
+        guard event.state != nil else {
+            uncertainConnection = activeConnection; response = .failure(CB08FileError.invalidResponse); return
+        }
         guard event.state == 0 else { response = .failure(CB08FileError.rejected); return }
         if pending == .deletion {
             let raw = event.data["delete_state"].map { String(describing: $0) }
