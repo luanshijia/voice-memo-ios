@@ -223,7 +223,7 @@ import Foundation
     }
     var deviceStartTitle: String { meeting.isPaused ? "继续" : meeting.wantsCapture ? "恢复" : "开始" }
     var deviceCanStart: Bool {
-        guard input.device.connected, input.binding.kind == .external, !deviceControlsBusy,
+        guard input.device.connected, !input.files.requiresReconnect, input.binding.kind == .external, !deviceControlsBusy,
               !meeting.isRecording, readiness.problems.isEmpty, input.deviceManagement.problem == nil else { return false }
         let state = input.device.recordState
         if meeting.isPaused {

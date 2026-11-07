@@ -42,7 +42,7 @@ import LiveKit
         deviceManagement.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }.store(in: &subscriptions)
         files.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }.store(in: &subscriptions)
     }
-    var isAvailable: Bool { binding.kind == .phone || external.isAvailable }
+    var isAvailable: Bool { binding.kind == .phone || (external.isAvailable && !files.requiresReconnect) }
     var permission: CapObserved { permissionStatus.observed }
     var displayName: String {
         binding.kind == .phone ? "手机" : "CB08"

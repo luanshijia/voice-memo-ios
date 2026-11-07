@@ -125,9 +125,11 @@ import XCTest
         await m.refresh()?.value
         d.event(["cmd": 4, "state": 0, "finish": 1, "data": d.list])
         XCTAssertFalse(m.canRefresh); XCTAssertFalse(m.hasCurrentList); XCTAssertNil(m.refresh())
+        XCTAssertTrue(m.requiresReconnect)
         d.connectionID = UUID(); d.sendList = true
         await m.refresh()?.value
         XCTAssertEqual(m.visibleFiles.count, 1); XCTAssertTrue(m.canRefresh)
+        XCTAssertFalse(m.requiresReconnect)
     }
     func testMalformedListDoesNotReplaceCompletedSnapshot() async {
         let d = Device(); let m = manager(d)

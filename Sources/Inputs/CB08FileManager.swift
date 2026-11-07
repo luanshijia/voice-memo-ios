@@ -81,8 +81,9 @@ enum CB08FileError: LocalizedError {
         device.connected && listConnection == device.connectionID ? files : []
     }
     var hasCurrentList: Bool { device.connected && listConnection != nil && listConnection == device.connectionID }
+    var requiresReconnect: Bool { device.connected && uncertainConnection != nil && uncertainConnection == device.connectionID }
     var canRefresh: Bool {
-        device.connected && !operations.busy && operationAllowed() && uncertainConnection != device.connectionID
+        device.connected && !operations.busy && operationAllowed() && !requiresReconnect
     }
     var canDelete: Bool { canRefresh && hasCurrentList && device.recordState == .stopped }
     var displayStatus: String {
