@@ -30,10 +30,12 @@ extension PCMAudioPublishing {
 
 @MainActor struct AudioEngineControl {
     var microphone: (Room, Bool) async throws -> Void
+    var stopRecording: () throws -> Void
     var manualMode: (Bool) throws -> Void
     var isManual: () -> Bool
     static var live: Self {
         Self(microphone: { room, enabled in _ = try await room.localParticipant.setMicrophone(enabled: enabled) },
+             stopRecording: { try AudioManager.shared.stopLocalRecording() },
              manualMode: { try AudioManager.shared.setManualRenderingMode($0) },
              isManual: { AudioManager.shared.isManualRenderingMode })
     }
@@ -135,10 +137,22 @@ private final class PCMFeed: PCMSubmitting, @unchecked Sendable {
         CrashLog.step("[采集清理] 开始关闭外设音轨")
         do { try await engine.microphone(room, false) }
         catch { errors.append("关闭音轨：\(error.localizedDescription)") }
-        CrashLog.step("[采集清理] 关闭外设音轨返回，开始退出手动音频模式")
-        do { if engine.isManual() { try engine.manualMode(false) } }
-        catch { errors.append("退出手动模式：\(error.localizedDescription)") }
-        CrashLog.step("[采集清理] 退出手动音频模式返回，错误数=\(errors.count)")
+        if engine.isManual() {
+            // Muting the publication does not stop audio input. Stop it before restoring
+            // device mode, otherwise the SDK can try to open the phone microphone.
+            var recordingStopped = false
+            CrashLog.step("[采集清理] 关闭外设音轨返回，开始停止外设录音引擎")
+            do { try engine.stopRecording(); recordingStopped = true }
+            catch { errors.append("停止录音引擎：\(error.localizedDescription)") }
+            if recordingStopped {
+                CrashLog.step("[采集清理] 外设录音引擎已停止，开始退出手动音频模式")
+                do { try engine.manualMode(false) }
+                catch { errors.append("退出手动模式：\(error.localizedDescription)") }
+            } else {
+                CrashLog.step("[采集清理] 外设录音引擎停止失败，保留手动音频模式")
+            }
+        }
+        CrashLog.step("[采集清理] 外设音频引擎清理返回，错误数=\(errors.count)")
         if errors.isEmpty && !engine.isManual() { state = .idle; recoveryRoom = nil }
         else {
             state = .cleanupFailed; recoveryRoom = room
